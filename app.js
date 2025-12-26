@@ -23,9 +23,9 @@ const TIME_ZONE = "America/Los_Angeles";
 // 3) Create the tables/policies (SQL provided at bottom of this file)
 // 4) Sign in on each device in Settings
 const ENABLE_SUPABASE_SYNC = true;
-const SUPABASE_URL = \"https://omtmyjhtvjqtqvofebob.supabase.co\";
-const SUPABASE_ANON_KEY = \"sb_publishable_8jZHLI3PwkLF9wu30sqjsA_GYPQSny2\";
-const HOUSEHOLD_ID = \"0c6222f9-f139-4fee-8a96-765d1ed3e2b3\"; // UUID from your households table
+const SUPABASE_URL = "https://omtmyjhtvjqtqvofebob.supabase.co";
+const SUPABASE_ANON_KEY = "sb_publishable_8jZHLI3PwkLF9wu30sqjsA_GYPQSny2";
+const HOUSEHOLD_ID = "0c6222f9-f139-4fee-8a96-765d1ed3e2b3"; // UUID from your households table
 
 let supabase = null;
 async function initSupabaseIfEnabled() {
