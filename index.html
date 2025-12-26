@@ -1,0 +1,555 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>Family Day Planner</title>
+  <link rel="manifest" href="./manifest.json" />
+  <meta name="theme-color" content="#0f172a" />
+
+  <!-- Google Identity Services -->
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+
+  <style>
+    :root{
+      --bg:#f6f7fb;
+      --card:#ffffff;
+      --text:#0f172a;
+      --muted:#6b7280;
+      --border:#e5e7eb;
+      --accent:#2563eb;
+      --accent2:#14b8a6;
+      --danger:#b00020;
+      --shadow: 0 10px 25px rgba(2,6,23,.08);
+      --radius: 18px;
+    }
+    *{box-sizing:border-box}
+    body{
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial;
+      margin:0; padding:16px;
+      background:var(--bg); color:var(--text);
+    }
+    header{
+      display:flex; align-items:flex-end; justify-content:space-between;
+      gap:12px; margin-bottom:12px;
+    }
+    h1{ margin:0; font-size:20px; letter-spacing:.2px; }
+    .sub{ color:var(--muted); font-size:13px; line-height:1.35; max-width: 60ch; }
+
+    .tabs{ display:flex; gap:8px; flex-wrap:wrap; margin: 12px 0 14px 0; }
+    .tab{
+      padding: 10px 12px;
+      border-radius: 999px;
+      border:1px solid var(--border);
+      background:rgba(255,255,255,.75);
+      font-weight:800;
+      cursor:pointer;
+      user-select:none;
+    }
+    .tab.active{ background:var(--text); color:#fff; border-color:var(--text); }
+
+    .card{
+      background:var(--card);
+      border:1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 14px;
+      margin: 12px 0;
+      box-shadow: var(--shadow);
+    }
+
+    .sectionTitle{
+      font-weight: 950;
+      font-size:14px;
+      letter-spacing:.25px;
+      margin:0 0 6px 0;
+      text-transform: none;
+    }
+    .muted{ color:var(--muted); font-size:13px; }
+    .small{ color:var(--muted); font-size:12px; }
+
+    label{ display:block; font-weight:800; margin: 10px 0 6px; font-size:13px; color:#111827; }
+    input, textarea, select{
+      width:100%;
+      padding: 12px;
+      border-radius: 14px;
+      border: 1px solid var(--border);
+      font-size:16px;
+      background:#fff;
+      outline:none;
+    }
+    input:focus, textarea:focus, select:focus{
+      border-color: rgba(37,99,235,.45);
+      box-shadow: 0 0 0 4px rgba(37,99,235,.12);
+    }
+    textarea{ resize:vertical; }
+
+    .row{ display:grid; grid-template-columns: 1fr 1fr; gap:10px; }
+    .row3{ display:grid; grid-template-columns: 1fr 1fr 1fr; gap:10px; }
+    @media (max-width: 680px){ .row, .row3{ grid-template-columns:1fr; } }
+
+    button{
+      padding: 12px 14px;
+      border-radius: 14px;
+      border: 1px solid var(--border);
+      background: #fff;
+      font-weight: 900;
+      cursor:pointer;
+    }
+    button.primary{ background: var(--accent); color:#fff; border-color: var(--accent); }
+    button.ghost{ background: rgba(37,99,235,.08); border-color: rgba(37,99,235,.12); color: #1d4ed8; }
+    button.danger{ background:#fff; border-color: rgba(176,0,32,.55); color: var(--danger); }
+    button:disabled{ opacity:.55; cursor:not-allowed; }
+
+    .btnbar{ display:flex; gap:10px; flex-wrap:wrap; margin-top: 12px; }
+
+    .pillRow{ display:flex; flex-wrap:wrap; gap:8px; margin-top:8px; }
+    .pill{
+      display:inline-flex; align-items:center; gap:8px;
+      padding: 6px 10px;
+      border-radius: 999px;
+      border:1px solid var(--border);
+      background:#fff;
+      font-size:12px;
+      color:#111827;
+    }
+    .pill b{ font-weight:950; }
+
+    .hr{ height:1px; background:var(--border); margin: 12px 0; }
+
+    .status{
+      border-radius: 14px;
+      padding: 10px 12px;
+      border:1px solid var(--border);
+      background:#fff;
+      font-weight:800;
+      font-size:13px;
+    }
+    .status.success{ border-color: rgba(20,184,166,.35); background: rgba(20,184,166,.10); color:#065f46; }
+    .status.error{ border-color: rgba(176,0,32,.35); background: rgba(176,0,32,.08); color: var(--danger); }
+    .status.muted{ color: var(--muted); }
+
+    ul{ padding-left: 18px; margin: 8px 0 0 0; }
+    li{ margin: 6px 0; }
+    .timeTag{
+      font-variant-numeric: tabular-nums;
+      font-weight:950;
+      padding: 2px 8px;
+      border-radius: 999px;
+      border:1px solid var(--border);
+      background:#fff;
+      margin-right:8px;
+    }
+    .catTag{ font-size:11px; color: var(--muted); margin-left: 8px; }
+
+    .toggleRow{
+      display:flex; align-items:center; gap:10px;
+      margin-top: 10px;
+      padding: 10px 12px;
+      border-radius: 14px;
+      border:1px solid var(--border);
+      background: rgba(15,23,42,.02);
+    }
+    .toggleRow input{ width: 18px; height: 18px; }
+
+    .modalOverlay{
+      position:fixed; inset:0;
+      background: rgba(2,6,23,.55);
+      display:none;
+      align-items:center; justify-content:center;
+      padding:16px;
+      z-index: 9999;
+    }
+    .modal{
+      width: min(760px, 100%);
+      max-height: min(86vh, 900px);
+      overflow:auto;
+      background: var(--card);
+      border-radius: 22px;
+      border: 1px solid rgba(255,255,255,.25);
+      box-shadow: 0 25px 60px rgba(2,6,23,.35);
+      padding: 14px;
+    }
+    .modalHeader{ display:flex; justify-content:space-between; align-items:flex-start; gap:10px; }
+    .modalHeader h2{ margin:0; font-size:16px; font-weight: 950; letter-spacing:.2px; }
+    .modalHeader .muted{ margin-top:3px; }
+    .xBtn{
+      border-radius: 999px;
+      width: 40px; height: 40px;
+      display:flex; align-items:center; justify-content:center;
+      background: rgba(15,23,42,.06);
+      border:1px solid rgba(15,23,42,.08);
+      font-weight: 950;
+    }
+    .progress{
+      height: 8px;
+      background: rgba(15,23,42,.06);
+      border-radius: 999px;
+      overflow:hidden;
+      margin-top:10px;
+    }
+    .progress > div{ height:100%; width:0%; background: linear-gradient(90deg, var(--accent), var(--accent2)); }
+
+    .apptCard{
+      border:1px solid var(--border);
+      border-radius: 16px;
+      padding: 12px;
+      background: rgba(255,255,255,.7);
+      margin-top: 10px;
+    }
+    .apptHeader{ display:flex; justify-content:space-between; gap:10px; align-items:center; margin-bottom: 8px; }
+    .apptTitle{ font-weight: 950; font-size: 13px; }
+    .apptMeta{ font-size: 12px; color: var(--muted); margin-top: 2px; }
+
+    .dayRow{
+      border:1px solid var(--border);
+      border-radius: 16px;
+      padding: 12px;
+      background: rgba(255,255,255,.7);
+      margin-top:10px;
+    }
+    .dayTitle{ font-weight:950; display:flex; justify-content:space-between; gap:10px; }
+    .dayBadges{ display:flex; flex-wrap:wrap; gap:6px; margin-top:6px; }
+    .badge{ font-size:11px; border:1px solid var(--border); border-radius:999px; padding: 4px 8px; background:#fff; color:#111827; }
+    .badge.dim{ color: var(--muted); }
+  
+    .timelineShell{ margin-top:10px; }
+    .timelineViewport{
+      position:relative;
+      border:1px solid var(--border);
+      border-radius: 18px;
+      background:#fff;
+      overflow:auto;
+      height: 680px;
+      box-shadow: 0 10px 25px rgba(2,6,23,.06);
+    }
+    .timelineInner{
+      position:relative;
+      min-height: 1200px;
+      padding-left: 72px;
+    }
+    .timeMarker{
+      position:absolute;
+      left:0;
+      width: 72px;
+      transform: translateY(-50%);
+      font-size: 12px;
+      color: var(--muted);
+      font-variant-numeric: tabular-nums;
+      padding-left: 10px;
+    }
+    .gridLine{
+      position:absolute;
+      left: 72px;
+      right: 0;
+      height: 1px;
+      background: rgba(229,231,235,.9);
+      transform: translateY(-50%);
+    }
+    .tlBlock{
+      position:absolute;
+      left: 88px;
+      right: 14px;
+      border-radius: 16px;
+      border: 1px solid rgba(37,99,235,.18);
+      background: rgba(37,99,235,.08);
+      padding: 10px 12px;
+      overflow:hidden;
+    }
+    .tlBlock .tltitle{ font-weight: 950; font-size: 13px; }
+    .tlBlock .tltime{ margin-top:3px; font-size:12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+    .tlBlock .tlmeta{ margin-top:6px; font-size:11px; color: #0f172a; opacity:.8; }
+    
+  </style>
+</head>
+
+<body>
+  <header>
+    <div>
+      <h1>Family Day Planner</h1>
+      <div class="sub">Tonight quiz → tomorrow plan → today live log → export to Google Calendar for Skylight. Open time stays blank (no “play” blocks).</div>
+    </div>
+  </header>
+
+  <div class="tabs">
+    <div class="tab active" id="tabTonight">Tonight</div>
+    <div class="tab" id="tabToday">Today</div>
+    <div class="tab" id="tabWeek">Week</div>
+    <div class="tab" id="tabSettings">Settings</div>
+  </div>
+
+  <section id="screenTonight">
+    <div class="card">
+      <div class="sectionTitle">Tonight</div>
+      <div class="muted">Use the quiz to capture what’s different tomorrow, add appointments (today and tomorrow), pick focus items from the running list, and save.</div>
+
+      <div class="btnbar">
+        <button class="primary" id="startQuizBtn">Start tonight quiz (5 min)</button>
+        <button id="quickPreviewBtn">Preview tomorrow (uses estimated wake time)</button>
+      </div>
+
+      <div id="tonightStatus" style="margin-top:10px;"></div>
+    </div>
+
+    <div class="card">
+      <div class="sectionTitle">Tomorrow preview</div>
+      <div class="muted">This preview uses your best-guess wake time. Tomorrow, logging actual wake + naps will update it.</div>
+      <div id="tomorrowPreview" class="timelineShell"></div>
+    </div>
+  </section>
+
+  <section id="screenToday" style="display:none;">
+    <div class="card">
+      <div class="sectionTitle">Today command center</div>
+
+      <div class="row">
+        <div>
+          <label>Date</label>
+          <input id="todayDate" type="date" />
+        </div>
+        <div>
+          <label>Wake time (actual)</label>
+          <input id="todayWake" type="time" />
+        </div>
+      </div>
+
+      <div class="toggleRow">
+        <input id="nannyView" type="checkbox" />
+        <label style="margin:0;">Nanny view (hide parent-only items)</label>
+      </div>
+
+      <div class="hr"></div>
+
+      <div class="sectionTitle">Quick log</div>
+      <div class="btnbar">
+        <button id="logWakeBtn" class="primary">Log wake time (set to now)</button>
+        <button id="nap1StartBtn">Nap 1 started</button>
+        <button id="nap1EndBtn">Nap 1 ended</button>
+        <button id="nap2StartBtn">Nap 2 started</button>
+        <button id="nap2EndBtn">Nap 2 ended</button>
+      </div>
+      <div class="small">Buttons auto-fill times with “now”. You can also manually edit below.</div>
+
+      <div class="row" style="margin-top:10px;">
+        <div>
+          <label>Nap 1 actual start</label>
+          <input id="nap1Start" type="time" />
+        </div>
+        <div>
+          <label>Nap 1 actual end</label>
+          <input id="nap1End" type="time" />
+        </div>
+      </div>
+
+      <div class="row">
+        <div>
+          <label>Nap 2 actual start</label>
+          <input id="nap2Start" type="time" />
+        </div>
+        <div>
+          <label>Nap 2 actual end</label>
+          <input id="nap2End" type="time" />
+        </div>
+      </div>
+
+      <div class="hr"></div>
+
+      <div class="sectionTitle">Overnight sleep (tracking only)</div>
+      <div class="muted">This does not affect scheduling. Wake time does.</div>
+
+      <div class="row" style="margin-top:10px;">
+        <div>
+          <label>Actual bedtime (last night)</label>
+          <input id="bedtimeActual" type="time" />
+          <div class="small">Optional — just for tracking.</div>
+        </div>
+        <div>
+          <label>&nbsp;</label>
+          <button id="bedtimeNowBtn" type="button">Set bedtime = now</button>
+        </div>
+      </div>
+
+      <label>Overnight notes</label>
+      <textarea id="nightNotes" rows="2" placeholder="e.g., woke at 1:40am for 10 min"></textarea>
+
+      <div class="btnbar">
+        <button id="reflowBtn" class="primary">Update schedule using logged times</button>
+      </div>
+
+      <div class="hr"></div>
+
+      <div class="sectionTitle">Running list</div>
+      <div class="muted">Add items anytime. Check them off over time. Use Tonight to pick focus items for tomorrow.</div>
+
+      <div class="row" style="margin-top:10px;">
+        <div>
+          <label>Add item</label>
+          <input id="brainDumpAdd" placeholder="e.g., wash sleep sack, order wipes" />
+        </div>
+        <div>
+          <label>&nbsp;</label>
+          <button class="primary" id="brainDumpAddBtn" type="button">Add</button>
+        </div>
+      </div>
+
+      <div class="btnbar">
+        <button id="showFocusBtn" class="ghost" type="button">Show focus only</button>
+        <button id="showAllBtn" type="button">Show all</button>
+      </div>
+
+      <div id="brainDumpList" style="margin-top:10px;"></div>
+
+      <div class="hr"></div>
+
+      <div class="sectionTitle">Export to Skylight</div>
+      <div class="muted">Publishes today’s schedule to your Google calendar. Open gaps are not exported.</div>
+
+      <label>Calendar ID</label>
+      <input id="calendarId" />
+
+      <div class="btnbar">
+        <button id="googleBtn">Sign in to Google</button>
+        <button id="publishBtn" class="primary">Export schedule to Google Calendar</button>
+        <button id="clearBtn" class="danger">Remove exported events (today)</button>
+      </div>
+
+      <div id="todayStatus" style="margin-top:10px;"></div>
+    </div>
+
+    <div class="card">
+      <div class="sectionTitle">Today preview</div>
+      <div class="muted">
+        <div class="pillRow">
+          <span class="pill" id="nowPill"><b>Now</b> —</span>
+          <span class="pill" id="nextPill"><b>Next</b> —</span>
+        </div>
+      </div>
+      <div id="todayPreview" class="timelineShell"></div>
+    </div>
+  </section>
+
+  <section id="screenWeek" style="display:none;">
+    <div class="card">
+      <div class="sectionTitle">Week view</div>
+      <div class="muted">A quick look at the next 7 days: plan status, appointments, and focus items.</div>
+
+      <div class="row" style="margin-top:10px;">
+        <div>
+          <label>Week starts</label>
+          <input id="weekStart" type="date" />
+          <div class="small">Tip: set this to Monday to match your mental model.</div>
+        </div>
+        <div>
+          <label>&nbsp;</label>
+          <button class="primary" id="refreshWeekBtn">Refresh week</button>
+        </div>
+      </div>
+
+      <div id="weekList" style="margin-top:12px;"></div>
+    </div>
+  </section>
+
+  <section id="screenSettings" style="display:none;">
+    <div class="card">
+      <div class="sectionTitle">Routine defaults</div>
+      <div class="muted">These control the generated schedule. You can tweak anytime.</div>
+
+      <div class="row">
+<div>
+          <label>Default wake time</label>
+          <input id="setWakeDefault" type="time" />
+        </div>
+      </div>
+
+      <div class="row">
+        <div>
+          <label>Nap default duration (minutes)</label>
+          <input id="setNapDefault" type="number" min="30" step="5" />
+        </div>
+        <div>
+          <label>Solo bedtime buffer (minutes)</label>
+          <input id="setSoloBedBuffer" type="number" min="0" step="5" />
+        </div>
+      </div>
+
+      <div class="row">
+        <div>
+          <label>Last bath date</label>
+          <input id="setLastBath" type="date" />
+          <div class="small">Used for the “bath every 3 days” reminder.</div>
+        </div>
+</div>
+
+      <div class="btnbar">
+        <button class="primary" id="saveSettingsBtn">Save settings</button>
+      </div>
+
+      <div id="settingsStatus" style="margin-top:10px;"></div>
+    </div>
+
+    <div class="card">
+      <div class="sectionTitle">Shared between devices (optional)</div>
+      <div class="muted">
+        If you want the running list + plans to sync across iPhones + Android, enable Supabase in <b>app.js</b> and sign in here.
+        If you don't enable Supabase, the app still works — it just stays per-device.
+      </div>
+
+      <label>Email</label>
+      <input id="authEmail" type="email" placeholder="you@example.com" />
+
+      <label>Password</label>
+      <input id="authPassword" type="password" placeholder="••••••••" />
+
+      <div class="btnbar">
+        <button class="primary" id="signInBtn" type="button">Sign in</button>
+        <button id="signOutBtn" type="button">Sign out</button>
+      </div>
+
+      <div id="authStatus" style="margin-top:10px;"></div>
+
+      <div class="hr"></div>
+      <div class="sectionTitle">Data tools (per-device)</div>
+      <div class="muted">If you are not using sync, you can still move data between devices using export/import.</div>
+
+      <div class="btnbar">
+        <button id="exportLocalBtn" type="button">Export local data</button>
+        <button id="importLocalBtn" type="button">Import local data</button>
+      </div>
+      <textarea id="localTransferBox" rows="6" placeholder="Export shows here. Paste JSON here to import."></textarea>
+      <div class="small">Import will overwrite existing local data for the same dates.</div>
+    </div>
+  </section>
+
+  <div class="modalOverlay" id="quizOverlay" aria-hidden="true">
+    <div class="modal">
+      <div class="modalHeader">
+        <div>
+          <h2 id="quizTitle">Tonight quiz</h2>
+          <div class="muted" id="quizHint">A quick guided plan for tomorrow.</div>
+        </div>
+        <button class="xBtn" id="quizCloseBtn" aria-label="Close">✕</button>
+      </div>
+
+      <div class="progress"><div id="quizProgress"></div></div>
+
+      <div id="quizContent" style="margin-top:12px;"></div>
+
+      <div class="btnbar" style="justify-content:space-between;">
+        <button id="quizBackBtn" type="button">Back</button>
+        <div style="display:flex; gap:10px; flex-wrap:wrap;">
+          <button id="quizSkipBtn" type="button">Skip</button>
+          <button class="primary" id="quizNextBtn" type="button">Next</button>
+        </div>
+      </div>
+
+      <div id="quizFooterStatus" style="margin-top:10px;"></div>
+    </div>
+  </div>
+
+  <script type="module" src="./app.js"></script>
+  <script>
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register("./service-worker.js");
+    }
+  </script>
+</body>
+</html>
