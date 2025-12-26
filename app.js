@@ -23,9 +23,9 @@ const TIME_ZONE = "America/Los_Angeles";
 // 3) Create the tables/policies (SQL provided at bottom of this file)
 // 4) Sign in on each device in Settings
 const ENABLE_SUPABASE_SYNC = true;
-const SUPABASE_URL = "https://omtmyjhtvjqtqvofebob.supabase.co";
-const SUPABASE_ANON_KEY = "sb_publishable_8jZHLI3PwkLF9wu30sqjsA_GYPQSny2";
-const HOUSEHOLD_ID = "0c6222f9-f139-4fee-8a96-765d1ed3e2b3"; // UUID from your households table
+const SUPABASE_URL = \"https://omtmyjhtvjqtqvofebob.supabase.co\";
+const SUPABASE_ANON_KEY = \"sb_publishable_8jZHLI3PwkLF9wu30sqjsA_GYPQSny2\";
+const HOUSEHOLD_ID = \"0c6222f9-f139-4fee-8a96-765d1ed3e2b3\"; // UUID from your households table
 
 let supabase = null;
 async function initSupabaseIfEnabled() {
@@ -580,6 +580,10 @@ async function removeBacklogItem(id) {
 // ==========================
 // Blocks: { id, title, start, end, category, visibility, fixed? }
 function baseSchedule(dateStr, plan, log) {
+  // Availability blocks (initialized early to avoid TDZ errors)
+  let julioUnavail = [];
+  let kristynUnavail = [];
+
   const napDefault = settings.napDefaultMin;
 
   const bedtimeOwnerValue = plan?.considerations?.bedtimeOwner || "Kristyn";
@@ -695,11 +699,11 @@ function baseSchedule(dateStr, plan, log) {
   const ua0 = plan?.considerations?.unavailability || { Kristyn: [], Julio: [] };
   const cov0 = plan?.considerations?.coverage || { Nanny: [], Kayden: [] };
 
-  const julioUnavail = (ua0.Julio || [])
+  julioUnavail = (ua0.Julio || [])
     .filter(x => x && x.start && x.end)
     .map(x => ({ start: makeDate(dateStr, x.start), end: makeDate(dateStr, x.end), raw: x }));
 
-  const kristynUnavail = (ua0.Kristyn || [])
+  kristynUnavail = (ua0.Kristyn || [])
     .filter(x => x && x.start && x.end)
     .map(x => ({ start: makeDate(dateStr, x.start), end: makeDate(dateStr, x.end), raw: x }));
 
@@ -1152,31 +1156,11 @@ let quizTonightAppts = []; // appointments for tonight (optional)
 let quizTempBacklog = null; // cached backlog list for rendering
 
 function openQuiz() {
-  if (!quizOverlay) {
-    alert("Quiz UI not found on the page. (quizOverlay missing)");
-    return;
-  }
   quizOverlay.style.display = "flex";
   quizOverlay.setAttribute("aria-hidden", "false");
   quizIndex = 0;
-
-  // Make it obvious something is happening even if rendering hits an error
-  if (quizContent) {
-    quizContent.innerHTML = `
-      <div class="status muted">
-        Loading quiz… (If this hangs, open DevTools → Console to see the error.)
-      </div>
-    `;
-  }
   setStatus(quizFooterStatus, "", "muted");
-
-  // Render async, but never let an exception make the modal “feel dead”
-  Promise.resolve()
-    .then(() => renderQuizStep())
-    .catch((err) => {
-      console.error("Quiz render error:", err);
-      setStatus(quizFooterStatus, "Something went wrong opening the quiz. Please reload the page and try again.", "error");
-    });
+  renderQuizStep();
 }
 
 function closeQuiz() {
@@ -1865,6 +1849,7 @@ async function saveQuizPlan() {
 // Tomorrow preview actions
 // ==========================
 async function previewTomorrow() {
+  try {
   const tomorrow = addDays(dateToYMD(new Date()), 1);
   const plan = (await loadPlan(tomorrow)) || defaultPlan(tomorrow);
   const log = await loadLog(tomorrow);
@@ -1872,12 +1857,16 @@ async function previewTomorrow() {
 
   const blocks = generateSchedule(tomorrow, plan, log, "full");
   renderTimeline(tomorrowPreview, blocks);
+  } catch (err) {
+    console.error("previewTomorrow failed:", err);
+    setStatus(tonightStatus, "Preview couldn’t load — open DevTools → Console for details.", "error");
+  }
+
 }
 
 startQuizBtn.onclick = async () => {
   quizDraftPlan = null;
   quizTempBacklog = null;
-  setStatus(tonightStatus, "Opening the quiz…", "muted");
   openQuiz();
 };
 
