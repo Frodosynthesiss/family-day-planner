@@ -1152,11 +1152,31 @@ let quizTonightAppts = []; // appointments for tonight (optional)
 let quizTempBacklog = null; // cached backlog list for rendering
 
 function openQuiz() {
+  if (!quizOverlay) {
+    alert("Quiz UI not found on the page. (quizOverlay missing)");
+    return;
+  }
   quizOverlay.style.display = "flex";
   quizOverlay.setAttribute("aria-hidden", "false");
   quizIndex = 0;
+
+  // Make it obvious something is happening even if rendering hits an error
+  if (quizContent) {
+    quizContent.innerHTML = `
+      <div class="status muted">
+        Loading quiz… (If this hangs, open DevTools → Console to see the error.)
+      </div>
+    `;
+  }
   setStatus(quizFooterStatus, "", "muted");
-  renderQuizStep();
+
+  // Render async, but never let an exception make the modal “feel dead”
+  Promise.resolve()
+    .then(() => renderQuizStep())
+    .catch((err) => {
+      console.error("Quiz render error:", err);
+      setStatus(quizFooterStatus, "Something went wrong opening the quiz. Please reload the page and try again.", "error");
+    });
 }
 
 function closeQuiz() {
@@ -1860,6 +1880,7 @@ async function previewTomorrow() {
 startQuizBtn.onclick = async () => {
   quizDraftPlan = null;
   quizTempBacklog = null;
+  setStatus(tonightStatus, "Opening the quiz…", "muted");
   openQuiz();
 };
 
