@@ -1335,8 +1335,7 @@ async function readStepBasics() {
 }
 
 // ---- Step 2: considerations ----
-async 
-function renderStepConsiderations() {
+async function renderStepConsiderations() {
   const c = quizDraftPlan.considerations || {};
   if (!c.unavailability) c.unavailability = { Kristyn: [], Julio: [] };
   if (!c.unavailability.Kristyn) c.unavailability.Kristyn = [];
@@ -1665,8 +1664,7 @@ function daysSince(dateStr) {
   return diff;
 }
 
-async 
-function renderStepBath() {
+async function renderStepBath() {
   const since = daysSince(settings.lastBathDate);
   const shouldBath = (since === null) ? false : (since >= 3);
   const c = quizDraftPlan.considerations || {};
@@ -1811,8 +1809,7 @@ async function readStepFocus(skip=false) {
 }
 
 // ---- Step 7: review + save ----
-async 
-function renderStepReview() {
+async function renderStepReview() {
   const p = quizDraftPlan;
   const c = p.considerations || {};
 
