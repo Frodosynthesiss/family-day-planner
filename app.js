@@ -1847,7 +1847,7 @@ async function saveQuizPlan() {
 // ==========================
 // Tomorrow preview actions
 // ==========================
-async async function previewTomorrow() {
+async function previewTomorrow() {
   const tomorrow = addDays(dateToYMD(new Date()), 1);
   const plan = (await loadPlan(tomorrow)) || defaultPlan(tomorrow);
   const log = await loadLog(tomorrow);
