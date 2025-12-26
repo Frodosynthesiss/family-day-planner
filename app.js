@@ -99,12 +99,10 @@ const refreshWeekBtn = $("refreshWeekBtn");
 const weekList = $("weekList");
 
 // Settings inputs
-const setDiaper = $("setDiaper");
 const setWakeDefault = $("setWakeDefault");
 const setNapDefault = $("setNapDefault");
 const setSoloBedBuffer = $("setSoloBedBuffer");
 const setLastBath = $("setLastBath");
-const setExportDiapers = $("setExportDiapers");
 const saveSettingsBtn = $("saveSettingsBtn");
 const settingsStatus = $("settingsStatus");
 
@@ -145,12 +143,10 @@ const keyPublishedIds = (dateStr) => `fdp:publishedEventIds:${dateStr}`;
 // Defaults / Settings
 // ==========================
 const defaultSettings = {
-  diaperIntervalMin: 150,     // 2.5 hours
   wakeDefault: "07:00",
   napDefaultMin: 75,          // midpoint
   soloBedtimeBufferMin: 10,   // if one parent is doing bedtime solo
   lastBathDate: null,         // YYYY-MM-DD
-  exportDiapers: "yes",       // yes|no
 };
 
 function loadSettings() {
@@ -284,9 +280,16 @@ function defaultPlan(dateStr) {
     // Considerations
     considerations: {
       bothWFH: false,
-      julioCampus: null,          // {start,end} means Julio unavailable
-      kristynLateMeeting: null,   // {start,end} means Kristyn unavailable
-      nanny: null,                // {start,end}
+      // Unavailability blocks: if a parent is unavailable, naps will be assigned to the other parent if available.
+      // If BOTH parents are unavailable, naps will be assigned to Kayden/Nanny (coverage) if available.
+      unavailability: {
+        Kristyn: [], // [{start,end}]
+        Julio: [],   // [{start,end}]
+      },
+      coverage: {
+        Nanny: [],   // [{start,end}]
+        Kayden: [],  // [{start,end}]
+      },
       bedtimeOwner: "Kristyn",    // Kristyn|Julio|Split
     },
 
@@ -578,7 +581,6 @@ async function removeBacklogItem(id) {
 // Blocks: { id, title, start, end, category, visibility, fixed? }
 function baseSchedule(dateStr, plan, log) {
   const napDefault = settings.napDefaultMin;
-  const diaperInterval = settings.diaperIntervalMin;
 
   const bedtimeOwnerValue = plan?.considerations?.bedtimeOwner || "Kristyn";
   const soloBedtime = bedtimeOwnerValue === "Kristyn" || bedtimeOwnerValue === "Julio";
@@ -607,7 +609,7 @@ function baseSchedule(dateStr, plan, log) {
   t = addMin(t,15);
   add({ id:"dress", title:"Get dressed", start:t, end:addMin(t,15), category:"baby", visibility:"nanny" });
   t = addMin(t,15);
-  add({ id:"breakfast_prep", title:"Breakfast prep", start:t, end:addMin(t,20), category:"parent", visibility:"full" });
+  add({ id:"breakfast_prep", title:"Prep baby's breakfast", start:t, end:addMin(t,20), category:"baby", visibility:"nanny" });
   t = addMin(t,20);
   add({ id:"breakfast", title:"Breakfast", start:t, end:addMin(t,20), category:"baby", visibility:"nanny" });
   t = addMin(t,20);
@@ -617,15 +619,33 @@ function baseSchedule(dateStr, plan, log) {
   // Nap 1 timing: actuals if available; else WW1 midpoint
   const nap1StartT = log.nap1Start || toHHMM(addMin(wake, ww1));
   const nap1StartDt = makeDate(dateStr, nap1StartT);
-  add({ id:"nap1_routine", title:"Nap routine", start:addMin(nap1StartDt,-10), end:nap1StartDt, category:"baby", visibility:"nanny" });
 
   const nap1EndT = log.nap1End || toHHMM(addMin(nap1StartDt, napDefault));
   const nap1EndDt = makeDate(dateStr, nap1EndT);
-  add({ id:"nap1", title:"Nap 1", start:nap1StartDt, end:nap1EndDt, category:"sleep", visibility:"nanny" });
+
+  const nap1Care = caregiverFor(addMin(nap1StartDt, -10), nap1EndDt);
+
+  add({
+    id:"nap1_routine",
+    title:`Nap routine (${nap1Care})`,
+    start:addMin(nap1StartDt,-10),
+    end:nap1StartDt,
+    category:"baby",
+    visibility:"nanny"
+  });
+
+  add({
+    id:"nap1",
+    title:`Nap 1 (${nap1Care})`,
+    start:nap1StartDt,
+    end:nap1EndDt,
+    category:"sleep",
+    visibility:"nanny"
+  });
 
   // Lunch + snack anchors (no play blocks)
   const lunchPrepStart = addMin(nap1EndDt, 90);
-  add({ id:"lunch_prep", title:"Lunch prep", start:lunchPrepStart, end:addMin(lunchPrepStart,20), category:"parent", visibility:"full" });
+  add({ id:"lunch_prep", title:"Prep baby's lunch", start:lunchPrepStart, end:addMin(lunchPrepStart,20), category:"baby", visibility:"nanny" });
   add({ id:"lunch", title:"Lunch", start:addMin(lunchPrepStart,20), end:addMin(lunchPrepStart,45), category:"baby", visibility:"nanny" });
 
   const snackStart = addMin(nap1EndDt, 170);
@@ -634,17 +654,35 @@ function baseSchedule(dateStr, plan, log) {
   // Nap 2 timing: actuals or WW2 midpoint from nap1 end
   const nap2StartT = log.nap2Start || toHHMM(addMin(nap1EndDt, ww2));
   const nap2StartDt = makeDate(dateStr, nap2StartT);
-  add({ id:"nap2_routine", title:"Nap routine", start:addMin(nap2StartDt,-10), end:nap2StartDt, category:"baby", visibility:"nanny" });
 
   const nap2EndT = log.nap2End || toHHMM(addMin(nap2StartDt, napDefault));
   const nap2EndDt = makeDate(dateStr, nap2EndT);
-  add({ id:"nap2", title:"Nap 2", start:nap2StartDt, end:nap2EndDt, category:"sleep", visibility:"nanny" });
+
+  const nap2Care = caregiverFor(addMin(nap2StartDt, -10), nap2EndDt);
+
+  add({
+    id:"nap2_routine",
+    title:`Nap routine (${nap2Care})`,
+    start:addMin(nap2StartDt,-10),
+    end:nap2StartDt,
+    category:"baby",
+    visibility:"nanny"
+  });
+
+  add({
+    id:"nap2",
+    title:`Nap 2 (${nap2Care})`,
+    start:nap2StartDt,
+    end:nap2EndDt,
+    category:"sleep",
+    visibility:"nanny"
+  });
 
   // Evening anchors
   const dinnerPrepStart = addMin(nap2EndDt, 120);
   const dinnerPrepStartAdj = soloBedtime ? addMin(dinnerPrepStart, -10) : dinnerPrepStart;
 
-  add({ id:"dinner_prep", title:"Dinner prep", start:dinnerPrepStartAdj, end:addMin(dinnerPrepStartAdj,30), category:"parent", visibility:"full" });
+  add({ id:"dinner_prep", title:"Prep baby's dinner", start:dinnerPrepStartAdj, end:addMin(dinnerPrepStartAdj,30), category:"baby", visibility:"nanny" });
   add({ id:"dinner", title:"Dinner", start:addMin(dinnerPrepStartAdj,30), end:addMin(dinnerPrepStartAdj,55), category:"baby", visibility:"nanny" });
 
   // Bath planning: bath every 3 days, but can't be when Julio is working/unavailable.
@@ -654,12 +692,45 @@ function baseSchedule(dateStr, plan, log) {
   let bathStart = preferred ? makeDate(dateStr, preferred) : addMin(dinnerPrepStartAdj, 70);
   let bathEnd = addMin(bathStart, 15);
 
-  const jc = plan?.considerations?.julioCampus; // treated as "Julio working/unavailable"
-  const julioUnavailableStart = jc ? makeDate(dateStr, jc.start) : null;
-  const julioUnavailableEnd = jc ? makeDate(dateStr, jc.end) : null;
+  const ua0 = plan?.considerations?.unavailability || { Kristyn: [], Julio: [] };
+  const cov0 = plan?.considerations?.coverage || { Nanny: [], Kayden: [] };
+
+  const julioUnavail = (ua0.Julio || [])
+    .filter(x => x && x.start && x.end)
+    .map(x => ({ start: makeDate(dateStr, x.start), end: makeDate(dateStr, x.end), raw: x }));
+
+  const kristynUnavail = (ua0.Kristyn || [])
+    .filter(x => x && x.start && x.end)
+    .map(x => ({ start: makeDate(dateStr, x.start), end: makeDate(dateStr, x.end), raw: x }));
+
+  const nannyCov = (cov0.Nanny || [])
+    .filter(x => x && x.start && x.end)
+    .map(x => ({ start: makeDate(dateStr, x.start), end: makeDate(dateStr, x.end), raw: x }));
+
+  const kaydenCov = (cov0.Kayden || [])
+    .filter(x => x && x.start && x.end)
+    .map(x => ({ start: makeDate(dateStr, x.start), end: makeDate(dateStr, x.end), raw: x }));
+
+  function overlapsAny(s, e, ranges) {
+    return (ranges || []).some(r => overlaps(s, e, r.start, r.end));
+  }
+  function coveredFully(s, e, ranges) {
+    return (ranges || []).some(r => r.start.getTime() <= s.getTime() && r.end.getTime() >= e.getTime());
+  }
+  function caregiverFor(s, e) {
+    const kAvail = !overlapsAny(s, e, kristynUnavail);
+    const jAvail = !overlapsAny(s, e, julioUnavail);
+    if (kAvail && jAvail) return "Kristyn or Julio";
+    if (kAvail) return "Kristyn";
+    if (jAvail) return "Julio";
+    // Both unavailable → only then assign to coverage
+    if (coveredFully(s, e, kaydenCov)) return "Kayden";
+    if (coveredFully(s, e, nannyCov)) return "Nanny";
+    return "Uncovered";
+  }
 
   if (wantsBath) {
-    if (julioUnavailableStart && julioUnavailableEnd && overlaps(bathStart, bathEnd, julioUnavailableStart, julioUnavailableEnd)) {
+    if (overlapsAny(bathStart, bathEnd, julioUnavail)) {
       // If bath overlaps Julio unavailable, skip bath and add a note block for parents (so you see why).
       add({
         id:"bath_skipped",
@@ -687,60 +758,56 @@ function baseSchedule(dateStr, plan, log) {
   // Parent after-bed tasks are NOT scheduled automatically anymore (you asked to remove floating tasks)
   // You can add them as appointments if you want them visible on the calendar.
 
-  // Diaper checks
-  let diaperT = addMin(wake, diaperInterval);
-  let idx = 1;
-  while (diaperT < bedRoutineEnd) {
+  // Unavailability + coverage blocks
+  for (const r of julioUnavail) {
     add({
-      id:`diaper_${idx}`,
-      title:"Diaper check",
-      start: diaperT,
-      end: addMin(diaperT, 5),
-      category:"diaper",
-      visibility:"nanny"
-    });
-    diaperT = addMin(diaperT, diaperInterval);
-    idx++;
-  }
-
-  // Unavailability blocks (parents)
-  if (jc) {
-    add({
-      id:"julio_unavail",
-      title:`Julio unavailable (${jc.start}–${jc.end})`,
-      start: julioUnavailableStart,
-      end: julioUnavailableEnd,
-      category:"availability",
-      visibility:"full",
-      fixed:true
-    });
-  }
-  const kl = plan?.considerations?.kristynLateMeeting;
-  if (kl) {
-    add({
-      id:"kristyn_unavail",
-      title:`Kristyn meeting (${kl.start}–${kl.end})`,
-      start: makeDate(dateStr, kl.start),
-      end: makeDate(dateStr, kl.end),
-      category:"availability",
-      visibility:"full",
-      fixed:true
-    });
-  }
-  const nn = plan?.considerations?.nanny;
-  if (nn) {
-    add({
-      id:"nanny_shift",
-      title:`Nanny shift (${nn.start}–${nn.end})`,
-      start: makeDate(dateStr, nn.start),
-      end: makeDate(dateStr, nn.end),
-      category:"availability",
-      visibility:"full",
-      fixed:true
+      id: newId("julio_unavail"),
+      title: `Julio unavailable (${toHHMM(r.start)}–${toHHMM(r.end)})`,
+      start: r.start,
+      end: r.end,
+      category: "availability",
+      visibility: "full",
+      fixed: true
     });
   }
 
-  // Sort
+  for (const r of kristynUnavail) {
+    add({
+      id: newId("kristyn_unavail"),
+      title: `Kristyn unavailable (${toHHMM(r.start)}–${toHHMM(r.end)})`,
+      start: r.start,
+      end: r.end,
+      category: "availability",
+      visibility: "full",
+      fixed: true
+    });
+  }
+
+  for (const r of kaydenCov) {
+    add({
+      id: newId("kayden_cov"),
+      title: `Kayden coverage (${toHHMM(r.start)}–${toHHMM(r.end)})`,
+      start: r.start,
+      end: r.end,
+      category: "availability",
+      visibility: "full",
+      fixed: true
+    });
+  }
+
+  for (const r of nannyCov) {
+    add({
+      id: newId("nanny_cov"),
+      title: `Nanny coverage (${toHHMM(r.start)}–${toHHMM(r.end)})`,
+      start: r.start,
+      end: r.end,
+      category: "availability",
+      visibility: "full",
+      fixed: true
+    });
+  }
+
+// Sort
   blocks.sort((a,b)=>a.start-b.start);
   return blocks;
 }
@@ -819,8 +886,6 @@ function generateSchedule(dateStr, plan, log, viewMode) {
   const filtered = viewMode === "nanny"
     ? withAppts.filter(b => b.visibility !== "full")
     : withAppts;
-
-  // Optionally hide diaper checks from nanny view? (kept)
   filtered.sort((a,b)=>a.start-b.start);
   return filtered;
 }
@@ -1064,6 +1129,26 @@ function normalizePlan(plan, dateStr) {
   // Migrate old considerations format
   if (!p.considerations && plan.considerations) p.considerations = plan.considerations;
   p.considerations = { ...defaultPlan(dateStr).considerations, ...(p.considerations || {}) };
+  // Ensure new block structures exist
+  if (!p.considerations.unavailability) p.considerations.unavailability = { Kristyn: [], Julio: [] };
+  if (!p.considerations.unavailability.Kristyn) p.considerations.unavailability.Kristyn = [];
+  if (!p.considerations.unavailability.Julio) p.considerations.unavailability.Julio = [];
+
+  if (!p.considerations.coverage) p.considerations.coverage = { Nanny: [], Kayden: [] };
+  if (!p.considerations.coverage.Nanny) p.considerations.coverage.Nanny = [];
+  if (!p.considerations.coverage.Kayden) p.considerations.coverage.Kayden = [];
+
+  // Migrate older single-block fields (backward compatibility)
+  if (p.considerations.julioCampus && !p.considerations.unavailability.Julio.length) {
+    p.considerations.unavailability.Julio.push(p.considerations.julioCampus);
+  }
+  if (p.considerations.kristynLateMeeting && !p.considerations.unavailability.Kristyn.length) {
+    p.considerations.unavailability.Kristyn.push(p.considerations.kristynLateMeeting);
+  }
+  if (p.considerations.nanny && !p.considerations.coverage.Nanny.length) {
+    p.considerations.coverage.Nanny.push(p.considerations.nanny);
+  }
+
   // Appointments
   if (!p.appointments) p.appointments = { tonight: [], tomorrow: [] };
   p.appointments.tonight = Array.isArray(p.appointments.tonight) ? p.appointments.tonight : [];
@@ -1135,11 +1220,31 @@ async function readStepBasics() {
 }
 
 // ---- Step 2: considerations ----
-async function renderStepConsiderations() {
+async 
+function renderStepConsiderations() {
   const c = quizDraftPlan.considerations || {};
-  const jc = c.julioCampus;
-  const kl = c.kristynLateMeeting;
-  const nn = c.nanny;
+  if (!c.unavailability) c.unavailability = { Kristyn: [], Julio: [] };
+  if (!c.unavailability.Kristyn) c.unavailability.Kristyn = [];
+  if (!c.unavailability.Julio) c.unavailability.Julio = [];
+
+  if (!c.coverage) c.coverage = { Nanny: [], Kayden: [] };
+  if (!c.coverage.Nanny) c.coverage.Nanny = [];
+  if (!c.coverage.Kayden) c.coverage.Kayden = [];
+
+  const uaK = c.unavailability.Kristyn;
+  const uaJ = c.unavailability.Julio;
+  const covN = c.coverage.Nanny;
+  const covKa = c.coverage.Kayden;
+
+  function pillsHtml(list, key) {
+    if (!list.length) return `<div class="muted">None.</div>`;
+    return `<div class="pillRow">` + list.map((b, i) => `
+      <span class="pill">
+        <b>${escapeHtml(b.start)}–${escapeHtml(b.end)}</b>
+        <button type="button" class="danger" style="padding:6px 10px; border-radius:999px; font-size:11px;" data-rm="${escapeHtml(key)}:${i}">Remove</button>
+      </span>
+    `).join("") + `</div>`;
+  }
 
   quizContent.innerHTML = `
     <div class="toggleRow">
@@ -1147,51 +1252,85 @@ async function renderStepConsiderations() {
       <label style="margin:0;">Both working from home</label>
     </div>
 
-    <div class="toggleRow">
-      <input id="qJulioCampus" type="checkbox" ${jc ? "checked":""} />
-      <label style="margin:0;">Julio unavailable / working</label>
-    </div>
+    <div class="hr"></div>
 
-    <div class="row" id="qJulioTimes" style="${jc ? "" : "display:none;"}">
-      <div>
-        <label>Julio unavailable start</label>
-        <input id="qJulioStart" type="time" value="${escapeHtml(jc?.start || "09:00")}" />
-      </div>
-      <div>
-        <label>Julio unavailable end</label>
-        <input id="qJulioEnd" type="time" value="${escapeHtml(jc?.end || "17:00")}" />
-      </div>
-    </div>
+    <div class="sectionTitle">Parent unavailability (tomorrow)</div>
+    <div class="muted">Add as many blocks as you need. These blocks help the app assign naps to an available parent automatically.</div>
 
-    <div class="toggleRow">
-      <input id="qKristynLate" type="checkbox" ${kl ? "checked":""} />
-      <label style="margin:0;">Kristyn has a late meeting</label>
-    </div>
-
-    <div class="row" id="qKristynTimes" style="${kl ? "" : "display:none;"}">
-      <div>
-        <label>Meeting start</label>
-        <input id="qKristynStart" type="time" value="${escapeHtml(kl?.start || "18:00")}" />
+    <div class="apptCard">
+      <div class="apptTitle">Kristyn unavailable / working</div>
+      ${pillsHtml(uaK, "uaK")}
+      <div class="row" style="margin-top:10px;">
+        <div>
+          <label>Start</label>
+          <input id="qUaKStart" type="time" value="18:00" />
+        </div>
+        <div>
+          <label>End</label>
+          <input id="qUaKEnd" type="time" value="19:00" />
+        </div>
       </div>
-      <div>
-        <label>Meeting end</label>
-        <input id="qKristynEnd" type="time" value="${escapeHtml(kl?.end || "19:00")}" />
+      <div class="btnbar" style="margin-top:10px;">
+        <button type="button" class="primary" id="qUaKAddBtn">Add block</button>
       </div>
     </div>
 
-    <div class="toggleRow">
-      <input id="qNanny" type="checkbox" ${nn ? "checked":""} />
-      <label style="margin:0;">Nanny coverage</label>
+    <div class="apptCard">
+      <div class="apptTitle">Julio unavailable / working</div>
+      ${pillsHtml(uaJ, "uaJ")}
+      <div class="row" style="margin-top:10px;">
+        <div>
+          <label>Start</label>
+          <input id="qUaJStart" type="time" value="09:00" />
+        </div>
+        <div>
+          <label>End</label>
+          <input id="qUaJEnd" type="time" value="17:00" />
+        </div>
+      </div>
+      <div class="btnbar" style="margin-top:10px;">
+        <button type="button" class="primary" id="qUaJAddBtn">Add block</button>
+      </div>
     </div>
 
-    <div class="row" id="qNannyTimes" style="${nn ? "" : "display:none;"}">
-      <div>
-        <label>Nanny start</label>
-        <input id="qNannyStart" type="time" value="${escapeHtml(nn?.start || "10:00")}" />
+    <div class="hr"></div>
+
+    <div class="sectionTitle">Coverage (only used if BOTH parents are unavailable)</div>
+    <div class="muted">If both parents are unavailable during a nap, the app assigns naps to Kayden (if covered), otherwise Nanny (if covered).</div>
+
+    <div class="apptCard">
+      <div class="apptTitle">Kayden coverage</div>
+      ${pillsHtml(covKa, "covKa")}
+      <div class="row" style="margin-top:10px;">
+        <div>
+          <label>Start</label>
+          <input id="qCovKaStart" type="time" value="10:00" />
+        </div>
+        <div>
+          <label>End</label>
+          <input id="qCovKaEnd" type="time" value="14:00" />
+        </div>
       </div>
-      <div>
-        <label>Nanny end</label>
-        <input id="qNannyEnd" type="time" value="${escapeHtml(nn?.end || "14:00")}" />
+      <div class="btnbar" style="margin-top:10px;">
+        <button type="button" class="primary" id="qCovKaAddBtn">Add block</button>
+      </div>
+    </div>
+
+    <div class="apptCard">
+      <div class="apptTitle">Nanny coverage</div>
+      ${pillsHtml(covN, "covN")}
+      <div class="row" style="margin-top:10px;">
+        <div>
+          <label>Start</label>
+          <input id="qCovNStart" type="time" value="10:00" />
+        </div>
+        <div>
+          <label>End</label>
+          <input id="qCovNEnd" type="time" value="14:00" />
+        </div>
+      </div>
+      <div class="btnbar" style="margin-top:10px;">
+        <button type="button" class="primary" id="qCovNAddBtn">Add block</button>
       </div>
     </div>
 
@@ -1201,51 +1340,60 @@ async function renderStepConsiderations() {
       <option value="Julio" ${c.bedtimeOwner==="Julio"?"selected":""}>Julio</option>
       <option value="Split" ${c.bedtimeOwner==="Split"?"selected":""}>Split / Hand-off</option>
     </select>
-
-    <script>
-      // no-op (module file attaches handlers)
-    </script>
   `;
 
-  const qJulioCampus = $("qJulioCampus");
-  const qKristynLate = $("qKristynLate");
-  const qNanny = $("qNanny");
-  const qJulioTimes = $("qJulioTimes");
-  const qKristynTimes = $("qKristynTimes");
-  const qNannyTimes = $("qNannyTimes");
+  function addBlock(list, startId, endId) {
+    const start = clampTimeStr($(startId).value, "09:00");
+    const end = clampTimeStr($(endId).value, "10:00");
+    if (end <= start) throw new Error("End must be after start.");
+    list.push({ start, end });
+  }
 
-  qJulioCampus.onchange = () => qJulioTimes.style.display = qJulioCampus.checked ? "" : "none";
-  qKristynLate.onchange = () => qKristynTimes.style.display = qKristynLate.checked ? "" : "none";
-  qNanny.onchange = () => qNannyTimes.style.display = qNanny.checked ? "" : "none";
+  // Add buttons
+  $("qUaKAddBtn").onclick = () => { try { addBlock(uaK, "qUaKStart", "qUaKEnd"); renderStepConsiderations(); } catch(e){ setStatus(quizFooterStatus, e.message || "Could not add block.", "error"); } };
+  $("qUaJAddBtn").onclick = () => { try { addBlock(uaJ, "qUaJStart", "qUaJEnd"); renderStepConsiderations(); } catch(e){ setStatus(quizFooterStatus, e.message || "Could not add block.", "error"); } };
+  $("qCovKaAddBtn").onclick = () => { try { addBlock(covKa, "qCovKaStart", "qCovKaEnd"); renderStepConsiderations(); } catch(e){ setStatus(quizFooterStatus, e.message || "Could not add block.", "error"); } };
+  $("qCovNAddBtn").onclick = () => { try { addBlock(covN, "qCovNStart", "qCovNEnd"); renderStepConsiderations(); } catch(e){ setStatus(quizFooterStatus, e.message || "Could not add block.", "error"); } };
+
+  // Remove buttons
+  quizContent.querySelectorAll("button[data-rm]").forEach(btn => {
+    btn.onclick = () => {
+      const spec = btn.getAttribute("data-rm") || "";
+      const [key, idxStr] = spec.split(":");
+      const idx = Number(idxStr);
+      const map = { uaK, uaJ, covKa, covN };
+      const list = map[key];
+      if (!list || !Number.isFinite(idx)) return;
+      list.splice(idx, 1);
+      renderStepConsiderations();
+    };
+  });
 }
 
-async function readStepConsiderations() {
+function readStepConsiderations() {
   const c = quizDraftPlan.considerations;
   c.bothWFH = $("qBothWFH").checked;
-
-  if ($("qJulioCampus").checked) {
-    c.julioCampus = {
-      start: clampTimeStr($("qJulioStart").value, "09:00"),
-      end: clampTimeStr($("qJulioEnd").value, "17:00"),
-    };
-  } else c.julioCampus = null;
-
-  if ($("qKristynLate").checked) {
-    c.kristynLateMeeting = {
-      start: clampTimeStr($("qKristynStart").value, "18:00"),
-      end: clampTimeStr($("qKristynEnd").value, "19:00"),
-    };
-  } else c.kristynLateMeeting = null;
-
-  if ($("qNanny").checked) {
-    c.nanny = {
-      start: clampTimeStr($("qNannyStart").value, "10:00"),
-      end: clampTimeStr($("qNannyEnd").value, "14:00"),
-    };
-  } else c.nanny = null;
-
   c.bedtimeOwner = $("qBedOwner").value;
+
+  // Ensure structures exist (in case of older plans)
+  if (!c.unavailability) c.unavailability = { Kristyn: [], Julio: [] };
+  if (!c.unavailability.Kristyn) c.unavailability.Kristyn = [];
+  if (!c.unavailability.Julio) c.unavailability.Julio = [];
+
+  if (!c.coverage) c.coverage = { Nanny: [], Kayden: [] };
+  if (!c.coverage.Nanny) c.coverage.Nanny = [];
+  if (!c.coverage.Kayden) c.coverage.Kayden = [];
+
+  // Remove any empty/invalid blocks
+  const clean = (arr) => (arr || []).filter(x => x && x.start && x.end && x.end > x.start);
+  c.unavailability.Kristyn = clean(c.unavailability.Kristyn);
+  c.unavailability.Julio = clean(c.unavailability.Julio);
+  c.coverage.Nanny = clean(c.coverage.Nanny);
+  c.coverage.Kayden = clean(c.coverage.Kayden);
+
+  // Back-compat fields are no longer used, but keep them if they exist.
 }
+
 
 // ---- Appointment helpers ----
 function apptCardHtml(prefix, appt) {
@@ -1402,11 +1550,12 @@ function daysSince(dateStr) {
   return diff;
 }
 
-async function renderStepBath() {
+async 
+function renderStepBath() {
   const since = daysSince(settings.lastBathDate);
   const shouldBath = (since === null) ? false : (since >= 3);
-  const c = quizDraftPlan.considerations;
-  const julioUnavailable = !!c.julioCampus;
+  const c = quizDraftPlan.considerations || {};
+  const hasJulioBlocks = ((c.unavailability?.Julio) || []).length > 0;
 
   quizContent.innerHTML = `
     <div class="apptCard">
@@ -1421,7 +1570,7 @@ async function renderStepBath() {
     </div>
 
     <div class="toggleRow">
-      <input id="qWantsBath" type="checkbox" ${quizDraftPlan.bathPlan.wantsBath ? "checked" : ""} ${julioUnavailable ? "disabled" : ""} />
+      <input id="qWantsBath" type="checkbox" ${quizDraftPlan.bathPlan.wantsBath ? "checked" : ""} />
       <label style="margin:0;">Schedule a bath tomorrow</label>
     </div>
 
@@ -1436,27 +1585,24 @@ async function renderStepBath() {
       </div>
     </div>
 
-    ${julioUnavailable ? `<div class="status error" style="margin-top:10px;">Bath is disabled because Julio is marked unavailable/working tomorrow. (You can still do bath on a different day.)</div>` : ""}
-    ${shouldBath && !julioUnavailable ? `<div class="status success" style="margin-top:10px;">Reminder: it’s been 3+ days — consider doing bath tomorrow.</div>` : ""}
+    ${hasJulioBlocks ? `<div class="status muted" style="margin-top:10px;">Note: Julio has one or more unavailable blocks tomorrow. If your bath time overlaps those blocks, the schedule will automatically skip bath and add a note.</div>` : ""}
+
+    ${shouldBath ? `<div class="status success" style="margin-top:10px;">Reminder: it’s been 3+ days — consider doing bath tomorrow.</div>` : ""}
   `;
 
   const qWantsBath = $("qWantsBath");
   const qBathTimes = $("qBathTimes");
-  if (qWantsBath) {
-    qWantsBath.onchange = () => qBathTimes.style.display = qWantsBath.checked ? "" : "none";
-  }
+  qWantsBath.onchange = () => {
+    qBathTimes.style.display = qWantsBath.checked ? "" : "none";
+  };
 }
 
-async function readStepBath(skip=false) {
+
+
+function readStepBath(skip=false) {
   if (skip) return;
-  const c = quizDraftPlan.considerations;
-  const julioUnavailable = !!c.julioCampus;
   const wants = $("qWantsBath")?.checked ?? false;
 
-  if (julioUnavailable) {
-    quizDraftPlan.bathPlan = { wantsBath: false, preferredStart: null, reason: "" };
-    return;
-  }
   if (!wants) {
     quizDraftPlan.bathPlan = { wantsBath: false, preferredStart: null, reason: "" };
     return;
@@ -1465,6 +1611,7 @@ async function readStepBath(skip=false) {
   quizDraftPlan.bathPlan.preferredStart = clampTimeStr($("qBathStart").value, "18:10");
   quizDraftPlan.bathPlan.reason = ($("qBathNote").value || "").trim();
 }
+
 
 // ---- Step 6: focus items ----
 async function renderStepFocus() {
@@ -1549,13 +1696,20 @@ async function readStepFocus(skip=false) {
 }
 
 // ---- Step 7: review + save ----
-async function renderStepReview() {
+async 
+function renderStepReview() {
   const p = quizDraftPlan;
-  const c = p.considerations;
+  const c = p.considerations || {};
 
   const appts = p.appointments.tomorrow || [];
   const apptSummary = appts.length ? appts.map(a => `${a.title} (${a.start}–${a.end})`).join(", ") : "None";
   const bathSummary = p.bathPlan?.wantsBath ? `Yes (${p.bathPlan.preferredStart || "default time"})` : "No";
+
+  const fmtBlocks = (arr) => (arr && arr.length) ? arr.map(b => `${b.start}–${b.end}`).join(", ") : "No";
+  const uaKSummary = fmtBlocks(c.unavailability?.Kristyn || []);
+  const uaJSummary = fmtBlocks(c.unavailability?.Julio || []);
+  const covKaSummary = fmtBlocks(c.coverage?.Kayden || []);
+  const covNSummary = fmtBlocks(c.coverage?.Nanny || []);
 
   quizContent.innerHTML = `
     <div class="apptCard">
@@ -1563,10 +1717,11 @@ async function renderStepReview() {
       <div class="apptMeta" style="line-height:1.5; margin-top:6px;">
         <b>Date:</b> ${escapeHtml(p.date)}<br/>
         <b>Wake guess:</b> ${escapeHtml(p.wakeDefault)}<br/>
-        <b>Bedtime owner:</b> ${escapeHtml(c.bedtimeOwner)}<br/>
-        <b>Julio unavailable:</b> ${c.julioCampus ? escapeHtml(`${c.julioCampus.start}–${c.julioCampus.end}`) : "No"}<br/>
-        <b>Kristyn late meeting:</b> ${c.kristynLateMeeting ? escapeHtml(`${c.kristynLateMeeting.start}–${c.kristynLateMeeting.end}`) : "No"}<br/>
-        <b>Nanny:</b> ${c.nanny ? escapeHtml(`${c.nanny.start}–${c.nanny.end}`) : "No"}<br/>
+        <b>Bedtime owner:</b> ${escapeHtml(c.bedtimeOwner || "Kristyn")}<br/>
+        <b>Kristyn unavailable / working:</b> ${escapeHtml(uaKSummary)}<br/>
+        <b>Julio unavailable / working:</b> ${escapeHtml(uaJSummary)}<br/>
+        <b>Kayden coverage:</b> ${escapeHtml(covKaSummary)}<br/>
+        <b>Nanny coverage:</b> ${escapeHtml(covNSummary)}<br/>
         <b>Bath:</b> ${escapeHtml(bathSummary)}<br/>
         <b>Tomorrow appointments:</b> ${escapeHtml(apptSummary)}<br/>
       </div>
@@ -1721,23 +1876,17 @@ refreshWeekBtn.onclick = refreshWeek;
 // Settings screen
 // ==========================
 function loadSettingsUI() {
-  setDiaper.value = settings.diaperIntervalMin;
   setWakeDefault.value = settings.wakeDefault;
   setNapDefault.value = settings.napDefaultMin;
   setSoloBedBuffer.value = settings.soloBedtimeBufferMin;
   setLastBath.value = settings.lastBathDate || "";
-  setExportDiapers.value = settings.exportDiapers || "yes";
 }
 
 saveSettingsBtn.onclick = async () => {
-  const s = {
-    diaperIntervalMin: Number(setDiaper.value || defaultSettings.diaperIntervalMin),
-    wakeDefault: setWakeDefault.value || defaultSettings.wakeDefault,
+  const s = {    wakeDefault: setWakeDefault.value || defaultSettings.wakeDefault,
     napDefaultMin: Number(setNapDefault.value || defaultSettings.napDefaultMin),
     soloBedtimeBufferMin: Number(setSoloBedBuffer.value || defaultSettings.soloBedtimeBufferMin),
-    lastBathDate: setLastBath.value || null,
-    exportDiapers: setExportDiapers.value || "yes",
-  };
+    lastBathDate: setLastBath.value || null,  };
   settings = s;
   saveSettings(settings);
   setStatus(settingsStatus, "Saved settings.", "success");
@@ -1912,11 +2061,7 @@ async function publishForDate(dateStr) {
   }
 
   const blocksFull = generateSchedule(dateStr, plan, log, "full");
-
-  // Option: hide diaper checks from export
-  const blocks = (settings.exportDiapers === "no")
-    ? blocksFull.filter(b => b.category !== "diaper")
-    : blocksFull;
+  const blocks = blocksFull;
 
   setStatus(todayStatus, "Clearing previous publish for this date…", "muted");
   await clearPublishedForDate(calId, dateStr);
