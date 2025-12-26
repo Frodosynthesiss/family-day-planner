@@ -211,6 +211,54 @@
     .dayBadges{ display:flex; flex-wrap:wrap; gap:6px; margin-top:6px; }
     .badge{ font-size:11px; border:1px solid var(--border); border-radius:999px; padding: 4px 8px; background:#fff; color:#111827; }
     .badge.dim{ color: var(--muted); }
+  
+    .timelineShell{ margin-top:10px; }
+    .timelineViewport{
+      position:relative;
+      border:1px solid var(--border);
+      border-radius: 18px;
+      background:#fff;
+      overflow:auto;
+      height: 680px;
+      box-shadow: 0 10px 25px rgba(2,6,23,.06);
+    }
+    .timelineInner{
+      position:relative;
+      min-height: 1200px;
+      padding-left: 72px;
+    }
+    .timeMarker{
+      position:absolute;
+      left:0;
+      width: 72px;
+      transform: translateY(-50%);
+      font-size: 12px;
+      color: var(--muted);
+      font-variant-numeric: tabular-nums;
+      padding-left: 10px;
+    }
+    .gridLine{
+      position:absolute;
+      left: 72px;
+      right: 0;
+      height: 1px;
+      background: rgba(229,231,235,.9);
+      transform: translateY(-50%);
+    }
+    .tlBlock{
+      position:absolute;
+      left: 88px;
+      right: 14px;
+      border-radius: 16px;
+      border: 1px solid rgba(37,99,235,.18);
+      background: rgba(37,99,235,.08);
+      padding: 10px 12px;
+      overflow:hidden;
+    }
+    .tlBlock .tltitle{ font-weight: 950; font-size: 13px; }
+    .tlBlock .tltime{ margin-top:3px; font-size:12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+    .tlBlock .tlmeta{ margin-top:6px; font-size:11px; color: #0f172a; opacity:.8; }
+    
   </style>
 </head>
 
@@ -235,8 +283,8 @@
       <div class="muted">Use the quiz to capture what’s different tomorrow, add appointments (today and tomorrow), pick focus items from the running list, and save.</div>
 
       <div class="btnbar">
-        <button class="primary" id="startQuizBtn">Start tonight quiz</button>
-        <button id="quickPreviewBtn">Quick preview tomorrow schedule</button>
+        <button class="primary" id="startQuizBtn">Start tonight quiz (5 min)</button>
+        <button id="quickPreviewBtn">Preview tomorrow (uses estimated wake time)</button>
       </div>
 
       <div id="tonightStatus" style="margin-top:10px;"></div>
@@ -245,7 +293,7 @@
     <div class="card">
       <div class="sectionTitle">Tomorrow preview</div>
       <div class="muted">This preview uses your best-guess wake time. Tomorrow, logging actual wake + naps will update it.</div>
-      <ul id="tomorrowPreview"></ul>
+      <div id="tomorrowPreview" class="timelineShell"></div>
     </div>
   </section>
 
@@ -273,7 +321,7 @@
 
       <div class="sectionTitle">Quick log</div>
       <div class="btnbar">
-        <button id="logWakeBtn" class="primary">Baby woke (set now)</button>
+        <button id="logWakeBtn" class="primary">Log wake time (set to now)</button>
         <button id="nap1StartBtn">Nap 1 started</button>
         <button id="nap1EndBtn">Nap 1 ended</button>
         <button id="nap2StartBtn">Nap 2 started</button>
@@ -324,7 +372,7 @@
       <textarea id="nightNotes" rows="2" placeholder="e.g., woke at 1:40am for 10 min"></textarea>
 
       <div class="btnbar">
-        <button id="reflowBtn" class="primary">Reflow schedule</button>
+        <button id="reflowBtn" class="primary">Update schedule using logged times</button>
       </div>
 
       <div class="hr"></div>
@@ -360,8 +408,8 @@
 
       <div class="btnbar">
         <button id="googleBtn">Sign in to Google</button>
-        <button id="publishBtn" class="primary">Publish / Republish</button>
-        <button id="clearBtn" class="danger">Clear published events (today)</button>
+        <button id="publishBtn" class="primary">Export schedule to Google Calendar</button>
+        <button id="clearBtn" class="danger">Remove exported events (today)</button>
       </div>
 
       <div id="todayStatus" style="margin-top:10px;"></div>
@@ -375,7 +423,7 @@
           <span class="pill" id="nextPill"><b>Next</b> —</span>
         </div>
       </div>
-      <ul id="todayPreview"></ul>
+      <div id="todayPreview" class="timelineShell"></div>
     </div>
   </section>
 

@@ -911,6 +911,101 @@ function renderScheduleList(ulEl, blocks) {
   });
 }
 
+function renderTimeline(containerEl, blocks, opts = {}) {
+  // 2-hour grid timeline. Shows only scheduled blocks; open time is blank.
+  const startHour = opts.startHour ?? 0;
+  const endHour = opts.endHour ?? 24;
+  const pxPerMin = opts.pxPerMin ?? 1.2; // 24h ≈ 1728px tall (scrollable)
+  const totalMins = (endHour - startHour) * 60;
+
+  containerEl.innerHTML = "";
+  const viewport = document.createElement("div");
+  viewport.className = "timelineViewport";
+
+  const inner = document.createElement("div");
+  inner.className = "timelineInner";
+  inner.style.minHeight = `${Math.max(900, totalMins * pxPerMin)}px`;
+
+  // Markers every 2 hours
+  for (let h = startHour; h <= endHour; h += 2) {
+    const minsFromStart = (h - startHour) * 60;
+    const top = minsFromStart * pxPerMin;
+
+    const label = document.createElement("div");
+    label.className = "timeMarker";
+    label.style.top = `${top}px`;
+    label.textContent = fmtHourLabel(h);
+
+    const line = document.createElement("div");
+    line.className = "gridLine";
+    line.style.top = `${top}px`;
+
+    inner.appendChild(label);
+    inner.appendChild(line);
+  }
+
+  // Blocks
+  if (!blocks?.length) {
+    const empty = document.createElement("div");
+    empty.className = "status muted";
+    empty.style.margin = "12px";
+    empty.textContent = "No schedule yet — log a wake time or run the tonight quiz.";
+    viewport.appendChild(empty);
+    containerEl.appendChild(viewport);
+    return;
+  }
+
+  blocks.forEach(b => {
+    const s = b.start;
+    const e = b.end;
+    const startMins = (s.getHours() - startHour) * 60 + s.getMinutes();
+    const endMins = (e.getHours() - startHour) * 60 + e.getMinutes();
+    const top = startMins * pxPerMin;
+    const height = Math.max(18, (endMins - startMins) * pxPerMin);
+
+    // Skip if outside window
+    if (endMins < 0 || startMins > totalMins) return;
+
+    const block = document.createElement("div");
+    block.className = "tlBlock";
+    block.style.top = `${top}px`;
+    block.style.height = `${height}px`;
+
+    const title = document.createElement("div");
+    title.className = "tltitle";
+    title.textContent = b.title;
+
+    const time = document.createElement("div");
+    time.className = "tltime";
+    time.textContent = `${fmtTime(b.start)} – ${fmtTime(b.end)}`;
+
+    block.appendChild(title);
+    block.appendChild(time);
+
+    if (b.category) {
+      const meta = document.createElement("div");
+      meta.className = "tlmeta";
+      meta.textContent = b.category;
+      block.appendChild(meta);
+    }
+
+    inner.appendChild(block);
+  });
+
+  viewport.appendChild(inner);
+  containerEl.appendChild(viewport);
+}
+
+function fmtHourLabel(h24) {
+  // h24: 0-24
+  const h = h24 % 24;
+  const ampm = h < 12 ? "AM" : "PM";
+  const hh = ((h + 11) % 12) + 1;
+  return `${hh}:00 ${ampm}`;
+}
+
+
+
 function updateNowNext(blocks) {
   const now = new Date();
   const current = blocks.find(b => now >= b.start && now < b.end);
@@ -1042,7 +1137,7 @@ async function reflowToday(showToast=true) {
   const viewMode = nannyView.checked ? "nanny" : "full";
   const blocks = generateSchedule(dateStr, plan, log, viewMode);
 
-  renderScheduleList(todayPreview, blocks);
+  renderTimeline(todayPreview, blocks);
   updateNowNext(blocks);
 
   if (showToast) setStatus(todayStatus, "Updated.", "success");
@@ -1752,14 +1847,14 @@ async function saveQuizPlan() {
 // ==========================
 // Tomorrow preview actions
 // ==========================
-async function previewTomorrow() {
+async async function previewTomorrow() {
   const tomorrow = addDays(dateToYMD(new Date()), 1);
   const plan = (await loadPlan(tomorrow)) || defaultPlan(tomorrow);
   const log = await loadLog(tomorrow);
   if (!log.wakeActual) log.wakeActual = plan.wakeDefault || settings.wakeDefault;
 
   const blocks = generateSchedule(tomorrow, plan, log, "full");
-  renderScheduleList(tomorrowPreview, blocks);
+  renderTimeline(tomorrowPreview, blocks);
 }
 
 startQuizBtn.onclick = async () => {
@@ -1770,7 +1865,7 @@ startQuizBtn.onclick = async () => {
 
 quickPreviewBtn.onclick = async () => {
   await previewTomorrow();
-  setStatus(tonightStatus, "Generated tomorrow preview.", "success");
+  setStatus(tonightStatus, "Preview updated. (You can adjust in the quiz.)", "success");
 };
 
 // ==========================
