@@ -559,7 +559,7 @@ async function signOut() {
 // Times are minutes since midnight.
 
 function normalizeBlocks(blocks) {
-  // blocks: [{start:"HH:MM", end:"HH:MM"}]
+  // blocks: [{start:"h:mm AM/PM", end:"h:mm AM/PM"}]
   const out = [];
   (blocks || []).forEach(b => {
     const s = parseTimeToMinutes(b.start);
@@ -1005,8 +1005,8 @@ function viewToday() {
             </div>
           </div>
           <div class="field">
-            <label>Or type it (HH:MM)</label>
-            <input inputmode="numeric" placeholder="06:45" id="wakeInput" value="${log.wakeTime || ""}">
+            <label>Or type it (e.g., 6:30 AM)</label>
+            <input inputmode="numeric" placeholder="6:45 AM" id="wakeInput" value="${log.wakeTime || ""}">
           </div>
 
           <div class="hr"></div>
@@ -1020,11 +1020,11 @@ function viewToday() {
           <div class="split">
             <div class="field">
               <label>Nap 1 start</label>
-              <input inputmode="numeric" placeholder="09:50" id="nap1StartInput" value="${log.nap1Start || ""}">
+              <input inputmode="numeric" placeholder="9:50 AM" id="nap1StartInput" value="${log.nap1Start || ""}">
             </div>
             <div class="field">
               <label>Nap 1 end</label>
-              <input inputmode="numeric" placeholder="11:05" id="nap1EndInput" value="${log.nap1End || ""}">
+              <input inputmode="numeric" placeholder="11:05 AM" id="nap1EndInput" value="${log.nap1End || ""}">
             </div>
           </div>
 
@@ -1039,11 +1039,11 @@ function viewToday() {
           <div class="split">
             <div class="field">
               <label>Nap 2 start</label>
-              <input inputmode="numeric" placeholder="15:00" id="nap2StartInput" value="${log.nap2Start || ""}">
+              <input inputmode="numeric" placeholder="3:00 PM" id="nap2StartInput" value="${log.nap2Start || ""}">
             </div>
             <div class="field">
               <label>Nap 2 end</label>
-              <input inputmode="numeric" placeholder="16:15" id="nap2EndInput" value="${log.nap2End || ""}">
+              <input inputmode="numeric" placeholder="4:15 PM" id="nap2EndInput" value="${log.nap2End || ""}">
             </div>
           </div>
 
@@ -1058,7 +1058,7 @@ function viewToday() {
           <div class="split">
             <div class="field">
               <label>Bedtime time</label>
-              <input inputmode="numeric" placeholder="19:50" id="bedtimeInput" value="${log.bedtimeTime || ""}">
+              <input inputmode="numeric" placeholder="7:50 PM" id="bedtimeInput" value="${log.bedtimeTime || ""}">
             </div>
             <div class="field">
               <label>Overnight notes</label>
@@ -1258,8 +1258,8 @@ function viewSettings() {
         <h2 style="margin-top:0">Planner defaults</h2>
 
         <div class="field">
-          <label>Expected wake time for forecasts (HH:MM)</label>
-          <input id="expectedWake" inputmode="numeric" placeholder="06:30" value="${escapeAttr(cfg.expectedWake)}" />
+          <label>Expected wake time for forecasts (e.g., 6:30 AM)</label>
+          <input id="expectedWake" inputmode="numeric" placeholder="6:30 AM" value="${escapeAttr(formatTime12FromHHMM(cfg.expectedWake || DEFAULTS.expectedWake))}" />
         </div>
         <div class="field">
           <label>Default nap duration (minutes)</label>
@@ -1582,12 +1582,40 @@ function getTodayDraftLog() {
 }
 
 function valueHHMM(v) {
-  const s = (v || "").trim();
-  if (!s) return null;
-  if (!/^\d{1,2}:\d{2}$/.test(s)) return null;
-  const [h, m] = s.split(":").map(Number);
-  if (h < 0 || h > 23 || m < 0 || m > 59) return null;
-  return `${pad2(h)}:${pad2(m)}`;
+  // Accepts:
+  // - "h:mm AM/PM" (24h)
+  // - "h:mm AM/PM" or "h AM/PM" (12h)
+  const raw = (v || "").trim();
+  if (!raw) return null;
+
+  // 12-hour with minutes: 1:05 PM
+  let m = raw.match(/^\s*(\d{1,2})\s*:\s*(\d{2})\s*(am|pm)\s*$/i);
+  if (m) {
+    let h = Number(m[1]);
+    const min = Number(m[2]);
+    const ap = String(m[3]).toLowerCase();
+    if (h < 1 || h > 12 || min < 0 || min > 59) return null;
+    if (ap === "pm" && h !== 12) h += 12;
+    if (ap === "am" && h === 12) h = 0;
+    return `${pad2(h)}:${pad2(min)}`;
+  }
+
+  // 12-hour without minutes: 1 PM
+  m = raw.match(/^\s*(\d{1,2})\s*(am|pm)\s*$/i);
+  if (m) {
+    let h = Number(m[1]);
+    const ap = String(m[2]).toLowerCase();
+    if (h < 1 || h > 12) return null;
+    if (ap === "pm" && h !== 12) h += 12;
+    if (ap === "am" && h === 12) h = 0;
+    return `${pad2(h)}:00`;
+  }
+
+  // 24-hour h:mm AM/PM
+  if (!/^\d{1,2}:\d{2}$/.test(raw)) return null;
+  const [h, min] = raw.split(":").map(Number);
+  if (h < 0 || h > 23 || min < 0 || min > 59) return null;
+  return `${pad2(h)}:${pad2(min)}`;
 }
 
 async function saveTodayLog() {
@@ -2015,11 +2043,11 @@ function quizStepView(stepKey) {
                   </div>
                   <div class="field" style="margin:0">
                     <label>Start</label>
-                    <input data-appt-start="${a.id}" inputmode="numeric" value="${escapeAttr(a.start||"")}" placeholder="10:30" />
+                    <input data-appt-start="${a.id}" inputmode="numeric" value="${escapeAttr(a.start||"")}" placeholder="10:30 AM" />
                   </div>
                   <div class="field" style="margin:0">
                     <label>End</label>
-                    <input data-appt-end="${a.id}" inputmode="numeric" value="${escapeAttr(a.end||"")}" placeholder="11:15" />
+                    <input data-appt-end="${a.id}" inputmode="numeric" value="${escapeAttr(a.end||"")}" placeholder="11:15 AM" />
                   </div>
                 </div>
               </div>
@@ -2030,7 +2058,7 @@ function quizStepView(stepKey) {
           `).join("")}
         </div>
       ` : `<div class="note">No appointments added.</div>`}
-      <div class="note" style="margin-top:10px;">Format: <b>HH:MM</b> (24-hour time). Example: 14:05.</div>
+      <div class="note" style="margin-top:10px;">Format: <b>h:mm AM/PM</b> (24-hour time). Example: 14:05.</div>
     `;
   }
 
@@ -2075,11 +2103,11 @@ function timeBlockEditor(fieldKey, blocks, { disabled } = {}) {
         <div class="split">
           <div class="field" style="margin:0">
             <label>Start</label>
-            <input ${disabled ? "disabled":""} data-block-start="${fieldKey}:${idx}" inputmode="numeric" value="${escapeAttr(b.start||"")}" placeholder="09:00" />
+            <input ${disabled ? "disabled":""} data-block-start="${fieldKey}:${idx}" inputmode="numeric" value="${escapeAttr(b.start||"")}" placeholder="9:00 AM" />
           </div>
           <div class="field" style="margin:0">
             <label>End</label>
-            <input ${disabled ? "disabled":""} data-block-end="${fieldKey}:${idx}" inputmode="numeric" value="${escapeAttr(b.end||"")}" placeholder="11:30" />
+            <input ${disabled ? "disabled":""} data-block-end="${fieldKey}:${idx}" inputmode="numeric" value="${escapeAttr(b.end||"")}" placeholder="11:30 AM" />
           </div>
         </div>
       </div>
@@ -2210,7 +2238,7 @@ function readQuizStepIntoDraft() {
     // lightweight validation warning for wrong formats
     const bad = (draft.appointments || []).some(a => a.start && !valueHHMM(a.start) || a.end && !valueHHMM(a.end));
     if (bad) {
-      showToast("One or more appointment times don’t look like HH:MM yet.");
+      showToast("One or more appointment times don’t look like h:mm AM/PM yet.");
       // Still allow continuing (user might fix on preview)
     }
     return true;
