@@ -2464,17 +2464,20 @@ function wireAuthUI(){
     const email = $("#authEmail").value.trim();
     const password = $("#authPass").value;
     $("#authMsg").textContent = "";
+    if (!supabaseClient) { toast("Supabase not initialized."); return; }
     const { error } = await supabaseClient.auth.signInWithPassword({ email, password });
     if (error) $("#authMsg").textContent = error.message;
+    else toast("Signed in");
   });
 
   $("#btnSignUp").addEventListener("click", async () => {
     const email = $("#authEmail").value.trim();
     const password = $("#authPass").value;
     $("#authMsg").textContent = "";
+    if (!supabaseClient) { toast("Supabase not initialized."); return; }
     const { error } = await supabaseClient.auth.signUp({ email, password });
     if (error) $("#authMsg").textContent = error.message;
-    else $("#authMsg").textContent = "Account created. Now sign in.";
+    else { $("#authMsg").textContent = "Account created. Now sign in."; toast("Account created"); }
   });
 
   $("#btnSignOut").addEventListener("click", async () => {
@@ -2549,6 +2552,8 @@ async function refreshAll(){
 async function boot(){
   try{
     initSupabase();
+    // Wire auth buttons immediately (Sign in / Create account)
+    try { wireAuthUI(); } catch (e) { console.error(e); }
   } catch (e){
     console.error(e);
     setSubhead("Config needed");
