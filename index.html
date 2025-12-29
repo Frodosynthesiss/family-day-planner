@@ -303,6 +303,81 @@ textarea{resize:vertical}
   h2{font-size:23px}
   .brand h1{font-size:17px}
 }
+
+/* --- Layout spacing + sidebar --- */
+.container{padding-bottom:140px !important;}
+.stack{display:flex;flex-direction:column;gap:14px;}
+.layout{display:block;}
+.sidebar{display:none;}
+@media (min-width: 980px){
+  .layout{display:grid;grid-template-columns: 1fr 320px;gap:16px;align-items:start;}
+  .sidebar{display:flex;flex-direction:column;gap:14px; position:sticky; top:18px;}
+}
+
+/* Mini calendar */
+.miniCal{
+  background:rgba(255,255,255,.78);
+  border:1px solid rgba(148,163,184,.35);
+  border-radius:22px;
+  box-shadow:0 18px 50px rgba(15,23,42,.10);
+  overflow:hidden;
+}
+.miniCalHead{
+  padding:12px 12px;
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  border-bottom:1px solid rgba(148,163,184,.25);
+  background:rgba(255,255,255,.60);
+}
+.miniCalHead b{letter-spacing:-.2px}
+.miniCalSub{font-size:12px;color:var(--muted2);font-weight:800}
+.miniCalGrid{
+  display:grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap:6px;
+  padding:12px;
+}
+.miniCalDow{
+  font-size:11px;
+  color:var(--muted2);
+  text-align:center;
+  font-weight:900;
+  opacity:.9;
+}
+.miniCalDay{
+  border:1px solid rgba(148,163,184,.25);
+  background:rgba(255,255,255,.72);
+  border-radius:12px;
+  padding:8px 0;
+  text-align:center;
+  font-weight:900;
+  color:var(--text);
+  cursor:pointer;
+  user-select:none;
+}
+.miniCalDay:hover{filter:brightness(.98)}
+.miniCalDay.mutedDay{opacity:.45}
+.miniCalDay.today{
+  border-color:rgba(79,70,229,.35);
+  background:rgba(79,70,229,.10);
+}
+.miniCalDay.selected{
+  outline:3px solid rgba(79,70,229,.22);
+}
+.miniCalDay.hasLog::after{
+  content:"";
+  display:block;
+  width:6px;height:6px;border-radius:999px;
+  margin:6px auto 0;
+  background:rgba(34,197,94,.85);
+}
+
+/* Ensure bottom nav never overlaps content */
+.tabs{height:auto;}
+/* Quiz modal padding so it doesn't collide with bottom tabs */
+.modalBack{padding-bottom: calc(16px + env(safe-area-inset-bottom) + 70px);}
+
 </style>
 </head>
 <body>

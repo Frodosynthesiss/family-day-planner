@@ -886,8 +886,7 @@ function viewEvening() {
   const plan = getPlan(tomorrow);
 
   const warning = plan ? bathWarningTextForTomorrow(plan) : null;
-
-  return `
+return wrapWithSidebar(`
     <div class="grid two">
       <section class="card">
         <h2>Evening</h2>
@@ -912,7 +911,7 @@ function viewEvening() {
         ${plan ? renderPlanSummary(plan) : `<div class="note">No plan saved yet. Tap <b>Prepare for the Day Ahead</b> to make one.</div>`}
       </section>
     </div>
-  `;
+  `, { focusIso: addDays(toISODate(nowLocal()), 1), selectedIso: state.ui?.selectedIso || addDays(toISODate(nowLocal()), 1) });
 }
 
 function viewToday() {
@@ -936,8 +935,7 @@ function viewToday() {
   const nap2Label = `${log.nap2Start || "—"} → ${log.nap2End || "—"}`;
 
   const bathDue = isBathDue();
-
-  return `
+return wrapWithSidebar(`
     <div class="grid two">
       <section class="card">
         <h2>Today</h2>
@@ -1045,15 +1043,14 @@ function viewToday() {
           `<div class="note">No tasks assigned for today yet. Go to <b>Tasks</b> to add something, then tap “Move to today”.</div>`}
       </section>
     </div>
-  `;
+  `, { focusIso: toISODate(nowLocal()), selectedIso: state.ui?.selectedIso || toISODate(nowLocal()) });
 }
 
 function viewTasks() {
   const today = toISODate(nowLocal());
   const open = state.tasks.filter(t => t.status !== "done");
   const done = state.tasks.filter(t => t.status === "done");
-
-  return `
+return wrapWithSidebar(`
     <div class="grid two">
       <section class="card">
         <h2>Tasks</h2>
@@ -1095,7 +1092,7 @@ function viewTasks() {
         <div class="note">Anything “moved to today” will show on the Today page.</div>
       </section>
     </div>
-  `;
+  `, { focusIso: toISODate(nowLocal()), selectedIso: state.ui?.selectedIso || toISODate(nowLocal()) });
 }
 
 function viewHistory() {
@@ -1107,7 +1104,7 @@ function viewHistory() {
     const n2 = (log?.nap2Start && log?.nap2End) ? `${log.nap2Start}→${log.nap2End}` : "—";
     const bath = log?.bathDone ? "Bath ✅" : "Bath —";
     const note = log?.overnightNotes ? ` • ${escapeHtml(log.overnightNotes)}` : "";
-    return `
+ return wrapWithSidebar(`
       <div class="item">
         <div class="left">
           <div class="title">${d}</div>
@@ -1117,33 +1114,7 @@ function viewHistory() {
           <button class="btn mini" data-openlog="${d}">Open</button>
         </div>
       </div>
-    `;
-  }).join("");
-
-  return `
-    <div class="grid two">
-      <section class="card">
-        <h2>History</h2>
-        <div class="note">This is the actual day log archive. Tap any day to view details.</div>
-        <div class="hr"></div>
-
-        ${dates.length ? `<div class="list">${items}</div>` : `<div class="note">No day logs saved yet. Save a log from the Today page.</div>`}
-      </section>
-
-      <section class="card">
-        <h2>Bath tracker</h2>
-        <div class="note">Rule: bath at least every 3 days. Mark it on the Today page.</div>
-        <div class="hr"></div>
-        <div class="kpi">
-          <div class="chip"><b>Last bath:</b> ${lastBathISODate() || "None yet"}</div>
-          <div class="chip"><b>Status:</b> ${isBathDue() ? "Due ⚠" : "OK ✅"}</div>
-        </div>
-
-        <div class="hr"></div>
-        <div class="note">If bath is due, the schedule will show “Bath (due today)”. Also note: bath cannot be scheduled if Julio is unavailable—plan intentionally on those evenings.</div>
-      </section>
-    </div>
-  `;
+    `, { focusIso: state.ui?.selectedIso || toISODate(nowLocal()), selectedIso: state.ui?.selectedIso || toISODate(nowLocal()) });
 }
 
 function viewSettings() {
@@ -1152,8 +1123,7 @@ function viewSettings() {
   const needsSetup = !cfg.supabaseUrl || !cfg.supabaseAnonKey;
   const signedIn = !!authSession;
   const hidOk = !!cfg.householdId;
-
-  return `
+return wrapWithSidebar(`
     <div class="grid two">
       <section class="card">
         <h2>Sync settings (Supabase)</h2>
@@ -1229,7 +1199,7 @@ function viewSettings() {
         <div class="note"><b>PWA tip:</b> If you ever see stale UI after an update, you can “Reset local cache” and also re-open the app. The service worker cache name is bumped with each zip.</div>
       </section>
     </div>
-  `;
+  `, { focusIso: toISODate(nowLocal()), selectedIso: state.ui?.selectedIso || toISODate(nowLocal()) });
 }
 
 /* ---------------------------
@@ -1357,6 +1327,79 @@ function renderPlanSummary(plan) {
     <div class="hr"></div>
     <div class="row">
       <button class="btn" id="btnEditTomorrowPlan">Edit tomorrow plan</button>
+    </div>
+  `;
+}
+
+
+/* ---------------------------
+   Sidebar Mini Calendar
+---------------------------- */
+function renderMiniCalendar(focusIso, selectedIso) {
+  const focus = isoToDate(focusIso || toISODate(nowLocal()));
+  const year = focus.getFullYear();
+  const month = focus.getMonth(); // 0-11
+  const first = new Date(year, month, 1);
+  const firstDow = first.getDay(); // 0 Sun
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+
+  // determine grid start (Sunday)
+  const start = new Date(year, month, 1 - firstDow);
+  const todayIso = toISODate(nowLocal());
+  const sel = selectedIso || todayIso;
+
+  const dows = ["S","M","T","W","T","F","S"];
+  let html = `
+    <div class="miniCal">
+      <div class="miniCalHead">
+        <div>
+          <b>${first.toLocaleString(undefined,{month:"long"})} ${year}</b>
+          <div class="miniCalSub">Selected: ${formatDateShort(sel)}</div>
+        </div>
+        <button class="btn btnGhost btnSmall" data-caljump="today">Today</button>
+      </div>
+      <div class="miniCalGrid">
+        ${dows.map(d=>`<div class="miniCalDow">${d}</div>`).join("")}
+  `;
+
+  // 6 weeks grid (42 cells)
+  for (let i = 0; i < 42; i++) {
+    const d = new Date(start);
+    d.setDate(start.getDate() + i);
+    const iso = toISODate(d);
+    const inMonth = (d.getMonth() === month);
+    const classes = [
+      "miniCalDay",
+      inMonth ? "" : "mutedDay",
+      iso === todayIso ? "today" : "",
+      iso === sel ? "selected" : "",
+      getLog(iso) ? "hasLog" : ""
+    ].filter(Boolean).join(" ");
+
+    html += `<div class="${classes}" data-caldate="${iso}">${d.getDate()}</div>`;
+  }
+
+  html += `
+      </div>
+    </div>
+  `;
+  return html;
+}
+
+function wrapWithSidebar(mainHtml, { focusIso, selectedIso } = {}) {
+  const todayIso = toISODate(nowLocal());
+  const focus = focusIso || todayIso;
+  const sel = selectedIso || state.ui?.selectedIso || todayIso;
+  if (!state.ui) state.ui = { selectedIso: sel };
+
+  return `
+    <div class="layout">
+      <div class="stack">
+        ${mainHtml}
+      </div>
+      <aside class="sidebar">
+        ${renderMiniCalendar(focus, sel)}
+      </aside>
     </div>
   `;
 }
@@ -1748,7 +1791,17 @@ function renderQuiz() {
 
   if (!stepper || !body || !hint || !nextBtn || !backBtn) return;
 
-  stepper.innerHTML = QUIZ_STEPS.map((s, i) => `<div class="step ${i===state.quiz.step ? "active":""}">${i+1}. ${escapeHtml(s.label)}</div>`).join("");
+  stepper.innerHTML = QUIZ_STEPS.map((s, i) => `<button class="stepBtn ${i===state.quiz.step ? "active":""}" data-qstep="${i}" type="button">${i+1}. ${escapeHtml(s.label)}</button>`).join("");
+
+  // stepper navigation
+  stepper.querySelectorAll("[data-qstep]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const n = Number(btn.getAttribute("data-qstep"));
+      if (!Number.isFinite(n)) return;
+      state.quiz.step = Math.max(0, Math.min(QUIZ_STEPS.length - 1, n));
+      renderQuiz();
+    });
+  });
 
   hint.textContent = `Step ${state.quiz.step + 1} of ${QUIZ_STEPS.length}`;
   backBtn.style.visibility = (state.quiz.step === 0) ? "hidden" : "visible";
