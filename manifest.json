@@ -4,13 +4,18 @@
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
-  "background_color": "#0b1220",
-  "theme_color": "#1f6feb",
+  "background_color": "#F3F1EA",
+  "theme_color": "#F3F1EA",
   "icons": [
     {
-      "src": "data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%20128%20128'%3E%20%20%3Cdefs%3E%20%20%20%20%3ClinearGradient%20id='g'%20x1='0'%20y1='0'%20x2='1'%20y2='1'%3E%20%20%20%20%20%20%3Cstop%20stop-color='%236ee7ff'/%3E%20%20%20%20%20%20%3Cstop%20offset='1'%20stop-color='%23a78bfa'/%3E%20%20%20%20%3C/linearGradient%3E%20%20%3C/defs%3E%20%20%3Crect%20width='128'%20height='128'%20rx='28'%20fill='url(%23g)'/%3E%20%20%3Cpath%20d='M38%2088V46a12%2012%200%200%201%2012-12h28a12%2012%200%200%201%2012%2012v42'%20stroke='%230b1220'%20stroke-width='8'%20fill='none'%20stroke-linecap='round'/%3E%20%20%3Cpath%20d='M46%2088V72m36%2016V72'%20stroke='%230b1220'%20stroke-width='8'%20stroke-linecap='round'/%3E%20%20%3Ccircle%20cx='56'%20cy='56'%20r='5'%20fill='%230b1220'/%3E%20%20%3Ccircle%20cx='72'%20cy='56'%20r='5'%20fill='%230b1220'/%3E%3C/svg%3E",
-      "sizes": "128x128",
-      "type": "image/svg+xml"
+      "src": "./icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "./icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
     }
   ]
 }

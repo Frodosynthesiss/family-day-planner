@@ -1,52 +1,43 @@
-/* Family Day Planner service worker */
-const CACHE_NAME = "fdp-cache-v2025-12-26-9";
+// Bump CACHE when you deploy updates.
+const CACHE = 'family-day-planner-v1.0.0';
 const ASSETS = [
-  "./",
-  "./index.html",
-  "./app.js",
-  "./manifest.json",
+  './',
+  './index.html',
+  './app.js',
+  './manifest.json',
+  './icons/icon-192.png',
+  './icons/icon-512.png',
 ];
 
-self.addEventListener("install", (event) => {
+self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(ASSETS))
+    caches.open(CACHE).then((cache) => cache.addAll(ASSETS))
   );
   self.skipWaiting();
 });
 
-self.addEventListener("activate", (event) => {
-  event.waitUntil((async () => {
-    const keys = await caches.keys();
-    await Promise.all(keys.map(k => (k !== CACHE_NAME) ? caches.delete(k) : Promise.resolve()));
-    await self.clients.claim();
-  })());
+self.addEventListener('activate', (event) => {
+  event.waitUntil(
+    caches.keys().then(keys => Promise.all(keys.map(k => (k === CACHE ? null : caches.delete(k)))))
+  );
+  self.clients.claim();
 });
 
-self.addEventListener("fetch", (event) => {
+self.addEventListener('fetch', (event) => {
   const req = event.request;
-  if (req.method !== "GET") return;
+  // Always go network-first for Supabase/API calls; cache-first for local assets.
+  const url = new URL(req.url);
+  const isSameOrigin = url.origin === self.location.origin;
+  if (!isSameOrigin) return;
 
-  event.respondWith((async () => {
-    const url = new URL(req.url);
-
-    // Only handle same-origin; let Supabase/CDNs go to network.
-    if (url.origin !== self.location.origin) {
-      return fetch(req);
-    }
-
-    const cache = await caches.open(CACHE_NAME);
-    const cached = await cache.match(req, { ignoreSearch: true });
-    if (cached) return cached;
-
-    try {
-      const fresh = await fetch(req);
-      if (fresh && fresh.ok) {
-        cache.put(req, fresh.clone());
-      }
-      return fresh;
-    } catch (e) {
-      const shell = await cache.match("./index.html");
-      return shell || new Response("Offline", { status: 503, statusText: "Offline" });
-    }
-  })());
+  event.respondWith(
+    caches.match(req).then((cached) => {
+      if (cached) return cached;
+      return fetch(req).then((res) => {
+        const copy = res.clone();
+        caches.open(CACHE).then((cache) => cache.put(req, copy));
+        return res;
+      }).catch(() => cached);
+    })
+  );
 });
