@@ -87,6 +87,14 @@ function nowHHMM(){
 
 function deepCopy(obj){ return JSON.parse(JSON.stringify(obj)); }
 
+function withTimeout(promise, ms, label="Request"){
+  let t;
+  const timeout = new Promise((_, reject) => {
+    t = setTimeout(() => reject(new Error(label + " timed out")), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(t));
+}
+
 function debounce(fn, ms){
   let t = null;
   return (...args) => {
@@ -341,29 +349,51 @@ function readTimePicker(idPrefix){
    Data loading
    ========================= */
 async function loadHouseholdContext(){
-  const { data: { user } } = await supabaseClient.auth.getUser();
-  App.user = user;
+  // Fast local check first (does not require network)
+  const { data: { session } } = await supabaseClient.auth.getSession();
+  const sessionUser = session?.user || null;
+  App.user = sessionUser;
 
+  // If not signed in, don't block on any network call
+  if (!sessionUser){
+    App.householdId = null;
+    App.householdRole = null;
+    return;
+  }
+
+  // Confirm auth with a short timeout (prevents endless “Loading…” if offline)
+  try{
+    const { data: { user } } = await withTimeout(supabaseClient.auth.getUser(), 5000, "Auth check");
+    App.user = user || sessionUser;
+  } catch (e){
+    console.warn(e);
+    // keep sessionUser; app still works with cached/local data
+    toast("Can’t reach Supabase right now. Working offline.");
+  }
+
+  const user = App.user;
   if (!user) return;
 
-  const { data: memberships, error } = await supabaseClient
-    .from("household_members")
-    .select("household_id, role")
-    .eq("user_id", user.id)
-    .limit(1);
+  const { data: memberships, error } = await withTimeout(
+    supabaseClient
+      .from("household_members")
+      .select("household_id, role")
+      .eq("user_id", user.id)
+      .limit(1),
+    7000,
+    "Membership lookup"
+  );
 
   if (error){
     console.error(error);
     toast("Couldn’t load household membership.");
     return;
   }
-
   if (!memberships || memberships.length === 0){
     App.householdId = null;
     App.householdRole = null;
     return;
   }
-
   App.householdId = memberships[0].household_id;
   App.householdRole = memberships[0].role || "member";
 }
@@ -2522,39 +2552,44 @@ async function boot(){
   } catch (e){
     console.error(e);
     setSubhead("Config needed");
-    $("#view").innerHTML = `<div class="card"><div class="hd"><div><h2>Config needed</h2><p>Please verify CONFIG.supabaseUrl and CONFIG.supabaseKey in app.js, and that the Supabase script loaded (window.supabase).</p></div></div></div>`;
+    $("#view").innerHTML = `<div class="card"><div class="h3">Config needed</div><p class="muted">Please verify CONFIG.supabaseUrl and CONFIG.supabaseKey in app.js, and that the Supabase script loaded (window.supabase).</p></div>`;
     return;
   }
 
-  wireAuthUI();
-  wireModals();
-  renderTabs();
+  // Global error surface to avoid silent “Loading…”
+  window.addEventListener("error", (ev) => {
+    console.error(ev.error || ev.message);
+    toast("Error: " + (ev.error?.message || ev.message || "Unknown"));
+  });
+  window.addEventListener("unhandledrejection", (ev) => {
+    console.error(ev.reason);
+    toast("Error: " + (ev.reason?.message || String(ev.reason)));
+  });
 
-  // Auth state changes
+  // Realtime refresh on auth change
   supabaseClient.auth.onAuthStateChange(async (_event, session) => {
     App.user = session?.user || null;
-
-    if (!App.user){
-      App.householdId = null;
-      clearRealtime();
-      showAuth(true);
-      $("#pillUser").textContent = "Signed out";
-      setSubhead("Sign in");
-      $("#view").innerHTML = "";
-      return;
-    }
-
-    $("#pillUser").textContent = App.user.email || "Signed in";
-    showAuth(false);
+    $("#pillUser").textContent = App.user?.email || "Signed out";
+    showAuth(!App.user);
     await refreshAll();
   });
 
-  // Initial
+  // Initial session (instant)
   const { data: { session } } = await supabaseClient.auth.getSession();
   App.user = session?.user || null;
   $("#pillUser").textContent = App.user?.email || "Signed out";
   showAuth(!App.user);
-  await refreshAll();
+
+  // Don't let refreshAll hang forever
+  try{
+    await withTimeout(refreshAll(), 8000, "Initial load");
+  } catch (e){
+    console.warn(e);
+    toast("Still loading… (network slow?)");
+    // Render anyway with whatever we have
+    renderTabs();
+    render();
+  }
 }
 
 // Start
