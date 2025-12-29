@@ -58,12 +58,6 @@ function toISODate(d) {
   const day = pad2(d.getDate());
   return `${y}-${m}-${day}`;
 }
-function formatDateShort(isoDate) {
-  const [y, m, d] = String(isoDate || "").split("-");
-  if (!y || !m || !d) return String(isoDate || "");
-  return `${m}/${d}/${y.slice(2)}`;
-}
-
 function addDays(isoDate, days) {
   const d = new Date(isoDate + "T12:00:00");
   d.setDate(d.getDate() + days);
@@ -78,46 +72,6 @@ function minutesToHHMM(mins) {
   const m = ((mins % 1440) + 1440) % 1440;
   return `${pad2(Math.floor(m / 60))}:${pad2(m % 60)}`;
 }
-function formatTime12FromHHMM(hhmm) {
-  const parts = String(hhmm || "00:00").split(":");
-  const H = Number(parts[0] || 0);
-  const M = Number(parts[1] || 0);
-  const ampm = (H >= 12) ? "PM" : "AM";
-  const h12 = ((H + 11) % 12) + 1;
-  return `${h12}:${String(M).padStart(2,"0")} ${ampm}`;
-}
-function formatTime12FromMinutes(mins) {
-  return formatTime12FromHHMM(minutesToHHMM(mins));
-}
-function formatRange12(startMin, endMin) {
-  return `${formatTime12FromMinutes(startMin)}–${formatTime12FromMinutes(endMin)}`;
-}
-
-
-function formatShortDate(isoDate) {
-  // isoDate: YYYY-MM-DD -> MM/DD/YY
-  if (!isoDate || typeof isoDate !== "string" || isoDate.length < 10) return String(isoDate || "");
-  const mm = isoDate.slice(5,7);
-  const dd = isoDate.slice(8,10);
-  const yy = isoDate.slice(2,4);
-  return `${mm}/${dd}/${yy}`;
-}
-function minutesToClock12(mins) {
-  const m = ((mins % 1440) + 1440) % 1440;
-  let h = Math.floor(m / 60);
-  const mi = m % 60;
-  const ampm = h >= 12 ? "PM" : "AM";
-  h = h % 12;
-  if (h === 0) h = 12;
-  return `${h}:${pad2(mi)} ${ampm}`;
-}
-function hhmmToClock12(hhmm) {
-  const v = valueHHMM(hhmm);
-  if (!v) return "—";
-  const [h, m] = v.split(":").map(Number);
-  return minutesToClock12(h*60 + m);
-}
-
 function clamp(n, min, max) { return Math.max(min, Math.min(max, n)); }
 function uid() { return crypto.randomUUID(); }
 
@@ -559,7 +513,7 @@ async function signOut() {
 // Times are minutes since midnight.
 
 function normalizeBlocks(blocks) {
-  // blocks: [{start:"h:mm AM/PM", end:"h:mm AM/PM"}]
+  // blocks: [{start:"HH:MM", end:"HH:MM"}]
   const out = [];
   (blocks || []).forEach(b => {
     const s = parseTimeToMinutes(b.start);
@@ -945,8 +899,8 @@ function viewEvening() {
           <button class="btn" id="btnExportTomorrowICS">Sync tomorrow to Google Calendar</button>
         </div>
         <div class="kpi">
-          <div class="chip"><b>Tomorrow:</b> ${formatShortDate(tomorrow)}</div>
-          <div class="chip"><b>Expected wake:</b> ${hhmmToClock12(loadConfig().expectedWake)}</div>
+          <div class="chip"><b>Tomorrow:</b> ${tomorrow}</div>
+          <div class="chip"><b>Expected wake:</b> ${loadConfig().expectedWake}</div>
         </div>
         ${warning ? `<div class="hr"></div><div class="badge warn">⚠ ${escapeHtml(warning)}</div>` : ""}
         <div class="hr"></div>
@@ -991,7 +945,7 @@ function viewToday() {
         <div class="hr"></div>
 
         <div class="row" style="justify-content: space-between;">
-          <div class="tiny"><b>Date:</b> ${formatShortDate(today)}</div>
+          <div class="tiny"><b>Date:</b> ${today}</div>
           ${bathDue ? `<span class="badge warn">⚠ Bath is due</span>` : `<span class="badge good">Bath OK</span>`}
         </div>
 
@@ -1005,8 +959,8 @@ function viewToday() {
             </div>
           </div>
           <div class="field">
-            <label>Or type it (e.g., 6:30 AM)</label>
-            <input inputmode="numeric" placeholder="6:45 AM" id="wakeInput" value="${log.wakeTime || ""}">
+            <label>Or type it (HH:MM)</label>
+            <input inputmode="numeric" placeholder="06:45" id="wakeInput" value="${log.wakeTime || ""}">
           </div>
 
           <div class="hr"></div>
@@ -1020,11 +974,11 @@ function viewToday() {
           <div class="split">
             <div class="field">
               <label>Nap 1 start</label>
-              <input inputmode="numeric" placeholder="9:50 AM" id="nap1StartInput" value="${log.nap1Start || ""}">
+              <input inputmode="numeric" placeholder="09:50" id="nap1StartInput" value="${log.nap1Start || ""}">
             </div>
             <div class="field">
               <label>Nap 1 end</label>
-              <input inputmode="numeric" placeholder="11:05 AM" id="nap1EndInput" value="${log.nap1End || ""}">
+              <input inputmode="numeric" placeholder="11:05" id="nap1EndInput" value="${log.nap1End || ""}">
             </div>
           </div>
 
@@ -1039,11 +993,11 @@ function viewToday() {
           <div class="split">
             <div class="field">
               <label>Nap 2 start</label>
-              <input inputmode="numeric" placeholder="3:00 PM" id="nap2StartInput" value="${log.nap2Start || ""}">
+              <input inputmode="numeric" placeholder="15:00" id="nap2StartInput" value="${log.nap2Start || ""}">
             </div>
             <div class="field">
               <label>Nap 2 end</label>
-              <input inputmode="numeric" placeholder="4:15 PM" id="nap2EndInput" value="${log.nap2End || ""}">
+              <input inputmode="numeric" placeholder="16:15" id="nap2EndInput" value="${log.nap2End || ""}">
             </div>
           </div>
 
@@ -1058,7 +1012,7 @@ function viewToday() {
           <div class="split">
             <div class="field">
               <label>Bedtime time</label>
-              <input inputmode="numeric" placeholder="7:50 PM" id="bedtimeInput" value="${log.bedtimeTime || ""}">
+              <input inputmode="numeric" placeholder="19:50" id="bedtimeInput" value="${log.bedtimeTime || ""}">
             </div>
             <div class="field">
               <label>Overnight notes</label>
@@ -1137,7 +1091,7 @@ function viewTasks() {
         </div>
 
         <div class="hr"></div>
-        <div class="note"><b>Today:</b> ${formatShortDate(today)}</div>
+        <div class="note"><b>Today:</b> ${today}</div>
         <div class="note">Anything “moved to today” will show on the Today page.</div>
       </section>
     </div>
@@ -1146,50 +1100,49 @@ function viewTasks() {
 
 function viewHistory() {
   const dates = Object.keys(state.logsByDate || {}).sort().reverse();
-
   const items = dates.map(d => {
     const log = state.logsByDate[d];
-    const w = log?.wakeTime ? hhmmToClock12(log.wakeTime) : "—";
-    const n1 = (log?.nap1Start && log?.nap1End) ? `${hhmmToClock12(log.nap1Start)} → ${hhmmToClock12(log.nap1End)}` : "—";
-    const n2 = (log?.nap2Start && log?.nap2End) ? `${hhmmToClock12(log.nap2Start)} → ${hhmmToClock12(log.nap2End)}` : "—";
+    const w = log?.wakeTime || "—";
+    const n1 = (log?.nap1Start && log?.nap1End) ? `${log.nap1Start}→${log.nap1End}` : "—";
+    const n2 = (log?.nap2Start && log?.nap2End) ? `${log.nap2Start}→${log.nap2End}` : "—";
     const bath = log?.bathDone ? "Bath ✅" : "Bath —";
     const note = log?.overnightNotes ? ` • ${escapeHtml(log.overnightNotes)}` : "";
-
     return `
       <div class="item">
         <div class="left">
-          <div class="title">${formatShortDate(d)}</div>
+          <div class="title">${d}</div>
           <div class="sub">Wake ${w} • Nap1 ${n1} • Nap2 ${n2} • ${bath}${note}</div>
         </div>
         <div class="actions">
-          <button class="btn btnGhost" data-openlog="${escapeHtml(d)}">View</button>
+          <button class="btn mini" data-openlog="${d}">Open</button>
         </div>
       </div>
     `;
   }).join("");
 
-  const lastBath = lastBathISODate();
-  const bathDue = isBathDue();
-
   return `
-    <section class="card">
-      <h2>History</h2>
-      <div class="note">This is the actual day log archive. Tap any day to view details.</div>
-      <div class="hr"></div>
+    <div class="grid two">
+      <section class="card">
+        <h2>History</h2>
+        <div class="note">This is the actual day log archive. Tap any day to view details.</div>
+        <div class="hr"></div>
 
-      ${dates.length ? `<div class="list">${items}</div>` : `<div class="note">No day logs saved yet. Save a log from the Today page.</div>`}
-    </section>
+        ${dates.length ? `<div class="list">${items}</div>` : `<div class="note">No day logs saved yet. Save a log from the Today page.</div>`}
+      </section>
 
-    <section class="card">
-      <h2>Bath tracker</h2>
-      <div class="note">Rule: bath at least every 3 days. Mark it on the Today page.</div>
-      <div class="hr"></div>
+      <section class="card">
+        <h2>Bath tracker</h2>
+        <div class="note">Rule: bath at least every 3 days. Mark it on the Today page.</div>
+        <div class="hr"></div>
+        <div class="kpi">
+          <div class="chip"><b>Last bath:</b> ${lastBathISODate() || "None yet"}</div>
+          <div class="chip"><b>Status:</b> ${isBathDue() ? "Due ⚠" : "OK ✅"}</div>
+        </div>
 
-      <div class="kpi">
-        <div class="chip"><b>Last bath:</b> ${lastBath ? formatShortDate(lastBath) : "None yet"}</div>
-        <div class="chip"><b>Status:</b> ${bathDue ? `<span class="badge warn">⚠ Bath is due</span>` : `<span class="badge good">✅ Not due</span>`}</div>
-      </div>
-    </section>
+        <div class="hr"></div>
+        <div class="note">If bath is due, the schedule will show “Bath (due today)”. Also note: bath cannot be scheduled if Julio is unavailable—plan intentionally on those evenings.</div>
+      </section>
+    </div>
   `;
 }
 
@@ -1258,8 +1211,8 @@ function viewSettings() {
         <h2 style="margin-top:0">Planner defaults</h2>
 
         <div class="field">
-          <label>Expected wake time for forecasts (e.g., 6:30 AM)</label>
-          <input id="expectedWake" inputmode="numeric" placeholder="6:30 AM" value="${escapeAttr(formatTime12FromHHMM(cfg.expectedWake || DEFAULTS.expectedWake))}" />
+          <label>Expected wake time for forecasts (HH:MM)</label>
+          <input id="expectedWake" inputmode="numeric" placeholder="06:30" value="${escapeAttr(cfg.expectedWake)}" />
         </div>
         <div class="field">
           <label>Default nap duration (minutes)</label>
@@ -1282,89 +1235,62 @@ function viewSettings() {
 /* ---------------------------
    Timeline rendering
 ---------------------------- */
-function renderTimeline(arg) {
-  // Calendar-like timeline (Google/Outlook style)
-  const blocks = (arg && arg.blocks) ? arg.blocks : (Array.isArray(arg) ? arg : []);
-  const opts = (arg && arg.opts) ? arg.opts : {};
-  const pxPerMin = Number(opts.pxPerMin || 1.6); // higher detail
-  const padStartMin = 30;
-  const padEndMin = 30;
+function renderTimeline(blocks) {
+  // 2-hour grid from 6:00 to 22:00 by default, but expand if needed.
+  const minStart = Math.min(...blocks.map(b=>b.startMin), 6*60);
+  const maxEnd = Math.max(...blocks.map(b=>b.endMin), 22*60);
+  const startGrid = Math.floor(minStart / 120) * 120;
+  const endGrid = Math.ceil(maxEnd / 120) * 120;
 
-  let minStart = 6*60, maxEnd = 20*60;
-  if (blocks && blocks.length) {
-    minStart = Math.min(...blocks.map(b => b.startMin));
-    maxEnd = Math.max(...blocks.map(b => b.endMin));
-    minStart = Math.floor((minStart - padStartMin) / 30) * 30;
-    maxEnd = Math.ceil((maxEnd + padEndMin) / 30) * 30;
-    minStart = Math.max(0, minStart);
-    maxEnd = Math.min(24*60, maxEnd);
-  }
-  const totalMins = Math.max(60, maxEnd - minStart);
-  const height = Math.round(totalMins * pxPerMin);
-
-  // Lane assignment (no overlap stacking)
-  const sorted = [...(blocks || [])].sort((a,b)=> (a.startMin-b.startMin) || (a.endMin-b.endMin));
-  const lanes = [];
-  const placed = sorted.map(b => {
-    let lane = 0;
-    while (lane < lanes.length && lanes[lane] > b.startMin) lane++;
-    if (lane === lanes.length) lanes.push(b.endMin);
-    else lanes[lane] = b.endMin;
-    return Object.assign({}, b, { _lane: lane });
-  });
-  const laneCount = Math.max(1, lanes.length);
-  const gap = 6;
-
-  // Time labels every 30 minutes, text on hour only
-  let labelsHtml = "";
-  for (let t = minStart; t <= maxEnd; t += 30) {
-    const show = (t % 60 === 0);
-    labelsHtml += `<div class="timeLabel" style="height:${Math.round(30*pxPerMin)}px">${show ? formatTime12FromMinutes(t) : ""}</div>`;
+  const totalMinutes = endGrid - startGrid;
+  const rows = [];
+  for (let t = startGrid; t < endGrid; t += 120) {
+    rows.push({ label: minutesToHHMM(t), startMin: t, endMin: t + 120 });
   }
 
-  // Grid lines
-  let linesHtml = "";
-  for (let t = minStart; t <= maxEnd; t += 30) {
-    const y = Math.round((t - minStart) * pxPerMin);
-    const major = (t % 60 === 0) ? "major" : "";
-    linesHtml += `<div class="hLine ${major}" style="top:${y}px"></div>`;
-  }
+  const heightPx = 560;
+  const pxPerMin = heightPx / totalMinutes;
 
-  // Events
-  const colW = 100 / laneCount;
-  let eventsHtml = "";
-  for (const b of placed) {
-    const top = Math.round((b.startMin - minStart) * pxPerMin);
-    const h = Math.max(22, Math.round((b.endMin - b.startMin) * pxPerMin));
-    const leftPct = b._lane * colW;
-    const widthPct = colW;
+  const gridHtml = rows.map((r, i) => `
+    <div class="gridRow" style="height:${Math.round((r.endMin-r.startMin)*pxPerMin)}px">
+      <div class="tlabel">${r.label}</div>
+    </div>
+  `).join("");
 
-    const range = formatRange12(b.startMin, b.endMin);
-    const kind = (b.meta && b.meta.kind) ? b.meta.kind : "";
-    let cls = "event";
-    if (kind === "uncovered") cls += " danger";
-    if (kind === "bath" && b.meta && b.meta.due) cls += " warn";
+  const blockHtml = blocks.map(b => {
+    const top = Math.round((b.startMin - startGrid) * pxPerMin) + 10;
+    const h = Math.max(34, Math.round((b.endMin - b.startMin) * pxPerMin) - 6);
 
-    eventsHtml += `
-      <div class="${cls}" style="top:${top}px;height:${h}px;left:calc(${leftPct}% + ${gap}px);width:calc(${widthPct}% - ${gap*2}px)">
-        <div class="t">${escapeHtml(b.title)}</div>
-        <div class="s">${range}</div>
-      </div>`;
-  }
+    const meta = [];
+    meta.push(`${minutesToHHMM(b.startMin)}–${minutesToHHMM(b.endMin)}`);
 
-  return `
-    <div class="timelineWrap">
-      <div class="timelineHeader">
-        <div><b>Timeline</b> <span class="muted">(12‑hour clock)</span></div>
-        <div class="muted">${formatTime12FromMinutes(minStart)}–${formatTime12FromMinutes(maxEnd)}</div>
-      </div>
-      <div class="timelineGrid" style="height:${height}px">
-        <div class="timeCol">${labelsHtml}</div>
-        <div class="canvas" style="height:${height}px">
-          ${linesHtml}
-          ${eventsHtml}
+    let badges = "";
+    if (b.meta?.kind === "nap") {
+      const c = b.meta.caregiver || { who:"—", status:"warn" };
+      const cls = c.status === "ok" ? "good" : (c.status === "bad" ? "bad" : "warn");
+      badges += ` <span class="badge ${cls}">🛌 ${escapeHtml(c.who)}</span>`;
+      if (b.meta.conflict) badges += ` <span class="badge warn">⚠ ${escapeHtml(b.meta.conflict)}</span>`;
+      if (b.meta.adjustedForAppt) badges += ` <span class="badge warn">↔ Adjusted</span>`;
+    }
+    if (b.meta?.kind === "bath") badges += ` <span class="badge warn">🛁 Due</span>`;
+    if (b.meta?.kind === "appointment") badges += ` <span class="badge good">📍 Appointment</span>`;
+    if (b.meta?.kind === "bedtime") badges += ` <span class="badge">🌙 ${escapeHtml(b.meta.bedtimeBy || "")}</span>`;
+
+    return `
+      <div class="block" style="top:${top}px; height:${h}px">
+        <div class="title">${escapeHtml(b.title)}</div>
+        <div class="meta">
+          <span>${meta.join(" • ")}</span>
+          ${badges}
         </div>
       </div>
+    `;
+  }).join("");
+
+  return `
+    <div class="timelineWrap" aria-label="Timeline schedule">
+      <div class="timelineGrid">${gridHtml}</div>
+      <div class="blocks">${blockHtml}</div>
     </div>
   `;
 }
@@ -1410,7 +1336,7 @@ function renderTaskRow(t, { context, today }) {
 ---------------------------- */
 function renderPlanSummary(plan) {
   const blocks = (label, arr) => {
-    const b = normalizeBlocks(arr || []).map(x => `${formatTime12FromMinutes(x.startMin)}–${formatTime12FromMinutes(x.endMin)}`);
+    const b = normalizeBlocks(arr || []).map(x => `${minutesToHHMM(x.startMin)}–${minutesToHHMM(x.endMin)}`);
     return b.length ? `<div class="note"><b>${escapeHtml(label)}:</b> ${b.join(", ")}</div>` : `<div class="note"><b>${escapeHtml(label)}:</b> None</div>`;
   };
   const appts = (plan.appointments || []).length ? `
@@ -1582,40 +1508,12 @@ function getTodayDraftLog() {
 }
 
 function valueHHMM(v) {
-  // Accepts:
-  // - "h:mm AM/PM" (24h)
-  // - "h:mm AM/PM" or "h AM/PM" (12h)
-  const raw = (v || "").trim();
-  if (!raw) return null;
-
-  // 12-hour with minutes: 1:05 PM
-  let m = raw.match(/^\s*(\d{1,2})\s*:\s*(\d{2})\s*(am|pm)\s*$/i);
-  if (m) {
-    let h = Number(m[1]);
-    const min = Number(m[2]);
-    const ap = String(m[3]).toLowerCase();
-    if (h < 1 || h > 12 || min < 0 || min > 59) return null;
-    if (ap === "pm" && h !== 12) h += 12;
-    if (ap === "am" && h === 12) h = 0;
-    return `${pad2(h)}:${pad2(min)}`;
-  }
-
-  // 12-hour without minutes: 1 PM
-  m = raw.match(/^\s*(\d{1,2})\s*(am|pm)\s*$/i);
-  if (m) {
-    let h = Number(m[1]);
-    const ap = String(m[2]).toLowerCase();
-    if (h < 1 || h > 12) return null;
-    if (ap === "pm" && h !== 12) h += 12;
-    if (ap === "am" && h === 12) h = 0;
-    return `${pad2(h)}:00`;
-  }
-
-  // 24-hour h:mm AM/PM
-  if (!/^\d{1,2}:\d{2}$/.test(raw)) return null;
-  const [h, min] = raw.split(":").map(Number);
-  if (h < 0 || h > 23 || min < 0 || min > 59) return null;
-  return `${pad2(h)}:${pad2(min)}`;
+  const s = (v || "").trim();
+  if (!s) return null;
+  if (!/^\d{1,2}:\d{2}$/.test(s)) return null;
+  const [h, m] = s.split(":").map(Number);
+  if (h < 0 || h > 23 || m < 0 || m > 59) return null;
+  return `${pad2(h)}:${pad2(m)}`;
 }
 
 async function saveTodayLog() {
@@ -1820,35 +1718,24 @@ function wireQuizModal() {
 
   const backBtn = $("#quizBackBtn");
   if (backBtn) backBtn.addEventListener("click", () => {
-    readQuizStepIntoDraft();
     state.quiz.step = Math.max(0, state.quiz.step - 1);
     renderQuiz();
   });
 
   const nextBtn = $("#quizNextBtn");
   if (nextBtn) nextBtn.addEventListener("click", async () => {
-    if (state.quiz._busy) return;
-    state.quiz._busy = true;
-    nextBtn.disabled = true;
+    // Validate/save step data into draft
+    const ok = readQuizStepIntoDraft();
+    if (!ok) return;
 
-    try {
-      // Save current step inputs into draft
-      const ok = readQuizStepIntoDraft();
-      if (!ok) return;
-
-      // Move forward until the final step
-      if (state.quiz.step < QUIZ_STEPS.length - 1) {
-        state.quiz.step += 1;
-        renderQuiz();
-        return;
-      }
-
-      // Final step: save plan
-      await saveTomorrowPlanFromDraft();
-    } finally {
-      state.quiz._busy = false;
-      nextBtn.disabled = false;
+    if (state.quiz.step < QUIZ_STEPS.length - 1) {
+      state.quiz.step += 1;
+      renderQuiz();
+      return;
     }
+
+    // Save plan
+    await saveTomorrowPlanFromDraft();
   });
 }
 
@@ -1861,10 +1748,7 @@ function renderQuiz() {
 
   if (!stepper || !body || !hint || !nextBtn || !backBtn) return;
 
-  stepper.innerHTML = QUIZ_STEPS.map((s, i) => {
-    const cls = (i === state.quiz.step) ? "step active" : "step";
-    return `<button class="${cls}" type="button" data-quiz-step="${i}">${i+1}. ${escapeHtml(s.label)}</button>`;
-  }).join("");
+  stepper.innerHTML = QUIZ_STEPS.map((s, i) => `<div class="step ${i===state.quiz.step ? "active":""}">${i+1}. ${escapeHtml(s.label)}</div>`).join("");
 
   hint.textContent = `Step ${state.quiz.step + 1} of ${QUIZ_STEPS.length}`;
   backBtn.style.visibility = (state.quiz.step === 0) ? "hidden" : "visible";
@@ -1875,25 +1759,6 @@ function renderQuiz() {
 
   // Attach dynamic handlers inside step
   wireQuizStepHandlers(stepKey);
-
-  // Make steps clickable (so editing is easy)
-  $all("[data-quiz-step]").forEach(btn => {
-    btn.addEventListener("click", () => {
-      // Save current step inputs before jumping
-      readQuizStepIntoDraft();
-      const i = Number(btn.getAttribute("data-quiz-step"));
-      if (!Number.isFinite(i)) return;
-      state.quiz.step = clamp(i, 0, QUIZ_STEPS.length - 1);
-      renderQuiz();
-    });
-  });
-
-  // Autosave inputs on this step (prevents losing edits when adding/removing blocks)
-  $all("#quizBody input, #quizBody textarea, #quizBody select").forEach(el => {
-    el.addEventListener("input", () => readQuizStepIntoDraft());
-    el.addEventListener("change", () => readQuizStepIntoDraft());
-  });
-
 }
 
 function quizStepView(stepKey) {
@@ -1928,7 +1793,7 @@ function quizStepView(stepKey) {
       ` : `<div class="note">No open tasks to clean up right now.</div>`}
 
       <div class="hr"></div>
-      <div class="note">Tomorrow we’re planning for: <b>${formatShortDate(tomorrow)}</b></div>
+      <div class="note">Tomorrow we’re planning for: <b>${tomorrow}</b></div>
     `;
   }
 
@@ -2043,11 +1908,11 @@ function quizStepView(stepKey) {
                   </div>
                   <div class="field" style="margin:0">
                     <label>Start</label>
-                    <input data-appt-start="${a.id}" inputmode="numeric" value="${escapeAttr(a.start||"")}" placeholder="10:30 AM" />
+                    <input data-appt-start="${a.id}" inputmode="numeric" value="${escapeAttr(a.start||"")}" placeholder="10:30" />
                   </div>
                   <div class="field" style="margin:0">
                     <label>End</label>
-                    <input data-appt-end="${a.id}" inputmode="numeric" value="${escapeAttr(a.end||"")}" placeholder="11:15 AM" />
+                    <input data-appt-end="${a.id}" inputmode="numeric" value="${escapeAttr(a.end||"")}" placeholder="11:15" />
                   </div>
                 </div>
               </div>
@@ -2058,7 +1923,7 @@ function quizStepView(stepKey) {
           `).join("")}
         </div>
       ` : `<div class="note">No appointments added.</div>`}
-      <div class="note" style="margin-top:10px;">Format: <b>h:mm AM/PM</b> (24-hour time). Example: 14:05.</div>
+      <div class="note" style="margin-top:10px;">Format: <b>HH:MM</b> (24-hour time). Example: 14:05.</div>
     `;
   }
 
@@ -2069,7 +1934,7 @@ function quizStepView(stepKey) {
     const tasksChosen = (draft.tasksChosen || []).map(id => state.tasks.find(t => t.id === id)).filter(Boolean);
 
     return `
-      <div class="note">Here’s the forecast schedule for <b>${formatShortDate(tomorrow)}</b>, anchored on the default wake time <b>${hhmmToClock12(loadConfig().expectedWake)}</b>.</div>
+      <div class="note">Here’s the forecast schedule for <b>${tomorrow}</b>, anchored on the default wake time <b>${loadConfig().expectedWake}</b>.</div>
       ${warning ? `<div class="hr"></div><div class="badge warn">⚠ ${escapeHtml(warning)}</div>` : ""}
       <div class="hr"></div>
 
@@ -2103,11 +1968,11 @@ function timeBlockEditor(fieldKey, blocks, { disabled } = {}) {
         <div class="split">
           <div class="field" style="margin:0">
             <label>Start</label>
-            <input ${disabled ? "disabled":""} data-block-start="${fieldKey}:${idx}" inputmode="numeric" value="${escapeAttr(b.start||"")}" placeholder="9:00 AM" />
+            <input ${disabled ? "disabled":""} data-block-start="${fieldKey}:${idx}" inputmode="numeric" value="${escapeAttr(b.start||"")}" placeholder="09:00" />
           </div>
           <div class="field" style="margin:0">
             <label>End</label>
-            <input ${disabled ? "disabled":""} data-block-end="${fieldKey}:${idx}" inputmode="numeric" value="${escapeAttr(b.end||"")}" placeholder="11:30 AM" />
+            <input ${disabled ? "disabled":""} data-block-end="${fieldKey}:${idx}" inputmode="numeric" value="${escapeAttr(b.end||"")}" placeholder="11:30" />
           </div>
         </div>
       </div>
@@ -2134,7 +1999,6 @@ function wireQuizStepHandlers(stepKey) {
     const chk = $("#nannyWorkingChk");
     if (chk) chk.addEventListener("change", () => {
       draft.nannyWorking = !!chk.checked;
-      readQuizStepIntoDraft();
       renderQuiz();
     });
   }
@@ -2145,7 +2009,6 @@ function wireQuizStepHandlers(stepKey) {
       const key = btn.getAttribute("data-block-add");
       draft[key] = draft[key] || [];
       draft[key].push({ start: "", end: "" });
-      readQuizStepIntoDraft();
       renderQuiz();
     });
   });
@@ -2157,7 +2020,6 @@ function wireQuizStepHandlers(stepKey) {
       const idx = Number(idxS);
       if (!Array.isArray(draft[key])) return;
       draft[key].splice(idx, 1);
-      readQuizStepIntoDraft();
       renderQuiz();
     });
   });
@@ -2168,15 +2030,13 @@ function wireQuizStepHandlers(stepKey) {
     if (add) add.addEventListener("click", () => {
       draft.appointments = draft.appointments || [];
       draft.appointments.push({ id: uid(), title: "", start: "", end: "" });
-      readQuizStepIntoDraft();
       renderQuiz();
     });
     $all("[data-appt-del]").forEach(btn => {
       btn.addEventListener("click", () => {
         const id = btn.getAttribute("data-appt-del");
         draft.appointments = (draft.appointments || []).filter(a => a.id !== id);
-        readQuizStepIntoDraft();
-      renderQuiz();
+        renderQuiz();
       });
     });
   }
@@ -2238,7 +2098,7 @@ function readQuizStepIntoDraft() {
     // lightweight validation warning for wrong formats
     const bad = (draft.appointments || []).some(a => a.start && !valueHHMM(a.start) || a.end && !valueHHMM(a.end));
     if (bad) {
-      showToast("One or more appointment times don’t look like h:mm AM/PM yet.");
+      showToast("One or more appointment times don’t look like HH:MM yet.");
       // Still allow continuing (user might fix on preview)
     }
     return true;
@@ -2340,7 +2200,7 @@ function openHistoryModal(isoDate) {
   const overlay = $("#quizOverlay");
   overlay.classList.add("show");
 
-  $("#quizStepper").innerHTML = `<div class="step active">History • ${escapeHtml(formatShortDate(isoDate))}</div>`;
+  $("#quizStepper").innerHTML = `<div class="step active">History • ${escapeHtml(isoDate)}</div>`;
   $("#quizHint").textContent = "Viewing saved day log";
   $("#quizBackBtn").style.visibility = "hidden";
   $("#quizNextBtn").textContent = "Close";
@@ -2348,13 +2208,13 @@ function openHistoryModal(isoDate) {
   $("#quizCloseBtn").onclick = () => closeEveningQuiz();
 
   $("#quizBody").innerHTML = `
-    <div class="note">Saved actuals for <b>${escapeHtml(formatShortDate(isoDate))}</b>.</div>
+    <div class="note">Saved actuals for <b>${escapeHtml(isoDate)}</b>.</div>
     <div class="hr"></div>
 
-    <div class="note"><b>Wake:</b> ${escapeHtml(log.wakeTime ? hhmmToClock12(log.wakeTime) : "—")}</div>
-    <div class="note"><b>Nap 1:</b> ${escapeHtml(log.nap1Start ? hhmmToClock12(log.nap1Start) : "—")} → ${escapeHtml(log.nap1End ? hhmmToClock12(log.nap1End) : "—")}</div>
-    <div class="note"><b>Nap 2:</b> ${escapeHtml(log.nap2Start ? hhmmToClock12(log.nap2Start) : "—")} → ${escapeHtml(log.nap2End ? hhmmToClock12(log.nap2End) : "—")}</div>
-    <div class="note"><b>Bedtime (tracking):</b> ${escapeHtml(log.bedtimeTime ? hhmmToClock12(log.bedtimeTime) : "—")}</div>
+    <div class="note"><b>Wake:</b> ${escapeHtml(log.wakeTime || "—")}</div>
+    <div class="note"><b>Nap 1:</b> ${escapeHtml(log.nap1Start || "—")} → ${escapeHtml(log.nap1End || "—")}</div>
+    <div class="note"><b>Nap 2:</b> ${escapeHtml(log.nap2Start || "—")} → ${escapeHtml(log.nap2End || "—")}</div>
+    <div class="note"><b>Bedtime (tracking):</b> ${escapeHtml(log.bedtimeTime || "—")}</div>
     <div class="note"><b>Bath done:</b> ${log.bathDone ? "Yes ✅" : "No"}</div>
 
     <div class="hr"></div>
