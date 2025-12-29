@@ -1,2326 +1,2339 @@
-// Family Day Planner
-// - Tonight quiz (modal wizard) saves tomorrow plan, appointments, bath plan, and focus items.
-// - Today logs wake + naps; bedtime + overnight notes are tracking-only (no schedule effect).
-// - Schedule exports to Google Calendar (for Skylight). Open time is left blank (no "play" blocks).
-//
-// OPTIONAL SYNC:
-// If you want the running list + day plans to be shared between devices (iPhones + Android tablet),
-// enable Supabase below and add your keys. Otherwise, everything works per-device via localStorage.
+// Family Day Planner (PWA + Supabase sync)
+// Designed for simple, low-friction family use (Kristyn, Julio, nanny, Kayden).
+// GitHub Pages friendly (relative paths). No top-level await. No use-before-init.
 
-// ==========================
-// CONFIG
-// ==========================
-const GOOGLE_OAUTH_CLIENT_ID =
-  "131465293548-qu9aotcttbpqqu4gnulj9paii84aikcl.apps.googleusercontent.com";
-const GOOGLE_SCOPES = "https://www.googleapis.com/auth/calendar.events";
-const DEFAULT_CALENDAR_ID =
-  "57c409db61dc56c175c0f136a8f2fdc610fdde4539de65fb1c43ce2758f72336@group.calendar.google.com";
-const TIME_ZONE = "America/Los_Angeles";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
 
-// ---- Supabase (optional sync) ----
-// 1) Set ENABLE_SUPABASE_SYNC = true
-// 2) Fill SUPABASE_URL, SUPABASE_ANON_KEY, HOUSEHOLD_ID
-// 3) Create the tables/policies (SQL provided at bottom of this file)
-// 4) Sign in on each device in Settings
-const ENABLE_SUPABASE_SYNC = true;
-const SUPABASE_URL = \"https://omtmyjhtvjqtqvofebob.supabase.co\";
-const SUPABASE_ANON_KEY = \"sb_publishable_8jZHLI3PwkLF9wu30sqjsA_GYPQSny2\";
-const HOUSEHOLD_ID = \"0c6222f9-f139-4fee-8a96-765d1ed3e2b3\"; // UUID from your households table
-
-let supabase = null;
-async function initSupabaseIfEnabled() {
-  if (!ENABLE_SUPABASE_SYNC) return;
-  // dynamic import keeps the file working even if you don't use Supabase
-  const mod = await import("https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm");
-  supabase = mod.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-}
-
-// ==========================
-// DOM
-// ==========================
-const $ = (id) => document.getElementById(id);
-
-// Tabs
-const tabTonight = $("tabTonight");
-const tabToday = $("tabToday");
-const tabWeek = $("tabWeek");
-const tabSettings = $("tabSettings");
-const screenTonight = $("screenTonight");
-const screenToday = $("screenToday");
-const screenWeek = $("screenWeek");
-const screenSettings = $("screenSettings");
-
-// Tonight screen buttons
-const startQuizBtn = $("startQuizBtn");
-const quickPreviewBtn = $("quickPreviewBtn");
-const tonightStatus = $("tonightStatus");
-const tomorrowPreview = $("tomorrowPreview");
-
-// Today inputs
-const todayDate = $("todayDate");
-const todayWake = $("todayWake");
-const nannyView = $("nannyView");
-const nap1Start = $("nap1Start");
-const nap1End = $("nap1End");
-const nap2Start = $("nap2Start");
-const nap2End = $("nap2End");
-
-const logWakeBtn = $("logWakeBtn");
-const nap1StartBtn = $("nap1StartBtn");
-const nap1EndBtn = $("nap1EndBtn");
-const nap2StartBtn = $("nap2StartBtn");
-const nap2EndBtn = $("nap2EndBtn");
-const reflowBtn = $("reflowBtn");
-
-const bedtimeActual = $("bedtimeActual");
-const bedtimeNowBtn = $("bedtimeNowBtn");
-const nightNotes = $("nightNotes");
-
-const calendarId = $("calendarId");
-const googleBtn = $("googleBtn");
-const publishBtn = $("publishBtn");
-const clearBtn = $("clearBtn");
-const todayStatus = $("todayStatus");
-
-const todayPreview = $("todayPreview");
-const nowPill = $("nowPill");
-const nextPill = $("nextPill");
-
-// Running list (today screen)
-const brainDumpAdd = $("brainDumpAdd");
-const brainDumpAddBtn = $("brainDumpAddBtn");
-const showFocusBtn = $("showFocusBtn");
-const showAllBtn = $("showAllBtn");
-const brainDumpList = $("brainDumpList");
-
-// Week view
-const weekStart = $("weekStart");
-const refreshWeekBtn = $("refreshWeekBtn");
-const weekList = $("weekList");
-
-// Settings inputs
-const setWakeDefault = $("setWakeDefault");
-const setNapDefault = $("setNapDefault");
-const setSoloBedBuffer = $("setSoloBedBuffer");
-const setLastBath = $("setLastBath");
-const saveSettingsBtn = $("saveSettingsBtn");
-const settingsStatus = $("settingsStatus");
-
-// Auth + local transfer (settings)
-const authEmail = $("authEmail");
-const authPassword = $("authPassword");
-const signInBtn = $("signInBtn");
-const signOutBtn = $("signOutBtn");
-const authStatus = $("authStatus");
-
-const exportLocalBtn = $("exportLocalBtn");
-const importLocalBtn = $("importLocalBtn");
-const localTransferBox = $("localTransferBox");
-
-// Quiz modal
-const quizOverlay = $("quizOverlay");
-const quizCloseBtn = $("quizCloseBtn");
-const quizTitle = $("quizTitle");
-const quizHint = $("quizHint");
-const quizProgress = $("quizProgress");
-const quizContent = $("quizContent");
-const quizBackBtn = $("quizBackBtn");
-const quizSkipBtn = $("quizSkipBtn");
-const quizNextBtn = $("quizNextBtn");
-const quizFooterStatus = $("quizFooterStatus");
-
-// ==========================
-// Storage keys
-// ==========================
-const KEY_SETTINGS = "fdp:settings";
-const KEY_BACKLOG = "fdp:backlog"; // local fallback (per-device) if not using sync
-
-const keyPlan = (dateStr) => `fdp:plan:${dateStr}`;
-const keyLog = (dateStr) => `fdp:log:${dateStr}`;
-const keyPublishedIds = (dateStr) => `fdp:publishedEventIds:${dateStr}`;
-
-// ==========================
-// Defaults / Settings
-// ==========================
-const defaultSettings = {
-  wakeDefault: "07:00",
-  napDefaultMin: 75,          // midpoint
-  soloBedtimeBufferMin: 10,   // if one parent is doing bedtime solo
-  lastBathDate: null,         // YYYY-MM-DD
+const LS = {
+  config: "fdp.config.v1",
+  localCache: "fdp.localCache.v1",
+  lastView: "fdp.lastView.v1",
 };
 
-function loadSettings() {
-  const raw = localStorage.getItem(KEY_SETTINGS);
-  if (!raw) return { ...defaultSettings };
-  try {
-    return { ...defaultSettings, ...JSON.parse(raw) };
-  } catch {
-    return { ...defaultSettings };
-  }
-}
-function saveSettings(s) {
-  localStorage.setItem(KEY_SETTINGS, JSON.stringify(s));
-}
-let settings = loadSettings();
+const DEFAULTS = {
+  expectedWake: "06:30",
+  defaultNapMinutes: 75,
+  napRoutineMinutes: 15,
+  bathEveryDays: 3,
+  timezoneHint: "America/Los_Angeles",
+};
 
-// ==========================
-// Tiny helpers
-// ==========================
-function setStatus(el, msg, kind = "muted") {
-  if (!el) return;
-  const cls = kind === "error" ? "status error" : kind === "success" ? "status success" : "status muted";
-  el.innerHTML = `<div class="${cls}">${escapeHtml(msg)}</div>`;
-}
+let supabase = null; // created after reading config
+let authSession = null;
 
+const state = {
+  online: navigator.onLine,
+  route: "#today",
+  me: { email: null },
+  householdId: null,
+
+  // Cached data (from Supabase or local fallback)
+  tasks: [],
+  plansByDate: {}, // { "YYYY-MM-DD": planObj }
+  logsByDate: {},  // { "YYYY-MM-DD": logObj }
+
+  // UI
+  toastTimer: null,
+
+  // Quiz
+  quiz: {
+    open: false,
+    step: 0,
+    tomorrow: null, // YYYY-MM-DD
+    draft: null,
+  },
+};
+
+function $(sel, root = document) { return root.querySelector(sel); }
+function $all(sel, root = document) { return Array.from(root.querySelectorAll(sel)); }
+
+function nowLocal() {
+  // Local device time; keep scheduling simple and human.
+  return new Date();
+}
 function pad2(n) { return String(n).padStart(2, "0"); }
-
-function nowHHMM() {
-  const d = new Date();
-  return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
-}
-
-function dateToYMD(d) {
+function toISODate(d) {
   const y = d.getFullYear();
   const m = pad2(d.getMonth() + 1);
   const day = pad2(d.getDate());
   return `${y}-${m}-${day}`;
 }
-
-function ymdToDate(ymd) {
-  const [y, m, d] = ymd.split("-").map(Number);
-  return new Date(y, m - 1, d, 0, 0, 0, 0);
-}
-
-function addDays(dateStr, days) {
-  const d = ymdToDate(dateStr);
+function addDays(isoDate, days) {
+  const d = new Date(isoDate + "T12:00:00");
   d.setDate(d.getDate() + days);
-  return dateToYMD(d);
+  return toISODate(d);
+}
+function parseTimeToMinutes(hhmm) {
+  if (!hhmm || !/^\d\d:\d\d$/.test(hhmm)) return null;
+  const [h, m] = hhmm.split(":").map(Number);
+  return h * 60 + m;
+}
+function minutesToHHMM(mins) {
+  const m = ((mins % 1440) + 1440) % 1440;
+  return `${pad2(Math.floor(m / 60))}:${pad2(m % 60)}`;
+}
+function clamp(n, min, max) { return Math.max(min, Math.min(max, n)); }
+function uid() { return crypto.randomUUID(); }
+
+function showToast(msg) {
+  const el = $("#toast");
+  el.textContent = msg;
+  el.classList.add("show");
+  clearTimeout(state.toastTimer);
+  state.toastTimer = setTimeout(() => el.classList.remove("show"), 2600);
 }
 
-function makeDate(dateStr, timeStr) {
-  const [y, m, d] = dateStr.split("-").map(Number);
-  const [hh, mm] = timeStr.split(":").map(Number);
-  return new Date(y, m - 1, d, hh, mm, 0);
+function loadConfig() {
+  try {
+    const raw = localStorage.getItem(LS.config);
+    const cfg = raw ? JSON.parse(raw) : {};
+    return {
+      supabaseUrl: cfg.supabaseUrl || "",
+      supabaseAnonKey: cfg.supabaseAnonKey || "",
+      householdId: cfg.householdId || "",
+      expectedWake: cfg.expectedWake || DEFAULTS.expectedWake,
+      defaultNapMinutes: Number.isFinite(cfg.defaultNapMinutes) ? cfg.defaultNapMinutes : DEFAULTS.defaultNapMinutes,
+    };
+  } catch {
+    return {
+      supabaseUrl: "",
+      supabaseAnonKey: "",
+      householdId: "",
+      expectedWake: DEFAULTS.expectedWake,
+      defaultNapMinutes: DEFAULTS.defaultNapMinutes,
+    };
+  }
+}
+function saveConfig(partial) {
+  const cur = loadConfig();
+  const next = { ...cur, ...partial };
+  localStorage.setItem(LS.config, JSON.stringify(next));
+  return next;
 }
 
-function addMin(dt, minutes) {
-  return new Date(dt.getTime() + minutes * 60000);
+function loadLocalCache() {
+  try {
+    const raw = localStorage.getItem(LS.localCache);
+    return raw ? JSON.parse(raw) : { tasks: [], plansByDate: {}, logsByDate: {} };
+  } catch {
+    return { tasks: [], plansByDate: {}, logsByDate: {} };
+  }
+}
+function saveLocalCache() {
+  const payload = { tasks: state.tasks, plansByDate: state.plansByDate, logsByDate: state.logsByDate };
+  localStorage.setItem(LS.localCache, JSON.stringify(payload));
 }
 
-function toRFC3339Local(dt) {
-  const y = dt.getFullYear();
-  const m = pad2(dt.getMonth() + 1);
-  const d = pad2(dt.getDate());
-  const hh = pad2(dt.getHours());
-  const mm = pad2(dt.getMinutes());
-  return `${y}-${m}-${d}T${hh}:${mm}:00`;
+function setActiveTab(route) {
+  ["evening","today","tasks","history","settings"].forEach(k => {
+    const t = $(`#tab-${k}`);
+    if (!t) return;
+    t.classList.toggle("active", `#${k}` === route);
+  });
 }
 
-function safeJSONParse(raw, fallback) {
-  try { return JSON.parse(raw); } catch { return fallback; }
-}
-
-function escapeHtml(s) {
-  return String(s ?? "")
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#039;");
-}
-
-function fmtTime(dt) {
-  return dt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-}
-
-function overlaps(aStart, aEnd, bStart, bEnd) {
-  return aStart < bEnd && bStart < aEnd;
-}
-
-function clampTimeStr(t, fallback) {
-  if (!t) return fallback;
-  if (!/^\d{2}:\d{2}$/.test(t)) return fallback;
-  return t;
-}
-
-function newId(prefix="id") {
-  return `${prefix}_${Math.random().toString(16).slice(2)}_${Date.now().toString(16)}`;
-}
-
-// ==========================
-// Tabs
-// ==========================
-function setActiveTab(which) {
-  const tabs = [tabTonight, tabToday, tabWeek, tabSettings];
-  tabs.forEach(t => t.classList.remove("active"));
-  screenTonight.style.display = "none";
-  screenToday.style.display = "none";
-  screenWeek.style.display = "none";
-  screenSettings.style.display = "none";
-
-  if (which === "tonight") { tabTonight.classList.add("active"); screenTonight.style.display = ""; }
-  if (which === "today") { tabToday.classList.add("active"); screenToday.style.display = ""; }
-  if (which === "week") { tabWeek.classList.add("active"); screenWeek.style.display = ""; }
-  if (which === "settings") { tabSettings.classList.add("active"); screenSettings.style.display = ""; }
-}
-
-tabTonight.onclick = () => setActiveTab("tonight");
-tabToday.onclick = () => setActiveTab("today");
-tabWeek.onclick = () => setActiveTab("week");
-tabSettings.onclick = () => setActiveTab("settings");
-
-// ==========================
-// Data shapes
-// ==========================
-function defaultPlan(dateStr) {
-  return {
-    date: dateStr,
-    wakeDefault: settings.wakeDefault,
-
-    // Considerations
-    considerations: {
-      bothWFH: false,
-      // Unavailability blocks: if a parent is unavailable, naps will be assigned to the other parent if available.
-      // If BOTH parents are unavailable, naps will be assigned to Kayden/Nanny (coverage) if available.
-      unavailability: {
-        Kristyn: [], // [{start,end}]
-        Julio: [],   // [{start,end}]
-      },
-      coverage: {
-        Nanny: [],   // [{start,end}]
-        Kayden: [],  // [{start,end}]
-      },
-      bedtimeOwner: "Kristyn",    // Kristyn|Julio|Split
-    },
-
-    // Appointments
-    appointments: {
-      tonight: [],   // array of {id,title,start,end}
-      tomorrow: [],  // array of {id,title,start,end}
-    },
-
-    // Bath plan
-    bathPlan: {
-      wantsBath: false,           // should schedule a bath block
-      preferredStart: null,       // "HH:MM" (optional)
-      reason: "",                 // optional note
-    },
-
-    // Notes/one-offs (kept for backwards compatibility)
-    tasks: "",
-  };
-}
-
-function defaultLog() {
-  return {
-    wakeActual: null,
-    nap1Start: null,
-    nap1End: null,
-    nap2Start: null,
-    nap2End: null,
-    bedtimeActual: null, // tracking-only
-    nightNotes: "",
-  };
-}
-
-// ==========================
-// Local storage load/save
-// ==========================
-function loadPlanLocal(dateStr) {
-  const raw = localStorage.getItem(keyPlan(dateStr));
-  if (!raw) return null;
-  return safeJSONParse(raw, null);
-}
-function savePlanLocal(plan) {
-  localStorage.setItem(keyPlan(plan.date), JSON.stringify(plan));
-}
-
-function loadLogLocal(dateStr) {
-  const raw = localStorage.getItem(keyLog(dateStr));
-  if (!raw) return { ...defaultLog() };
-  const parsed = safeJSONParse(raw, null);
-  return parsed ? { ...defaultLog(), ...parsed } : { ...defaultLog() };
-}
-function saveLogLocal(dateStr, log) {
-  localStorage.setItem(keyLog(dateStr), JSON.stringify(log));
-}
-
-// Backlog local (fallback)
-function loadBacklogLocal() {
-  const raw = localStorage.getItem(KEY_BACKLOG);
-  const list = safeJSONParse(raw || "[]", []);
-  return Array.isArray(list) ? list : [];
-}
-function saveBacklogLocal(list) {
-  localStorage.setItem(KEY_BACKLOG, JSON.stringify(list));
-}
-
-// ==========================
-// Supabase storage (optional sync)
-// ==========================
-async function isSignedIn() {
-  if (!ENABLE_SUPABASE_SYNC || !supabase) return false;
-  const { data } = await supabase.auth.getSession();
-  return !!data.session;
-}
-
-async function refreshAuthStatus() {
-  if (!authStatus) return;
-  if (!ENABLE_SUPABASE_SYNC) {
-    setStatus(authStatus, "Sync disabled (ENABLE_SUPABASE_SYNC=false).", "muted");
-    return false;
+function setAuthPill() {
+  const dot = $("#authDot");
+  const text = $("#authText");
+  if (!state.online) {
+    dot.textContent = "Offline";
+    dot.className = "badge warn";
+    text.textContent = "Offline mode (showing cached data)";
+    return;
   }
   if (!supabase) {
-    setStatus(authStatus, "Supabase not initialized. Check SUPABASE_URL / ANON_KEY.", "error");
-    return false;
+    dot.textContent = "Setup";
+    dot.className = "badge warn";
+    text.textContent = "Add Supabase settings to sync";
+    return;
   }
-  const signed = await isSignedIn();
-  setStatus(authStatus, signed ? "Signed in ✅ (shared sync enabled)" : "Not signed in", signed ? "success" : "muted");
-  return signed;
+  if (!authSession) {
+    dot.textContent = "Signed out";
+    dot.className = "badge warn";
+    text.textContent = "Sign in to sync across devices";
+    return;
+  }
+  dot.textContent = "Synced";
+  dot.className = "badge good";
+  text.textContent = state.me.email ? state.me.email : "Signed in";
 }
 
-async function signIn(email, password) {
-  if (!ENABLE_SUPABASE_SYNC || !supabase) throw new Error("Sync is not enabled.");
-  const { error } = await supabase.auth.signInWithPassword({ email, password });
-  if (error) throw error;
+function listenConnectivity() {
+  window.addEventListener("online", () => {
+    state.online = true;
+    setAuthPill();
+    showToast("Back online.");
+    // Try a gentle refresh
+    refreshAll().catch(()=>{});
+  });
+  window.addEventListener("offline", () => {
+    state.online = false;
+    setAuthPill();
+    showToast("You're offline. We'll show cached info.");
+  });
 }
 
-async function signOut() {
-  if (!ENABLE_SUPABASE_SYNC || !supabase) return;
-  await supabase.auth.signOut();
+
+/* ---------------------------
+   Google Calendar export (ICS)
+   - We do NOT read Google Calendar.
+   - We generate an .ics file containing only scheduled blocks (no open time).
+---------------------------- */
+function icsEscape(s) {
+  return String(s ?? "")
+    .replace(/\\/g, "\\\\")
+    .replace(/\n/g, "\\n")
+    .replace(/,/g, "\\,")
+    .replace(/;/g, "\\;");
+}
+function yyyymmdd(isoDate) {
+  return isoDate.replaceAll("-", "");
+}
+function toICSDateTimeLocal(isoDate, hhmm) {
+  // Returns YYYYMMDDTHHMM00 in local clock time (TZID provided in DTSTART/DTEND)
+  const [h, m] = hhmm.split(":").map(Number);
+  return `${yyyymmdd(isoDate)}T${String(h).padStart(2,"0")}${String(m).padStart(2,"0")}00`;
+}
+function utcStamp() {
+  const d = new Date();
+  const y = d.getUTCFullYear();
+  const mo = String(d.getUTCMonth()+1).padStart(2,"0");
+  const da = String(d.getUTCDate()).padStart(2,"0");
+  const h = String(d.getUTCHours()).padStart(2,"0");
+  const mi = String(d.getUTCMinutes()).padStart(2,"0");
+  const s = String(d.getUTCSeconds()).padStart(2,"0");
+  return `${y}${mo}${da}T${h}${mi}${s}Z`;
+}
+function vtimezoneAmericaLosAngeles() {
+  // Minimal VTIMEZONE that works well for Google Calendar imports.
+  // (We keep it stable and small; it covers typical US DST rules.)
+  return [
+    "BEGIN:VTIMEZONE",
+    "TZID:America/Los_Angeles",
+    "X-LIC-LOCATION:America/Los_Angeles",
+    "BEGIN:DAYLIGHT",
+    "TZOFFSETFROM:-0800",
+    "TZOFFSETTO:-0700",
+    "TZNAME:PDT",
+    "DTSTART:19700308T020000",
+    "RRULE:FREQ=YEARLY;BYMONTH=3;BYDAY=2SU",
+    "END:DAYLIGHT",
+    "BEGIN:STANDARD",
+    "TZOFFSETFROM:-0700",
+    "TZOFFSETTO:-0800",
+    "TZNAME:PST",
+    "DTSTART:19701101T020000",
+    "RRULE:FREQ=YEARLY;BYMONTH=11;BYDAY=1SU",
+    "END:STANDARD",
+    "END:VTIMEZONE",
+  ].join("\r\n");
+}
+function blockToVEVENT({ isoDate, block, householdId }) {
+  const start = minutesToHHMM(block.startMin);
+  const end = minutesToHHMM(block.endMin);
+
+  const tzid = DEFAULTS.timezoneHint;
+  const dtStart = toICSDateTimeLocal(isoDate, start);
+  const dtEnd = toICSDateTimeLocal(isoDate, end);
+
+  const who = (block.meta?.kind === "nap") ? (block.meta?.caregiver?.who || "") : "";
+  const descParts = [];
+  if (block.meta?.kind === "nap" && who) descParts.push(`Caregiver: ${who}`);
+  if (block.meta?.kind === "bedtime" && block.meta?.bedtimeBy) descParts.push(`Bedtime by: ${block.meta.bedtimeBy}`);
+  if (block.meta?.kind === "bath") descParts.push("Bath due (rule: at least every 3 days)");
+  if (block.meta?.kind === "appointment") descParts.push("Appointment");
+
+  const description = descParts.length ? descParts.join("\\n") : "";
+
+  // Deterministic-ish UID to reduce duplicates if you export/import multiple times
+  const uid = `${householdId || "household"}-${isoDate}-${block.meta?.kind || "block"}-${block.startMin}-${block.endMin}@familydayplanner`;
+
+  return [
+    "BEGIN:VEVENT",
+    `UID:${icsEscape(uid)}`,
+    `DTSTAMP:${utcStamp()}`,
+    `DTSTART;TZID=${tzid}:${dtStart}`,
+    `DTEND;TZID=${tzid}:${dtEnd}`,
+    `SUMMARY:${icsEscape(block.title)}`,
+    description ? `DESCRIPTION:${icsEscape(description)}` : null,
+    "END:VEVENT",
+  ].filter(Boolean).join("\r\n");
+}
+function buildICSForDay({ isoDate, blocks, calendarName, householdId }) {
+  const lines = [];
+  lines.push("BEGIN:VCALENDAR");
+  lines.push("VERSION:2.0");
+  lines.push("PRODID:-//Family Day Planner//EN");
+  lines.push("CALSCALE:GREGORIAN");
+  lines.push("METHOD:PUBLISH");
+  lines.push(`X-WR-CALNAME:${icsEscape(calendarName || "Family Day Planner")}`);
+  lines.push(`X-WR-TIMEZONE:${DEFAULTS.timezoneHint}`);
+  lines.push(vtimezoneAmericaLosAngeles());
+  (blocks || []).forEach(b => {
+    lines.push(blockToVEVENT({ isoDate, block: b, householdId }));
+  });
+  lines.push("END:VCALENDAR");
+  return lines.join("\r\n");
+}
+function downloadTextFile(filename, text, mime) {
+  const blob = new Blob([text], { type: mime || "text/plain;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1200);
+}
+function exportScheduleToGoogleCalendarICS(isoDate, scheduleBlocks) {
+  const hid = state.householdId || loadConfig().householdId || "";
+  const ics = buildICSForDay({
+    isoDate,
+    blocks: scheduleBlocks,
+    calendarName: "Family Day Planner",
+    householdId: hid,
+  });
+  downloadTextFile(`fdp-${isoDate}.ics`, ics, "text/calendar;charset=utf-8");
+  showToast("Downloaded calendar file (.ics). Open it to add to Google Calendar.");
 }
 
-// Plan remote
-async function loadPlanRemote(dateStr) {
-  const { data, error } = await supabase
-    .from("day_plans")
-    .select("date, household_id, plan_json")
-    .eq("household_id", HOUSEHOLD_ID)
-    .eq("date", dateStr)
-    .maybeSingle();
+/* ---------------------------
+   Supabase wiring + sync
+---------------------------- */
+async function initSupabaseFromConfig() {
+  const cfg = loadConfig();
+  state.householdId = cfg.householdId || null;
 
-  if (error) throw error;
-  if (!data) return null;
-  return safeJSONParse(data.plan_json, null);
+  if (!cfg.supabaseUrl || !cfg.supabaseAnonKey) {
+    supabase = null;
+    authSession = null;
+    setAuthPill();
+    return;
+  }
+  supabase = createClient(cfg.supabaseUrl, cfg.supabaseAnonKey, {
+    auth: { persistSession: true, autoRefreshToken: true },
+  });
+
+  const { data: { session } } = await supabase.auth.getSession();
+  authSession = session;
+  await ensureProfileRow();
+  state.me.email = session?.user?.email ?? null;
+
+  // Observe auth changes
+  supabase.auth.onAuthStateChange((_evt, session2) => {
+    authSession = session2;
+    state.me.email = session2?.user?.email ?? null;
+    setAuthPill();
+    ensureProfileRow().catch(()=>{});
+    refreshAll().catch(()=>{});
+  });
+
+  setAuthPill();
 }
 
-async function savePlanRemote(plan) {
+
+/* ---------------------------
+   Google Calendar "dynamic sync" (via Google Apps Script web app)
+   Why: GitHub Pages cannot safely store Google OAuth secrets.
+   Approach: a tiny Google Apps Script endpoint writes events to the chosen calendar.
+   Security: use a shared API key + restrict calendar permissions.
+---------------------------- */
+async function syncScheduleToGoogleCalendar({ isoDate, scheduleBlocks }) {
+  const cfg = loadConfig();
+  const url = (cfg.gcalWebhookUrl || "").trim();
+  const apiKey = (cfg.gcalApiKey || "").trim();
+  const calendarId = (cfg.gcalCalendarId || "").trim();
+
+  if (!url || !apiKey || !calendarId) {
+    showToast("Add Google Calendar Sync settings first (Settings → Google Calendar Sync).");
+    return;
+  }
+
+  const hid = state.householdId || cfg.householdId || "";
   const payload = {
-    household_id: HOUSEHOLD_ID,
-    date: plan.date,
-    plan_json: JSON.stringify(plan),
-    updated_at: new Date().toISOString()
+    apiKey,
+    action: "syncDay",
+    householdId: hid,
+    calendarId,
+    date: isoDate,
+    blocks: (scheduleBlocks || []).map(b => ({
+      title: b.title,
+      startMin: b.startMin,
+      endMin: b.endMin,
+      meta: b.meta || {}
+    })),
   };
-  const { error } = await supabase
-    .from("day_plans")
-    .upsert(payload, { onConflict: "household_id,date" });
-  if (error) throw error;
+
+  try {
+    const resp = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+
+    if (!resp.ok) {
+      const t = await resp.text().catch(() => "");
+      throw new Error(`Sync failed: ${resp.status} ${resp.statusText} ${t}`);
+    }
+    const data = await resp.json().catch(() => ({}));
+    if (data && data.ok) {
+      showToast("Synced to Google Calendar ✅");
+    } else {
+      showToast("Sync request sent. (If you don’t see events, check Apps Script deployment + calendar permissions.)");
+    }
+  } catch (e) {
+    console.error(e);
+    showToast("Couldn’t sync to Google Calendar. Check Settings + Apps Script deployment.");
+  }
 }
 
-// Log remote
-async function loadLogRemote(dateStr) {
-  const { data, error } = await supabase
-    .from("day_logs")
-    .select("date, household_id, log_json")
-    .eq("household_id", HOUSEHOLD_ID)
-    .eq("date", dateStr)
-    .maybeSingle();
 
+async function sbUpsert(table, row, onConflict) {
+  if (!supabase || !authSession) throw new Error("Not signed in");
+  const q = supabase.from(table).upsert(row, { onConflict, ignoreDuplicates: false }).select().single();
+  const { data, error } = await q;
   if (error) throw error;
-  if (!data) return { ...defaultLog() };
-  const parsed = safeJSONParse(data.log_json, null);
-  return parsed ? { ...defaultLog(), ...parsed } : { ...defaultLog() };
+  return data;
 }
-
-async function saveLogRemote(dateStr, log) {
-  const payload = {
-    household_id: HOUSEHOLD_ID,
-    date: dateStr,
-    log_json: JSON.stringify(log),
-    updated_at: new Date().toISOString()
-  };
-  const { error } = await supabase
-    .from("day_logs")
-    .upsert(payload, { onConflict: "household_id,date" });
-  if (error) throw error;
-}
-
-// Backlog remote
-async function fetchBacklogRemote() {
-  const { data, error } = await supabase
-    .from("backlog_tasks")
-    .select("id, text, done, focus_date, created_at, done_at")
-    .eq("household_id", HOUSEHOLD_ID)
-    .order("created_at", { ascending: true });
+async function sbSelect(table, filters = {}, orderBy = null, limit = null) {
+  if (!supabase || !authSession) throw new Error("Not signed in");
+  let q = supabase.from(table).select("*");
+  for (const [k, v] of Object.entries(filters)) q = q.eq(k, v);
+  if (orderBy) q = q.order(orderBy.key, { ascending: !!orderBy.asc });
+  if (limit) q = q.limit(limit);
+  const { data, error } = await q;
   if (error) throw error;
   return data || [];
 }
 
-async function addBacklogRemote(text) {
-  const t = (text || "").trim();
-  if (!t) return;
-  const { error } = await supabase.from("backlog_tasks").insert({
-    household_id: HOUSEHOLD_ID,
-    text: t,
-    done: false,
-    focus_date: null
+
+async function ensureProfileRow() {
+  // Creates/updates the profile row so RLS can scope household data.
+  // Runs after sign-in and also on refresh (safe no-op if already exists).
+  const cfg = loadConfig();
+  const hid = (cfg.householdId || "").trim();
+  if (!supabase || !authSession || !hid) return;
+
+  try {
+    const userId = authSession.user.id;
+    const { error } = await supabase.from("profiles").upsert({ id: userId, household_id: hid });
+    if (error) throw error;
+  } catch (e) {
+    console.warn("ensureProfileRow failed:", e);
+  }
+}
+
+async function refreshAll() {
+  // Always load local first (instant UI), then Supabase if possible.
+  const local = loadLocalCache();
+  state.tasks = local.tasks || [];
+  state.plansByDate = local.plansByDate || {};
+  state.logsByDate = local.logsByDate || {};
+  render();
+
+  if (!state.online || !supabase || !authSession || !state.householdId) {
+    setAuthPill();
+    return;
+  }
+
+  try {
+    const hid = state.householdId;
+
+    // Pull tasks
+    const tasks = await sbSelect("tasks", { household_id: hid }, { key: "created_at", asc: false }, 500);
+    // Pull last ~90 days of plans/logs
+    const today = toISODate(nowLocal());
+    const minDate = addDays(today, -120);
+
+    let plansQ = supabase.from("day_plans").select("*").eq("household_id", hid).gte("date", minDate);
+    let logsQ  = supabase.from("day_logs").select("*").eq("household_id", hid).gte("date", minDate);
+
+    const [{ data: plans, error: pErr }, { data: logs, error: lErr }] = await Promise.all([plansQ, logsQ]);
+    if (pErr) throw pErr;
+    if (lErr) throw lErr;
+
+    state.tasks = (tasks || []).map(t => ({
+      id: t.id,
+      title: t.title,
+      status: t.status,
+      completedAt: t.completed_at,
+      assignedDate: t.assigned_date,
+      createdAt: t.created_at,
+    }));
+
+    state.plansByDate = {};
+    (plans || []).forEach(r => { state.plansByDate[r.date] = r.data; });
+
+    state.logsByDate = {};
+    (logs || []).forEach(r => { state.logsByDate[r.date] = r.data; });
+
+    saveLocalCache();
+    setAuthPill();
+    render();
+  } catch (e) {
+    console.warn(e);
+    showToast("Couldn’t refresh from sync — showing cached data.");
+  }
+}
+
+async function ensureSignedIn(email, password) {
+  if (!supabase) throw new Error("Supabase not configured yet");
+  const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+  if (error) throw error;
+  authSession = data.session;
+  await ensureProfileRow();
+  state.me.email = data.session?.user?.email ?? null;
+  setAuthPill();
+}
+
+async function signUp(email, password) {
+  if (!supabase) throw new Error("Supabase not configured yet");
+  const { data, error } = await supabase.auth.signUp({ email, password });
+  if (error) throw error;
+  // Note: depending on Supabase auth settings, email confirmation may be required.
+  authSession = data.session ?? null;
+  await ensureProfileRow();
+  state.me.email = data.user?.email ?? null;
+  setAuthPill();
+}
+
+async function signOut() {
+  if (!supabase) return;
+  await supabase.auth.signOut();
+  authSession = null;
+  state.me.email = null;
+  setAuthPill();
+}
+
+/* ---------------------------
+   Scheduling model
+---------------------------- */
+// We keep routine items as real, purposeful blocks only (no filler).
+// Times are minutes since midnight.
+
+function normalizeBlocks(blocks) {
+  // blocks: [{start:"HH:MM", end:"HH:MM"}]
+  const out = [];
+  (blocks || []).forEach(b => {
+    const s = parseTimeToMinutes(b.start);
+    const e = parseTimeToMinutes(b.end);
+    if (s == null || e == null) return;
+    if (e <= s) return;
+    out.push({ startMin: s, endMin: e });
   });
-  if (error) throw error;
-}
-
-async function toggleBacklogDoneRemote(id, done) {
-  const { error } = await supabase
-    .from("backlog_tasks")
-    .update({ done: !!done, done_at: done ? new Date().toISOString() : null })
-    .eq("household_id", HOUSEHOLD_ID)
-    .eq("id", id);
-  if (error) throw error;
-}
-
-async function setBacklogFocusDateRemote(id, focusDateOrNull) {
-  const { error } = await supabase
-    .from("backlog_tasks")
-    .update({ focus_date: focusDateOrNull })
-    .eq("household_id", HOUSEHOLD_ID)
-    .eq("id", id);
-  if (error) throw error;
-}
-
-async function removeBacklogRemote(id) {
-  const { error } = await supabase
-    .from("backlog_tasks")
-    .delete()
-    .eq("household_id", HOUSEHOLD_ID)
-    .eq("id", id);
-  if (error) throw error;
-}
-
-// Unified accessors (choose remote if enabled + signed in)
-async function loadPlan(dateStr) {
-  if (ENABLE_SUPABASE_SYNC && supabase && (await isSignedIn())) {
-    const p = await loadPlanRemote(dateStr);
-    return p;
+  // merge overlaps
+  out.sort((a,b)=>a.startMin-b.startMin);
+  const merged = [];
+  for (const b of out) {
+    const last = merged[merged.length-1];
+    if (!last || b.startMin > last.endMin) merged.push({ ...b });
+    else last.endMin = Math.max(last.endMin, b.endMin);
   }
-  return loadPlanLocal(dateStr);
+  return merged;
 }
 
-async function savePlan(plan) {
-  if (ENABLE_SUPABASE_SYNC && supabase && (await isSignedIn())) {
-    await savePlanRemote(plan);
+function intervalFullyCovered(availabilityBlocks, startMin, endMin) {
+  // availabilityBlocks: merged intervals that represent AVAILABLE time
+  // return true if union covers [startMin, endMin]
+  let cursor = startMin;
+  for (const b of availabilityBlocks) {
+    if (b.endMin <= cursor) continue;
+    if (b.startMin > cursor) return false;
+    cursor = Math.max(cursor, b.endMin);
+    if (cursor >= endMin) return true;
   }
-  savePlanLocal(plan);
+  return cursor >= endMin;
 }
 
-async function loadLog(dateStr) {
-  if (ENABLE_SUPABASE_SYNC && supabase && (await isSignedIn())) {
-    return await loadLogRemote(dateStr);
+function invertToAvailability(unavailBlocks) {
+  // given merged UNAVAILABLE blocks, return AVAILABLE blocks for whole day [0,1440)
+  const un = normalizeBlocks(unavailBlocks);
+  const avail = [];
+  let cursor = 0;
+  for (const b of un) {
+    if (b.startMin > cursor) avail.push({ startMin: cursor, endMin: b.startMin });
+    cursor = Math.max(cursor, b.endMin);
   }
-  return loadLogLocal(dateStr);
+  if (cursor < 1440) avail.push({ startMin: cursor, endMin: 1440 });
+  return avail;
 }
 
-async function saveLog(dateStr, log) {
-  if (ENABLE_SUPABASE_SYNC && supabase && (await isSignedIn())) {
-    await saveLogRemote(dateStr, log);
-  }
-  saveLogLocal(dateStr, log);
+function withinWorkingBlocks(workingBlocks) {
+  // workingBlocks are AVAILABLE; normalize directly
+  return normalizeBlocks(workingBlocks);
 }
 
-async function fetchBacklog() {
-  if (ENABLE_SUPABASE_SYNC && supabase && (await isSignedIn())) {
-    return await fetchBacklogRemote();
-  }
-  return loadBacklogLocal();
+function pickNapCaregiver(plan, napStartMin, napEndMin) {
+  const kUn = invertToAvailability(plan.kristynUnavail || []);
+  const jUn = invertToAvailability(plan.julioUnavail || []);
+  const nannyAvail = (plan.nannyWorking === true) ? withinWorkingBlocks(plan.nannyBlocks || []) : [];
+  const kaydenAvail = withinWorkingBlocks(plan.kaydenBlocks || []);
+
+  const kristynCovers = intervalFullyCovered(kUn, napStartMin, napEndMin);
+  const julioCovers   = intervalFullyCovered(jUn, napStartMin, napEndMin);
+
+  if (kristynCovers && julioCovers) return { who: "Kristyn or Julio", status: "ok" };
+  if (kristynCovers) return { who: "Kristyn", status: "ok" };
+  if (julioCovers) return { who: "Julio", status: "ok" };
+
+  // only if no parent can cover the whole nap:
+  const kaydenCovers = intervalFullyCovered(kaydenAvail, napStartMin, napEndMin);
+  if (kaydenCovers) return { who: "Kayden", status: "ok" };
+
+  const nannyCovers = intervalFullyCovered(nannyAvail, napStartMin, napEndMin);
+  if (nannyCovers) return { who: "Nanny", status: "ok" };
+
+  return { who: "Uncovered", status: "bad" };
 }
 
-async function addBacklogItem(text) {
-  if (ENABLE_SUPABASE_SYNC && supabase && (await isSignedIn())) {
-    await addBacklogRemote(text);
-  } else {
-    const list = loadBacklogLocal();
-    const t = (text || "").trim();
-    if (!t) return;
-    list.push({ id: newId("task"), text: t, done: false, focus_date: null, created_at: new Date().toISOString(), done_at: null });
-    saveBacklogLocal(list);
-  }
-}
+function buildSchedule({ isoDate, plan, log, mode }) {
+  // mode: "forecast" or "today"
+  // plan: tomorrow plan (availability, appointments, bedtimeParent)
+  // log: actuals for today (wake/nap1/nap2); can be partial
+  const cfg = loadConfig();
+  const expectedWakeMin = parseTimeToMinutes(cfg.expectedWake) ?? 390;
+  const wakeMin = (() => {
+    if (mode === "today") {
+      const w = log?.wakeTime ? parseTimeToMinutes(log.wakeTime) : null;
+      return (w != null) ? w : expectedWakeMin;
+    }
+    return expectedWakeMin;
+  })();
 
-async function toggleBacklogDone(id, done) {
-  if (ENABLE_SUPABASE_SYNC && supabase && (await isSignedIn())) {
-    await toggleBacklogDoneRemote(id, done);
-  } else {
-    const list = loadBacklogLocal();
-    const item = list.find(x => x.id === id);
-    if (item) { item.done = !!done; item.done_at = done ? new Date().toISOString() : null; }
-    saveBacklogLocal(list);
-  }
-}
+  const defaultNap = clamp(Number(cfg.defaultNapMinutes) || DEFAULTS.defaultNapMinutes, 40, 90);
 
-async function setBacklogFocusDate(id, focusDateOrNull) {
-  if (ENABLE_SUPABASE_SYNC && supabase && (await isSignedIn())) {
-    await setBacklogFocusDateRemote(id, focusDateOrNull);
-  } else {
-    const list = loadBacklogLocal();
-    const item = list.find(x => x.id === id);
-    if (item) item.focus_date = focusDateOrNull;
-    saveBacklogLocal(list);
-  }
-}
+  // Use default midpoints for wake windows (in minutes).
+  const ww1 = 195; // 3h15
+  const ww2 = 225; // 3h45
+  const ww3 = 248; // 4h08
 
-async function removeBacklogItem(id) {
-  if (ENABLE_SUPABASE_SYNC && supabase && (await isSignedIn())) {
-    await removeBacklogRemote(id);
-  } else {
-    const list = loadBacklogLocal().filter(x => x.id !== id);
-    saveBacklogLocal(list);
-  }
-}
+  // Nap 1 start/end
+  const nap1StartMin = (() => {
+    if (mode === "today" && log?.nap1Start) {
+      const t = parseTimeToMinutes(log.nap1Start);
+      if (t != null) return t;
+    }
+    return wakeMin + ww1;
+  })();
 
-// ==========================
-// Schedule engine
-// ==========================
-// Blocks: { id, title, start, end, category, visibility, fixed? }
-function baseSchedule(dateStr, plan, log) {
-  // Availability blocks (initialized early to avoid TDZ errors)
-  let julioUnavail = [];
-  let kristynUnavail = [];
+  const nap1EndMin = (() => {
+    if (mode === "today") {
+      const end = log?.nap1End ? parseTimeToMinutes(log.nap1End) : null;
+      if (end != null) return end;
+      // if started but not ended, forecast end:
+      const s = log?.nap1Start ? parseTimeToMinutes(log.nap1Start) : null;
+      if (s != null) return s + defaultNap;
+    }
+    return nap1StartMin + defaultNap;
+  })();
 
-  const napDefault = settings.napDefaultMin;
+  const nap2StartMin = (() => {
+    if (mode === "today" && log?.nap2Start) {
+      const t = parseTimeToMinutes(log.nap2Start);
+      if (t != null) return t;
+    }
+    return nap1EndMin + ww2;
+  })();
 
-  const bedtimeOwnerValue = plan?.considerations?.bedtimeOwner || "Kristyn";
-  const soloBedtime = bedtimeOwnerValue === "Kristyn" || bedtimeOwnerValue === "Julio";
-  const soloBuffer = soloBedtime ? settings.soloBedtimeBufferMin : 0;
+  const nap2EndMin = (() => {
+    if (mode === "today") {
+      const end = log?.nap2End ? parseTimeToMinutes(log.nap2End) : null;
+      if (end != null) return end;
+      const s = log?.nap2Start ? parseTimeToMinutes(log.nap2Start) : null;
+      if (s != null) return s + defaultNap;
+    }
+    return nap2StartMin + defaultNap;
+  })();
 
-  const wakeTime = log.wakeActual || plan?.wakeDefault || settings.wakeDefault;
-  const wake = makeDate(dateStr, wakeTime);
+  const bedtimeAsleepMin = nap2EndMin + ww3; // target asleep time
+  const bedtimeRoutineMin = 20;
+  const bedtimeStartMin = bedtimeAsleepMin - bedtimeRoutineMin;
 
-  // Wake window midpoints (your ranges)
-  const ww1 = 195; // 3.25h
-  const ww2 = 225; // 3.75h
-  const ww3 = 248; // 4.13h
+  // Routine blocks (durations in minutes)
+  const morningBlocks = [
+    { title: "Family cuddle", dur: 15 },
+    { title: "Get dressed", dur: 10 },
+    { title: "Prep + eat breakfast", dur: 35 },
+    { title: "Brush teeth", dur: 5 },
+  ];
 
   const blocks = [];
-  const add = (b) => blocks.push(b);
 
-  // Bedtime label
-  const bedtimeLabel =
-    bedtimeOwnerValue === "Split" ? "Bedtime (Split)" : `Bedtime (${bedtimeOwnerValue})`;
-
-  // Morning routine
-  let t = wake;
-  add({ id:"wake", title:"Wake up", start:t, end:addMin(t,5), category:"baby", visibility:"nanny" });
-  t = addMin(t,5);
-  add({ id:"cuddle", title:"Family cuddle", start:t, end:addMin(t,15), category:"family", visibility:"full" });
-  t = addMin(t,15);
-  add({ id:"dress", title:"Get dressed", start:t, end:addMin(t,15), category:"baby", visibility:"nanny" });
-  t = addMin(t,15);
-  add({ id:"breakfast_prep", title:"Prep baby's breakfast", start:t, end:addMin(t,20), category:"baby", visibility:"nanny" });
-  t = addMin(t,20);
-  add({ id:"breakfast", title:"Breakfast", start:t, end:addMin(t,20), category:"baby", visibility:"nanny" });
-  t = addMin(t,20);
-  add({ id:"teeth_am", title:"Brush teeth", start:t, end:addMin(t,5), category:"baby", visibility:"nanny" });
-  t = addMin(t,5);
-
-  // Nap 1 timing: actuals if available; else WW1 midpoint
-  const nap1StartT = log.nap1Start || toHHMM(addMin(wake, ww1));
-  const nap1StartDt = makeDate(dateStr, nap1StartT);
-
-  const nap1EndT = log.nap1End || toHHMM(addMin(nap1StartDt, napDefault));
-  const nap1EndDt = makeDate(dateStr, nap1EndT);
-
-  const nap1Care = caregiverFor(addMin(nap1StartDt, -10), nap1EndDt);
-
-  add({
-    id:"nap1_routine",
-    title:`Nap routine (${nap1Care})`,
-    start:addMin(nap1StartDt,-10),
-    end:nap1StartDt,
-    category:"baby",
-    visibility:"nanny"
-  });
-
-  add({
-    id:"nap1",
-    title:`Nap 1 (${nap1Care})`,
-    start:nap1StartDt,
-    end:nap1EndDt,
-    category:"sleep",
-    visibility:"nanny"
-  });
-
-  // Lunch + snack anchors (no play blocks)
-  const lunchPrepStart = addMin(nap1EndDt, 90);
-  add({ id:"lunch_prep", title:"Prep baby's lunch", start:lunchPrepStart, end:addMin(lunchPrepStart,20), category:"baby", visibility:"nanny" });
-  add({ id:"lunch", title:"Lunch", start:addMin(lunchPrepStart,20), end:addMin(lunchPrepStart,45), category:"baby", visibility:"nanny" });
-
-  const snackStart = addMin(nap1EndDt, 170);
-  add({ id:"snack", title:"Snack + milk", start:snackStart, end:addMin(snackStart,15), category:"baby", visibility:"nanny" });
-
-  // Nap 2 timing: actuals or WW2 midpoint from nap1 end
-  const nap2StartT = log.nap2Start || toHHMM(addMin(nap1EndDt, ww2));
-  const nap2StartDt = makeDate(dateStr, nap2StartT);
-
-  const nap2EndT = log.nap2End || toHHMM(addMin(nap2StartDt, napDefault));
-  const nap2EndDt = makeDate(dateStr, nap2EndT);
-
-  const nap2Care = caregiverFor(addMin(nap2StartDt, -10), nap2EndDt);
-
-  add({
-    id:"nap2_routine",
-    title:`Nap routine (${nap2Care})`,
-    start:addMin(nap2StartDt,-10),
-    end:nap2StartDt,
-    category:"baby",
-    visibility:"nanny"
-  });
-
-  add({
-    id:"nap2",
-    title:`Nap 2 (${nap2Care})`,
-    start:nap2StartDt,
-    end:nap2EndDt,
-    category:"sleep",
-    visibility:"nanny"
-  });
-
-  // Evening anchors
-  const dinnerPrepStart = addMin(nap2EndDt, 120);
-  const dinnerPrepStartAdj = soloBedtime ? addMin(dinnerPrepStart, -10) : dinnerPrepStart;
-
-  add({ id:"dinner_prep", title:"Prep baby's dinner", start:dinnerPrepStartAdj, end:addMin(dinnerPrepStartAdj,30), category:"baby", visibility:"nanny" });
-  add({ id:"dinner", title:"Dinner", start:addMin(dinnerPrepStartAdj,30), end:addMin(dinnerPrepStartAdj,55), category:"baby", visibility:"nanny" });
-
-  // Bath planning: bath every 3 days, but can't be when Julio is working/unavailable.
-  // We'll schedule at preferredStart if set, otherwise default window after dinner.
-  const wantsBath = !!plan?.bathPlan?.wantsBath;
-  const preferred = plan?.bathPlan?.preferredStart;
-  let bathStart = preferred ? makeDate(dateStr, preferred) : addMin(dinnerPrepStartAdj, 70);
-  let bathEnd = addMin(bathStart, 15);
-
-  const ua0 = plan?.considerations?.unavailability || { Kristyn: [], Julio: [] };
-  const cov0 = plan?.considerations?.coverage || { Nanny: [], Kayden: [] };
-
-  julioUnavail = (ua0.Julio || [])
-    .filter(x => x && x.start && x.end)
-    .map(x => ({ start: makeDate(dateStr, x.start), end: makeDate(dateStr, x.end), raw: x }));
-
-  kristynUnavail = (ua0.Kristyn || [])
-    .filter(x => x && x.start && x.end)
-    .map(x => ({ start: makeDate(dateStr, x.start), end: makeDate(dateStr, x.end), raw: x }));
-
-  const nannyCov = (cov0.Nanny || [])
-    .filter(x => x && x.start && x.end)
-    .map(x => ({ start: makeDate(dateStr, x.start), end: makeDate(dateStr, x.end), raw: x }));
-
-  const kaydenCov = (cov0.Kayden || [])
-    .filter(x => x && x.start && x.end)
-    .map(x => ({ start: makeDate(dateStr, x.start), end: makeDate(dateStr, x.end), raw: x }));
-
-  function overlapsAny(s, e, ranges) {
-    return (ranges || []).some(r => overlaps(s, e, r.start, r.end));
-  }
-  function coveredFully(s, e, ranges) {
-    return (ranges || []).some(r => r.start.getTime() <= s.getTime() && r.end.getTime() >= e.getTime());
-  }
-  function caregiverFor(s, e) {
-    const kAvail = !overlapsAny(s, e, kristynUnavail);
-    const jAvail = !overlapsAny(s, e, julioUnavail);
-    if (kAvail && jAvail) return "Kristyn or Julio";
-    if (kAvail) return "Kristyn";
-    if (jAvail) return "Julio";
-    // Both unavailable → only then assign to coverage
-    if (coveredFully(s, e, kaydenCov)) return "Kayden";
-    if (coveredFully(s, e, nannyCov)) return "Nanny";
-    return "Uncovered";
+  // Helper for adding blocks
+  function addBlock(title, startMin, endMin, meta = {}) {
+    blocks.push({ id: uid(), title, startMin, endMin, meta });
   }
 
-  if (wantsBath) {
-    if (overlapsAny(bathStart, bathEnd, julioUnavail)) {
-      // If bath overlaps Julio unavailable, skip bath and add a note block for parents (so you see why).
-      add({
-        id:"bath_skipped",
-        title:"Bath skipped (Julio unavailable)",
-        start:bathStart,
-        end:bathEnd,
-        category:"note",
-        visibility:"full"
-      });
-    } else {
-      add({ id:"bath", title:"Bath", start:bathStart, end:bathEnd, category:"baby", visibility:"nanny" });
-    }
+  // Morning routine right after wake
+  let cursor = wakeMin;
+  for (const b of morningBlocks) {
+    addBlock(b.title, cursor, cursor + b.dur, { kind: "routine" });
+    cursor += b.dur;
   }
 
-  // PM snack + teeth + bedtime routine (anchored after bath time window)
-  const anchorAfterBath = wantsBath ? bathEnd : addMin(dinnerPrepStartAdj, 85);
-  add({ id:"snack_pm", title:"Snack + milk", start:anchorAfterBath, end:addMin(anchorAfterBath,15), category:"baby", visibility:"nanny" });
-  add({ id:"teeth_pm", title:"Brush teeth", start:addMin(anchorAfterBath,15), end:addMin(anchorAfterBath,20), category:"baby", visibility:"nanny" });
-
-  // Bedtime routine: add solo buffer if solo bedtime
-  const bedRoutineStart = addMin(anchorAfterBath,20);
-  const bedRoutineEnd = addMin(bedRoutineStart, 25 + soloBuffer);
-  add({ id:"bed_routine", title: bedtimeLabel, start: bedRoutineStart, end: bedRoutineEnd, category:"baby", visibility:"nanny" });
-
-  // Parent after-bed tasks are NOT scheduled automatically anymore (you asked to remove floating tasks)
-  // You can add them as appointments if you want them visible on the calendar.
-
-  // Unavailability + coverage blocks
-  for (const r of julioUnavail) {
-    add({
-      id: newId("julio_unavail"),
-      title: `Julio unavailable (${toHHMM(r.start)}–${toHHMM(r.end)})`,
-      start: r.start,
-      end: r.end,
-      category: "availability",
-      visibility: "full",
-      fixed: true
-    });
+  // Nap 1 routine + nap
+  addBlock("Nap routine (before Nap 1)", nap1StartMin - DEFAULTS.napRoutineMinutes, nap1StartMin, { kind: "napRoutine" });
+  {
+    const caregiver = pickNapCaregiver(plan || {}, nap1StartMin, nap1EndMin);
+    addBlock("Nap 1", nap1StartMin, nap1EndMin, { kind: "nap", caregiver });
   }
 
-  for (const r of kristynUnavail) {
-    add({
-      id: newId("kristyn_unavail"),
-      title: `Kristyn unavailable (${toHHMM(r.start)}–${toHHMM(r.end)})`,
-      start: r.start,
-      end: r.end,
-      category: "availability",
-      visibility: "full",
-      fixed: true
-    });
+  // Lunch + snack in the midday open window
+  const lunchStart = clamp(nap1EndMin + 30, wakeMin + 240, nap2StartMin - 60);
+  addBlock("Prep + eat lunch", lunchStart, lunchStart + 35, { kind: "meal" });
+  addBlock("Snack + milk", lunchStart + 60, lunchStart + 70, { kind: "meal" });
+
+  // Nap 2 routine + nap
+  addBlock("Nap routine (before Nap 2)", nap2StartMin - DEFAULTS.napRoutineMinutes, nap2StartMin, { kind: "napRoutine" });
+  {
+    const caregiver = pickNapCaregiver(plan || {}, nap2StartMin, nap2EndMin);
+    addBlock("Nap 2", nap2StartMin, nap2EndMin, { kind: "nap", caregiver });
   }
 
-  for (const r of kaydenCov) {
-    add({
-      id: newId("kayden_cov"),
-      title: `Kayden coverage (${toHHMM(r.start)}–${toHHMM(r.end)})`,
-      start: r.start,
-      end: r.end,
-      category: "availability",
-      visibility: "full",
-      fixed: true
-    });
+  // Dinner and evening routine
+  const dinnerStart = clamp(bedtimeStartMin - 95, nap2EndMin + 60, bedtimeStartMin - 70);
+  addBlock("Prep + eat dinner", dinnerStart, dinnerStart + 45, { kind: "meal" });
+
+  // Bath due?
+  const bathDue = isBathDue();
+  if (bathDue) {
+    addBlock("Bath (due today)", dinnerStart + 55, dinnerStart + 75, { kind: "bath", rule: "every3days" });
   }
 
-  for (const r of nannyCov) {
-    add({
-      id: newId("nanny_cov"),
-      title: `Nanny coverage (${toHHMM(r.start)}–${toHHMM(r.end)})`,
-      start: r.start,
-      end: r.end,
-      category: "availability",
-      visibility: "full",
-      fixed: true
-    });
-  }
+  addBlock("Snack + milk", bedtimeStartMin - 35, bedtimeStartMin - 25, { kind: "meal" });
+  addBlock("Brush teeth", bedtimeStartMin - 20, bedtimeStartMin - 15, { kind: "routine" });
 
-// Sort
-  blocks.sort((a,b)=>a.start-b.start);
-  return blocks;
-}
+  // Bedtime routine with assigned parent (plan)
+  const bedtimeBy = (plan?.bedtimeBy === "Julio") ? "Julio" : "Kristyn";
+  addBlock(`Bedtime routine (${bedtimeBy})`, bedtimeStartMin, bedtimeAsleepMin, { kind: "bedtime", bedtimeBy });
 
-function toHHMM(dt) {
-  return `${pad2(dt.getHours())}:${pad2(dt.getMinutes())}`;
-}
+  // Appointments (scheduling only if overlap with existing blocks)
+  const appts = (plan?.appointments || []).map(a => ({
+    id: a.id || uid(),
+    title: a.title || "Appointment",
+    startMin: parseTimeToMinutes(a.start) ?? null,
+    endMin: parseTimeToMinutes(a.end) ?? null
+  })).filter(a => a.startMin != null && a.endMin != null && a.endMin > a.startMin);
 
-// Apply fixed appointments to base schedule
-// Rule: appointments are fixed. If an appointment overlaps an existing block, we push the overlapped block
-// and all later *non-fixed* blocks forward so the appointment stays intact.
-// If the appointment lands in open time, nothing moves.
-function applyAppointments(dateStr, blocks, appts) {
-  if (!appts || !appts.length) return blocks;
-  const fixed = appts
-    .filter(a => a && a.start && a.end)
-    .map(a => ({
-      id: a.id || newId("appt"),
-      title: a.title || "Appointment",
-      start: makeDate(dateStr, a.start),
-      end: makeDate(dateStr, a.end),
-      category: "appointment",
-      visibility: "full",
-      fixed: true
-    }))
-    .sort((a,b)=>a.start-b.start);
+  // Mark overlaps; do not force reschedule unless it overlaps naps
+  for (const ap of appts) {
+    addBlock(`📅 ${ap.title}`, ap.startMin, ap.endMin, { kind: "appointment" });
 
-  // Clone blocks (we may shift)
-  const out = blocks.map(b => ({...b}));
+    // If appointment overlaps Nap blocks, shift nap slightly if possible, else flag.
+    for (const b of blocks.filter(x => x.meta?.kind === "nap")) {
+      const overlap = !(ap.endMin <= b.startMin || ap.startMin >= b.endMin);
+      if (!overlap) continue;
 
-  for (const f of fixed) {
-    // Insert fixed itself
-    out.push(f);
-
-    // Shift overlapping blocks that are not fixed
-    // We'll do it in chronological order so shifts cascade forward.
-    out.sort((a,b)=>a.start-b.start);
-
-    for (let i=0; i<out.length; i++) {
-      const b = out[i];
-      if (b.fixed) continue;
-      if (!overlaps(b.start, b.end, f.start, f.end)) continue;
-
-      // We only shift blocks that start before appointment ends
-      const shiftBy = (f.end.getTime() - Math.max(b.start.getTime(), f.start.getTime())) / 60000;
-      if (shiftBy <= 0) continue;
-
-      // Shift this block and any subsequent non-fixed blocks that start at/after this block's start
-      const pivot = b.start.getTime();
-      for (let j=0; j<out.length; j++) {
-        const x = out[j];
-        if (x.fixed) continue;
-        if (x.start.getTime() >= pivot) {
-          x.start = addMin(x.start, shiftBy);
-          x.end = addMin(x.end, shiftBy);
+      const duration = b.endMin - b.startMin;
+      // try shift earlier up to 30 minutes
+      let shifted = false;
+      const tryEarlierStart = b.startMin - 20;
+      if (tryEarlierStart >= wakeMin && (tryEarlierStart + duration) <= ap.startMin) {
+        b.startMin = tryEarlierStart;
+        b.endMin = b.startMin + duration;
+        b.meta.adjustedForAppt = true;
+        shifted = true;
+      }
+      // try shift later up to 60 minutes
+      if (!shifted) {
+        const tryLaterStart = ap.endMin + 10;
+        if (tryLaterStart + duration <= bedtimeStartMin - 30) {
+          b.startMin = tryLaterStart;
+          b.endMin = b.startMin + duration;
+          b.meta.adjustedForAppt = true;
+          shifted = true;
         }
       }
-      // re-sort before continuing
-      out.sort((a,b)=>a.start-b.start);
-      break; // re-check with updated positions
+      if (!shifted) {
+        b.meta.conflict = `Overlaps ${ap.title}`;
+      }
     }
   }
 
-  // Final sort
-  out.sort((a,b)=>a.start-b.start);
-  return out;
-}
+  // Sort blocks; remove any with bad times
+  const cleaned = blocks
+    .map(b => ({ ...b, startMin: Math.round(b.startMin), endMin: Math.round(b.endMin) }))
+    .filter(b => b.endMin > b.startMin)
+    .sort((a,b) => a.startMin - b.startMin);
 
-function generateSchedule(dateStr, plan, log, viewMode) {
-  const blocks0 = baseSchedule(dateStr, plan, log);
-
-  // Use tomorrow appointments if schedule for tomorrow; otherwise use plan's appts for that date
-  const appts = plan?.appointments?.tomorrow || [];
-  const withAppts = applyAppointments(dateStr, blocks0, appts);
-
-  const filtered = viewMode === "nanny"
-    ? withAppts.filter(b => b.visibility !== "full")
-    : withAppts;
-  filtered.sort((a,b)=>a.start-b.start);
-  return filtered;
-}
-
-// ==========================
-// Rendering
-// ==========================
-function renderScheduleList(ulEl, blocks) {
-  ulEl.innerHTML = "";
-  if (!blocks.length) {
-    const li = document.createElement("li");
-    li.textContent = "(No schedule yet)";
-    ulEl.appendChild(li);
-    return;
-  }
-
-  blocks.forEach(b => {
-    const li = document.createElement("li");
-    const time = `${fmtTime(b.start)}–${fmtTime(b.end)}`;
-    const cat = b.category ? ` <span class="catTag">• ${escapeHtml(b.category)}</span>` : "";
-    li.innerHTML = `<span class="timeTag">${escapeHtml(time)}</span> ${escapeHtml(b.title)}${cat}`;
-    ulEl.appendChild(li);
-  });
-}
-
-function renderTimeline(containerEl, blocks, opts = {}) {
-  // 2-hour grid timeline. Shows only scheduled blocks; open time is blank.
-  const startHour = opts.startHour ?? 0;
-  const endHour = opts.endHour ?? 24;
-  const pxPerMin = opts.pxPerMin ?? 1.2; // 24h ≈ 1728px tall (scrollable)
-  const totalMins = (endHour - startHour) * 60;
-
-  containerEl.innerHTML = "";
-  const viewport = document.createElement("div");
-  viewport.className = "timelineViewport";
-
-  const inner = document.createElement("div");
-  inner.className = "timelineInner";
-  inner.style.minHeight = `${Math.max(900, totalMins * pxPerMin)}px`;
-
-  // Markers every 2 hours
-  for (let h = startHour; h <= endHour; h += 2) {
-    const minsFromStart = (h - startHour) * 60;
-    const top = minsFromStart * pxPerMin;
-
-    const label = document.createElement("div");
-    label.className = "timeMarker";
-    label.style.top = `${top}px`;
-    label.textContent = fmtHourLabel(h);
-
-    const line = document.createElement("div");
-    line.className = "gridLine";
-    line.style.top = `${top}px`;
-
-    inner.appendChild(label);
-    inner.appendChild(line);
-  }
-
-  // Blocks
-  if (!blocks?.length) {
-    const empty = document.createElement("div");
-    empty.className = "status muted";
-    empty.style.margin = "12px";
-    empty.textContent = "No schedule yet — log a wake time or run the tonight quiz.";
-    viewport.appendChild(empty);
-    containerEl.appendChild(viewport);
-    return;
-  }
-
-  blocks.forEach(b => {
-    const s = b.start;
-    const e = b.end;
-    const startMins = (s.getHours() - startHour) * 60 + s.getMinutes();
-    const endMins = (e.getHours() - startHour) * 60 + e.getMinutes();
-    const top = startMins * pxPerMin;
-    const height = Math.max(18, (endMins - startMins) * pxPerMin);
-
-    // Skip if outside window
-    if (endMins < 0 || startMins > totalMins) return;
-
-    const block = document.createElement("div");
-    block.className = "tlBlock";
-    block.style.top = `${top}px`;
-    block.style.height = `${height}px`;
-
-    const title = document.createElement("div");
-    title.className = "tltitle";
-    title.textContent = b.title;
-
-    const time = document.createElement("div");
-    time.className = "tltime";
-    time.textContent = `${fmtTime(b.start)} – ${fmtTime(b.end)}`;
-
-    block.appendChild(title);
-    block.appendChild(time);
-
-    if (b.category) {
-      const meta = document.createElement("div");
-      meta.className = "tlmeta";
-      meta.textContent = b.category;
-      block.appendChild(meta);
+  // Nap caregiver assignment after potential shifts
+  cleaned.forEach(b => {
+    if (b.meta?.kind === "nap") {
+      b.meta.caregiver = pickNapCaregiver(plan || {}, b.startMin, b.endMin);
     }
-
-    inner.appendChild(block);
   });
 
-  viewport.appendChild(inner);
-  containerEl.appendChild(viewport);
+  return { wakeMin, bedtimeAsleepMin, blocks: cleaned };
 }
 
-function fmtHourLabel(h24) {
-  // h24: 0-24
-  const h = h24 % 24;
-  const ampm = h < 12 ? "AM" : "PM";
-  const hh = ((h + 11) % 12) + 1;
-  return `${hh}:00 ${ampm}`;
-}
-
-
-
-function updateNowNext(blocks) {
-  const now = new Date();
-  const current = blocks.find(b => now >= b.start && now < b.end);
-  const next = blocks.find(b => b.start > now);
-
-  nowPill.textContent = `Now — ${current ? current.title : "—"}`;
-  nextPill.textContent = `Next — ${next ? next.title : "—"}`;
-}
-
-// ==========================
-// Running list rendering
-// ==========================
-let runningListMode = "focus"; // focus|all
-
-async function refreshRunningList() {
-  try {
-    const dateStr = todayDate.value;
-    const list = await fetchBacklog();
-
-    let view = list;
-    if (runningListMode === "focus" && dateStr) {
-      view = list.filter(x => !x.done && x.focus_date === dateStr);
+/* ---------------------------
+   Bath tracking (rule: at least every 3 days; cannot be scheduled when Julio is unavailable)
+---------------------------- */
+function lastBathISODate() {
+  // Find most recent day log with bathDone=true.
+  const entries = Object.entries(state.logsByDate || {});
+  let best = null;
+  for (const [date, log] of entries) {
+    if (log?.bathDone === true) {
+      if (!best || date > best) best = date;
     }
+  }
+  return best;
+}
+function isBathDue() {
+  const today = toISODate(nowLocal());
+  const last = lastBathISODate();
+  if (!last) return true;
+  const d1 = new Date(last + "T12:00:00");
+  const d2 = new Date(today + "T12:00:00");
+  const diffDays = Math.round((d2 - d1) / (1000*60*60*24));
+  return diffDays >= DEFAULTS.bathEveryDays;
+}
+function bathWarningTextForTomorrow(plan) {
+  const due = isBathDue();
+  if (!due) return null;
 
-    // Sort: undone first, then created_at
-    view = [...view].sort((a,b) => Number(a.done) - Number(b.done) || (new Date(a.created_at) - new Date(b.created_at)));
+  // Rule: bath cannot be scheduled when Julio is unavailable/working.
+  // We'll look at tomorrow's dinner->bedtime window and check if Julio has ANY availability.
+  const jAvail = invertToAvailability(plan?.julioUnavail || []);
+  const dinnerToBedStart = parseTimeToMinutes("17:00"); // heuristic check window
+  const bed = parseTimeToMinutes("20:30");
+  const someAvail = jAvail.some(b => b.endMin > dinnerToBedStart && b.startMin < bed);
+  if (!someAvail) return "Bath is due, but Julio appears unavailable in the evening window. Plan intentionally (or log bath earlier).";
+  return "Bath is due (every 3 days). Consider fitting it in tonight.";
+}
 
-    brainDumpList.innerHTML = "";
-    if (!view.length) {
-      brainDumpList.innerHTML = `<div class="muted">${runningListMode === "focus" ? "No focus items for this day." : "Nothing yet."}</div>`;
-      return;
-    }
+/* ---------------------------
+   Data helpers: plans, logs, tasks
+---------------------------- */
+function getPlan(isoDate) {
+  return state.plansByDate[isoDate] || null;
+}
+function getLog(isoDate) {
+  return state.logsByDate[isoDate] || null;
+}
+function setPlan(isoDate, planObj) {
+  state.plansByDate[isoDate] = planObj;
+  saveLocalCache();
+}
+function setLog(isoDate, logObj) {
+  state.logsByDate[isoDate] = logObj;
+  saveLocalCache();
+}
+function upsertTask(task) {
+  const ix = state.tasks.findIndex(t => t.id === task.id);
+  if (ix >= 0) state.tasks[ix] = task;
+  else state.tasks.unshift(task);
+  saveLocalCache();
+}
+function deleteTaskLocal(id) {
+  state.tasks = state.tasks.filter(t => t.id !== id);
+  saveLocalCache();
+}
 
-    for (const item of view) {
-      const row = document.createElement("div");
-      row.className = "apptCard";
-      row.innerHTML = `
-        <div class="apptHeader">
-          <div style="display:flex; align-items:flex-start; gap:10px; width:100%;">
-            <input type="checkbox" data-done="${escapeHtml(item.id)}" ${item.done ? "checked" : ""} style="width:auto; margin-top:3px;" />
-            <div style="flex:1;">
-              <div class="apptTitle" style="${item.done ? "text-decoration:line-through; color:#6b7280;" : ""}">
-                ${escapeHtml(item.text)}
-              </div>
-              <div class="apptMeta">${item.focus_date ? `Focus: ${escapeHtml(item.focus_date)}` : ""}</div>
+async function syncPlan(isoDate) {
+  if (!state.online || !supabase || !authSession || !state.householdId) return;
+  const data = state.plansByDate[isoDate];
+  if (!data) return;
+  await sbUpsert("day_plans", { household_id: state.householdId, date: isoDate, data }, "household_id,date");
+}
+
+async function syncLog(isoDate) {
+  if (!state.online || !supabase || !authSession || !state.householdId) return;
+  const data = state.logsByDate[isoDate];
+  if (!data) return;
+  await sbUpsert("day_logs", { household_id: state.householdId, date: isoDate, data }, "household_id,date");
+}
+
+async function syncTask(task) {
+  if (!state.online || !supabase || !authSession || !state.householdId) return;
+  await sbUpsert("tasks", {
+    household_id: state.householdId,
+    id: task.id,
+    title: task.title,
+    status: task.status,
+    completed_at: task.completedAt,
+    assigned_date: task.assignedDate,
+    created_at: task.createdAt || new Date().toISOString(),
+  }, "id");
+}
+
+/* ---------------------------
+   UI Views
+---------------------------- */
+function render() {
+  const root = $("#viewRoot");
+  if (!root) return;
+
+  const route = state.route;
+  setActiveTab(route);
+
+  if (route === "#evening") root.innerHTML = viewEvening();
+  else if (route === "#today") root.innerHTML = viewToday();
+  else if (route === "#tasks") root.innerHTML = viewTasks();
+  else if (route === "#history") root.innerHTML = viewHistory();
+  else if (route === "#settings") root.innerHTML = viewSettings();
+  else root.innerHTML = viewToday();
+
+  // Wire handlers for the visible view
+  wireViewHandlers();
+}
+
+function viewEvening() {
+  const today = toISODate(nowLocal());
+  const tomorrow = addDays(today, 1);
+  const plan = getPlan(tomorrow);
+
+  const warning = plan ? bathWarningTextForTomorrow(plan) : null;
+
+  return `
+    <div class="grid two">
+      <section class="card">
+        <h2>Evening</h2>
+        <div class="note">This is the simple end-of-day flow. It helps you: clean up today, brain dump tasks, pick tomorrow’s focus, and capture availability so naps get auto-assigned.</div>
+        <div class="hr"></div>
+        <div class="row">
+          <button class="btn primary" id="btnLaunchQuiz">Prepare for the Day Ahead</button>
+          <button class="btn" id="btnPreviewTomorrow">Preview tomorrow</button>
+          <button class="btn" id="btnExportTomorrowICS">Sync tomorrow to Google Calendar</button>
+        </div>
+        <div class="kpi">
+          <div class="chip"><b>Tomorrow:</b> ${tomorrow}</div>
+          <div class="chip"><b>Expected wake:</b> ${loadConfig().expectedWake}</div>
+        </div>
+        ${warning ? `<div class="hr"></div><div class="badge warn">⚠ ${escapeHtml(warning)}</div>` : ""}
+        <div class="hr"></div>
+        <div class="note"><b>Tip:</b> The quiz saves a “Day Plan” for tomorrow. During the day, the Today page uses your actual wake/nap times to keep the schedule realistic.</div>
+      </section>
+
+      <section class="card">
+        <h2>Tomorrow plan (saved)</h2>
+        ${plan ? renderPlanSummary(plan) : `<div class="note">No plan saved yet. Tap <b>Prepare for the Day Ahead</b> to make one.</div>`}
+      </section>
+    </div>
+  `;
+}
+
+function viewToday() {
+  const today = toISODate(nowLocal());
+  const plan = getPlan(today) || getPlan(addDays(today, 0)) || {}; // allow plan for today
+  const log = getLog(today) || {
+    wakeTime: null,
+    nap1Start: null, nap1End: null,
+    nap2Start: null, nap2End: null,
+    bedtimeTime: null,
+    overnightNotes: "",
+    bathDone: false,
+    updatedAt: new Date().toISOString(),
+  };
+
+  const schedule = buildSchedule({ isoDate: today, plan, log, mode: "today" });
+  const tasksForToday = state.tasks.filter(t => t.assignedDate === today && t.status !== "done");
+
+  const wakeLabel = log.wakeTime ? log.wakeTime : "(not set yet)";
+  const nap1Label = `${log.nap1Start || "—"} → ${log.nap1End || "—"}`;
+  const nap2Label = `${log.nap2Start || "—"} → ${log.nap2End || "—"}`;
+
+  const bathDue = isBathDue();
+
+  return `
+    <div class="grid two">
+      <section class="card">
+        <h2>Today</h2>
+        <div class="note">Use the quick buttons to log real times. The schedule below updates automatically.</div>
+        <div class="hr"></div>
+
+        <div class="row" style="justify-content: space-between;">
+          <div class="tiny"><b>Date:</b> ${today}</div>
+          ${bathDue ? `<span class="badge warn">⚠ Bath is due</span>` : `<span class="badge good">Bath OK</span>`}
+        </div>
+
+        <div class="hr"></div>
+
+        <div class="card" style="padding:12px; box-shadow:none;">
+          <div class="row" style="justify-content: space-between;">
+            <div class="tiny"><b>Wake time:</b> <span id="wakeLabel">${wakeLabel}</span></div>
+            <div class="row">
+              <button class="btn mini" id="btnWakeNow">Set wake to now</button>
             </div>
           </div>
-          <div style="display:flex; gap:8px; align-items:center;">
-            ${dateStr ? `<button type="button" class="ghost" data-focus="${escapeHtml(item.id)}">${item.focus_date === dateStr ? "Unfocus" : "Focus"}</button>` : ""}
-            <button type="button" class="danger" data-del="${escapeHtml(item.id)}">Remove</button>
+          <div class="field">
+            <label>Or type it (HH:MM)</label>
+            <input inputmode="numeric" placeholder="06:45" id="wakeInput" value="${log.wakeTime || ""}">
           </div>
+
+          <div class="hr"></div>
+
+          <div class="row" style="justify-content: space-between;">
+            <div class="tiny"><b>Nap 1:</b> <span id="nap1Label">${nap1Label}</span></div>
+            <div class="row">
+              <button class="btn mini" id="btnNap1Toggle">Tap to log Nap 1 start/end</button>
+            </div>
+          </div>
+          <div class="split">
+            <div class="field">
+              <label>Nap 1 start</label>
+              <input inputmode="numeric" placeholder="09:50" id="nap1StartInput" value="${log.nap1Start || ""}">
+            </div>
+            <div class="field">
+              <label>Nap 1 end</label>
+              <input inputmode="numeric" placeholder="11:05" id="nap1EndInput" value="${log.nap1End || ""}">
+            </div>
+          </div>
+
+          <div class="hr"></div>
+
+          <div class="row" style="justify-content: space-between;">
+            <div class="tiny"><b>Nap 2:</b> <span id="nap2Label">${nap2Label}</span></div>
+            <div class="row">
+              <button class="btn mini" id="btnNap2Toggle">Tap to log Nap 2 start/end</button>
+            </div>
+          </div>
+          <div class="split">
+            <div class="field">
+              <label>Nap 2 start</label>
+              <input inputmode="numeric" placeholder="15:00" id="nap2StartInput" value="${log.nap2Start || ""}">
+            </div>
+            <div class="field">
+              <label>Nap 2 end</label>
+              <input inputmode="numeric" placeholder="16:15" id="nap2EndInput" value="${log.nap2End || ""}">
+            </div>
+          </div>
+
+          <div class="hr"></div>
+
+          <div class="row" style="justify-content: space-between;">
+            <div class="tiny"><b>Bedtime (tracking only):</b></div>
+            <div class="row">
+              <button class="btn mini" id="btnBedtimeNow">Set bedtime to now</button>
+            </div>
+          </div>
+          <div class="split">
+            <div class="field">
+              <label>Bedtime time</label>
+              <input inputmode="numeric" placeholder="19:50" id="bedtimeInput" value="${log.bedtimeTime || ""}">
+            </div>
+            <div class="field">
+              <label>Overnight notes</label>
+              <input placeholder="Anything to remember..." id="overnightInput" value="${escapeAttr(log.overnightNotes || "")}">
+            </div>
+          </div>
+
+          <div class="row" style="justify-content: space-between;">
+            <div class="row">
+              <input type="checkbox" id="bathDoneChk" ${log.bathDone ? "checked" : ""} />
+              <label for="bathDoneChk" style="margin:0; color:var(--text)">Bath done today</label>
+            </div>
+            <button class="btn primary" id="btnSaveLog">Save today’s log</button>
+          </div>
+          <div class="note" style="margin-top:8px;">Saving writes to your History (and syncs if signed in).</div>
         </div>
-      `;
-      brainDumpList.appendChild(row);
-    }
+      </section>
 
-    brainDumpList.querySelectorAll("input[data-done]").forEach(cb => {
-      cb.onchange = async () => {
-        await toggleBacklogDone(cb.getAttribute("data-done"), cb.checked);
-        await refreshRunningList();
-      };
-    });
-    brainDumpList.querySelectorAll("button[data-del]").forEach(btn => {
-      btn.onclick = async () => {
-        await removeBacklogItem(btn.getAttribute("data-del"));
-        await refreshRunningList();
-      };
-    });
-    brainDumpList.querySelectorAll("button[data-focus]").forEach(btn => {
-      btn.onclick = async () => {
-        const id = btn.getAttribute("data-focus");
-        const listNow = await fetchBacklog();
-        const item = listNow.find(x => x.id === id);
-        const newVal = item?.focus_date === dateStr ? null : dateStr;
-        await setBacklogFocusDate(id, newVal);
-        await refreshRunningList();
-      };
-    });
+      <section class="card">
+        <h2>Today’s schedule + tasks</h2>
+        <div class="row" style="margin-top:8px"><button class="btn" id="btnExportTodayICS">Sync today to Google Calendar</button></div>
+        <div class="note">Open gaps stay blank on purpose. Only real routine items and appointments show.</div>
+        <div class="hr"></div>
 
-  } catch (e) {
-    brainDumpList.innerHTML = `<div class="status error">${escapeHtml(e.message || String(e))}</div>`;
-  }
-}
+        ${renderTimeline(schedule.blocks)}
 
-// ==========================
-// Today UI + reflow
-// ==========================
-async function loadTodayUI(dateStr) {
-  todayDate.value = dateStr;
-  calendarId.value = localStorage.getItem("calendarId") || DEFAULT_CALENDAR_ID;
-
-  const plan = (await loadPlan(dateStr)) || defaultPlan(dateStr);
-  const log = await loadLog(dateStr);
-
-  // Wake default if needed
-  const wake = log.wakeActual || plan?.wakeDefault || settings.wakeDefault;
-  todayWake.value = wake;
-
-  nap1Start.value = log.nap1Start || "";
-  nap1End.value = log.nap1End || "";
-  nap2Start.value = log.nap2Start || "";
-  nap2End.value = log.nap2End || "";
-
-  bedtimeActual.value = log.bedtimeActual || "";
-  nightNotes.value = log.nightNotes || "";
-
-  await reflowToday(false);
-  await refreshRunningList();
-}
-
-async function reflowToday(showToast=true) {
-  const dateStr = todayDate.value;
-  if (!dateStr) return;
-
-  const plan = (await loadPlan(dateStr)) || defaultPlan(dateStr);
-  const log = await loadLog(dateStr);
-
-  // Pull from UI into log, then save
-  log.wakeActual = todayWake.value || plan.wakeDefault || settings.wakeDefault;
-  log.nap1Start = nap1Start.value || null;
-  log.nap1End = nap1End.value || null;
-  log.nap2Start = nap2Start.value || null;
-  log.nap2End = nap2End.value || null;
-  log.bedtimeActual = bedtimeActual.value || null;
-  log.nightNotes = nightNotes.value || "";
-
-  await saveLog(dateStr, log);
-
-  const viewMode = nannyView.checked ? "nanny" : "full";
-  const blocks = generateSchedule(dateStr, plan, log, viewMode);
-
-  renderTimeline(todayPreview, blocks);
-  updateNowNext(blocks);
-
-  if (showToast) setStatus(todayStatus, "Updated.", "success");
-}
-
-// ==========================
-// Tonight quiz
-// ==========================
-let quizIndex = 0;
-let quizDraftPlan = null; // plan for tomorrow
-let quizTonightAppts = []; // appointments for tonight (optional)
-let quizTempBacklog = null; // cached backlog list for rendering
-
-function openQuiz() {
-  quizOverlay.style.display = "flex";
-  quizOverlay.setAttribute("aria-hidden", "false");
-  quizIndex = 0;
-  setStatus(quizFooterStatus, "", "muted");
-  renderQuizStep();
-}
-
-function closeQuiz() {
-  quizOverlay.style.display = "none";
-  quizOverlay.setAttribute("aria-hidden", "true");
-}
-
-quizCloseBtn.onclick = closeQuiz;
-quizOverlay.addEventListener("click", (e) => {
-  if (e.target === quizOverlay) closeQuiz();
-});
-
-function quizSteps() {
-  return [
-    { title: "Tomorrow basics", hint: "Set tomorrow’s date and a best-guess wake time.", render: renderStepBasics, onNext: readStepBasics },
-    { title: "What’s different tomorrow?", hint: "Work coverage and bedtime owner.", render: renderStepConsiderations, onNext: readStepConsiderations },
-    { title: "Appointments tonight", hint: "Optional — use for your own planning (does not affect tomorrow schedule).", render: renderStepTonightAppts, onNext: readStepTonightAppts, skippable:true },
-    { title: "Appointments tomorrow", hint: "Fixed blocks. If they overlap routine blocks, the routine shifts after the appointment.", render: renderStepTomorrowAppts, onNext: readStepTomorrowAppts },
-    { title: "Bath planning", hint: "Bath at least every 3 days. Not allowed when Julio is unavailable/working.", render: renderStepBath, onNext: readStepBath, skippable:true },
-    { title: "Pick focus items", hint: "Choose a few items from the running list to focus on tomorrow.", render: renderStepFocus, onNext: readStepFocus, skippable:true },
-    { title: "Review + save", hint: "Save the plan. You can still adjust tomorrow by logging actual wake + naps.", render: renderStepReview, onNext: saveQuizPlan }
-  ];
-}
-
-function updateQuizProgress() {
-  const steps = quizSteps();
-  const pct = Math.round(((quizIndex + 1) / steps.length) * 100);
-  quizProgress.style.width = `${pct}%`;
-}
-
-async function renderQuizStep() {
-  const steps = quizSteps();
-  const step = steps[quizIndex];
-  quizTitle.textContent = step.title;
-  quizHint.textContent = step.hint;
-  updateQuizProgress();
-
-  quizBackBtn.disabled = quizIndex === 0;
-  quizSkipBtn.style.display = step.skippable ? "" : "none";
-  quizNextBtn.textContent = (quizIndex === steps.length - 1) ? "Save" : "Next";
-
-  // Ensure draft plan exists
-  if (!quizDraftPlan) {
-    const tomorrow = addDays(dateToYMD(new Date()), 1);
-    const existing = await loadPlan(tomorrow);
-    quizDraftPlan = existing ? normalizePlan(existing, tomorrow) : defaultPlan(tomorrow);
-    // Ensure appointments shape exists
-    quizDraftPlan.appointments = quizDraftPlan.appointments || { tonight: [], tomorrow: [] };
-    quizTonightAppts = (quizDraftPlan.appointments.tonight || []);
-  }
-
-  // load backlog cache for focus step
-  if (quizTempBacklog === null) {
-    try { quizTempBacklog = await fetchBacklog(); }
-    catch { quizTempBacklog = []; }
-  }
-
-  // render
-  await step.render();
-}
-
-function normalizePlan(plan, dateStr) {
-  // Upgrade older plan structures to newer one
-  const p = { ...defaultPlan(dateStr), ...plan, date: dateStr };
-  // Migrate old considerations format
-  if (!p.considerations && plan.considerations) p.considerations = plan.considerations;
-  p.considerations = { ...defaultPlan(dateStr).considerations, ...(p.considerations || {}) };
-  // Ensure new block structures exist
-  if (!p.considerations.unavailability) p.considerations.unavailability = { Kristyn: [], Julio: [] };
-  if (!p.considerations.unavailability.Kristyn) p.considerations.unavailability.Kristyn = [];
-  if (!p.considerations.unavailability.Julio) p.considerations.unavailability.Julio = [];
-
-  if (!p.considerations.coverage) p.considerations.coverage = { Nanny: [], Kayden: [] };
-  if (!p.considerations.coverage.Nanny) p.considerations.coverage.Nanny = [];
-  if (!p.considerations.coverage.Kayden) p.considerations.coverage.Kayden = [];
-
-  // Migrate older single-block fields (backward compatibility)
-  if (p.considerations.julioCampus && !p.considerations.unavailability.Julio.length) {
-    p.considerations.unavailability.Julio.push(p.considerations.julioCampus);
-  }
-  if (p.considerations.kristynLateMeeting && !p.considerations.unavailability.Kristyn.length) {
-    p.considerations.unavailability.Kristyn.push(p.considerations.kristynLateMeeting);
-  }
-  if (p.considerations.nanny && !p.considerations.coverage.Nanny.length) {
-    p.considerations.coverage.Nanny.push(p.considerations.nanny);
-  }
-
-  // Appointments
-  if (!p.appointments) p.appointments = { tonight: [], tomorrow: [] };
-  p.appointments.tonight = Array.isArray(p.appointments.tonight) ? p.appointments.tonight : [];
-  p.appointments.tomorrow = Array.isArray(p.appointments.tomorrow) ? p.appointments.tomorrow : [];
-  // Bath plan
-  p.bathPlan = { ...defaultPlan(dateStr).bathPlan, ...(p.bathPlan || {}) };
-  return p;
-}
-
-// Quiz nav
-quizBackBtn.onclick = async () => {
-  if (quizIndex === 0) return;
-  quizIndex--;
-  await renderQuizStep();
-};
-
-quizSkipBtn.onclick = async () => {
-  const steps = quizSteps();
-  const step = steps[quizIndex];
-  if (step.onNext) step.onNext(true); // skip flag
-  quizIndex = Math.min(quizIndex + 1, steps.length - 1);
-  await renderQuizStep();
-};
-
-quizNextBtn.onclick = async () => {
-  try {
-    const steps = quizSteps();
-    const step = steps[quizIndex];
-    if (step.onNext) await step.onNext(false);
-
-    if (quizIndex === steps.length - 1) {
-      // saved
-      closeQuiz();
-      setStatus(tonightStatus, `Saved plan for ${quizDraftPlan.date}.`, "success");
-      // refresh preview
-      await previewTomorrow();
-      return;
-    }
-    quizIndex++;
-    await renderQuizStep();
-  } catch (e) {
-    setStatus(quizFooterStatus, e.message || String(e), "error");
-  }
-};
-
-// ---- Step 1: basics ----
-async function renderStepBasics() {
-  const dateStr = quizDraftPlan.date;
-  quizContent.innerHTML = `
-    <div class="row">
-      <div>
-        <label>Tomorrow date</label>
-        <input id="qDate" type="date" value="${escapeHtml(dateStr)}" />
-      </div>
-      <div>
-        <label>Best-guess wake time</label>
-        <input id="qWake" type="time" value="${escapeHtml(quizDraftPlan.wakeDefault || settings.wakeDefault)}" />
-        <div class="small">This is just a guess. Tomorrow’s actual wake time drives the schedule.</div>
-      </div>
+        <div class="hr"></div>
+        <h2 style="margin-top:0">Tasks for today</h2>
+        ${tasksForToday.length ? `<div class="list">${tasksForToday.map(t => renderTaskRow(t, { context: "today" })).join("")}</div>` :
+          `<div class="note">No tasks assigned for today yet. Go to <b>Tasks</b> to add something, then tap “Move to today”.</div>`}
+      </section>
     </div>
   `;
 }
-async function readStepBasics() {
-  const qDate = $("qDate").value;
-  if (!qDate) throw new Error("Choose tomorrow’s date.");
-  const qWake = clampTimeStr($("qWake").value, settings.wakeDefault);
-  quizDraftPlan = normalizePlan(quizDraftPlan, qDate);
-  quizDraftPlan.wakeDefault = qWake;
-}
 
-// ---- Step 2: considerations ----
-async function renderStepConsiderations() {
-  const c = quizDraftPlan.considerations || {};
-  if (!c.unavailability) c.unavailability = { Kristyn: [], Julio: [] };
-  if (!c.unavailability.Kristyn) c.unavailability.Kristyn = [];
-  if (!c.unavailability.Julio) c.unavailability.Julio = [];
+function viewTasks() {
+  const today = toISODate(nowLocal());
+  const open = state.tasks.filter(t => t.status !== "done");
+  const done = state.tasks.filter(t => t.status === "done");
 
-  if (!c.coverage) c.coverage = { Nanny: [], Kayden: [] };
-  if (!c.coverage.Nanny) c.coverage.Nanny = [];
-  if (!c.coverage.Kayden) c.coverage.Kayden = [];
-
-  const uaK = c.unavailability.Kristyn;
-  const uaJ = c.unavailability.Julio;
-  const covN = c.coverage.Nanny;
-  const covKa = c.coverage.Kayden;
-
-  function pillsHtml(list, key) {
-    if (!list.length) return `<div class="muted">None.</div>`;
-    return `<div class="pillRow">` + list.map((b, i) => `
-      <span class="pill">
-        <b>${escapeHtml(b.start)}–${escapeHtml(b.end)}</b>
-        <button type="button" class="danger" style="padding:6px 10px; border-radius:999px; font-size:11px;" data-rm="${escapeHtml(key)}:${i}">Remove</button>
-      </span>
-    `).join("") + `</div>`;
-  }
-
-  quizContent.innerHTML = `
-    <div class="toggleRow">
-      <input id="qBothWFH" type="checkbox" ${c.bothWFH ? "checked":""} />
-      <label style="margin:0;">Both working from home</label>
-    </div>
-
-    <div class="hr"></div>
-
-    <div class="sectionTitle">Parent unavailability (tomorrow)</div>
-    <div class="muted">Add as many blocks as you need. These blocks help the app assign naps to an available parent automatically.</div>
-
-    <div class="apptCard">
-      <div class="apptTitle">Kristyn unavailable / working</div>
-      ${pillsHtml(uaK, "uaK")}
-      <div class="row" style="margin-top:10px;">
-        <div>
-          <label>Start</label>
-          <input id="qUaKStart" type="time" value="18:00" />
-        </div>
-        <div>
-          <label>End</label>
-          <input id="qUaKEnd" type="time" value="19:00" />
-        </div>
-      </div>
-      <div class="btnbar" style="margin-top:10px;">
-        <button type="button" class="primary" id="qUaKAddBtn">Add block</button>
-      </div>
-    </div>
-
-    <div class="apptCard">
-      <div class="apptTitle">Julio unavailable / working</div>
-      ${pillsHtml(uaJ, "uaJ")}
-      <div class="row" style="margin-top:10px;">
-        <div>
-          <label>Start</label>
-          <input id="qUaJStart" type="time" value="09:00" />
-        </div>
-        <div>
-          <label>End</label>
-          <input id="qUaJEnd" type="time" value="17:00" />
-        </div>
-      </div>
-      <div class="btnbar" style="margin-top:10px;">
-        <button type="button" class="primary" id="qUaJAddBtn">Add block</button>
-      </div>
-    </div>
-
-    <div class="hr"></div>
-
-    <div class="sectionTitle">Coverage (only used if BOTH parents are unavailable)</div>
-    <div class="muted">If both parents are unavailable during a nap, the app assigns naps to Kayden (if covered), otherwise Nanny (if covered).</div>
-
-    <div class="apptCard">
-      <div class="apptTitle">Kayden coverage</div>
-      ${pillsHtml(covKa, "covKa")}
-      <div class="row" style="margin-top:10px;">
-        <div>
-          <label>Start</label>
-          <input id="qCovKaStart" type="time" value="10:00" />
-        </div>
-        <div>
-          <label>End</label>
-          <input id="qCovKaEnd" type="time" value="14:00" />
-        </div>
-      </div>
-      <div class="btnbar" style="margin-top:10px;">
-        <button type="button" class="primary" id="qCovKaAddBtn">Add block</button>
-      </div>
-    </div>
-
-    <div class="apptCard">
-      <div class="apptTitle">Nanny coverage</div>
-      ${pillsHtml(covN, "covN")}
-      <div class="row" style="margin-top:10px;">
-        <div>
-          <label>Start</label>
-          <input id="qCovNStart" type="time" value="10:00" />
-        </div>
-        <div>
-          <label>End</label>
-          <input id="qCovNEnd" type="time" value="14:00" />
-        </div>
-      </div>
-      <div class="btnbar" style="margin-top:10px;">
-        <button type="button" class="primary" id="qCovNAddBtn">Add block</button>
-      </div>
-    </div>
-
-    <label>Bedtime owner</label>
-    <select id="qBedOwner">
-      <option value="Kristyn" ${c.bedtimeOwner==="Kristyn"?"selected":""}>Kristyn</option>
-      <option value="Julio" ${c.bedtimeOwner==="Julio"?"selected":""}>Julio</option>
-      <option value="Split" ${c.bedtimeOwner==="Split"?"selected":""}>Split / Hand-off</option>
-    </select>
-  `;
-
-  function addBlock(list, startId, endId) {
-    const start = clampTimeStr($(startId).value, "09:00");
-    const end = clampTimeStr($(endId).value, "10:00");
-    if (end <= start) throw new Error("End must be after start.");
-    list.push({ start, end });
-  }
-
-  // Add buttons
-  $("qUaKAddBtn").onclick = () => { try { addBlock(uaK, "qUaKStart", "qUaKEnd"); renderStepConsiderations(); } catch(e){ setStatus(quizFooterStatus, e.message || "Could not add block.", "error"); } };
-  $("qUaJAddBtn").onclick = () => { try { addBlock(uaJ, "qUaJStart", "qUaJEnd"); renderStepConsiderations(); } catch(e){ setStatus(quizFooterStatus, e.message || "Could not add block.", "error"); } };
-  $("qCovKaAddBtn").onclick = () => { try { addBlock(covKa, "qCovKaStart", "qCovKaEnd"); renderStepConsiderations(); } catch(e){ setStatus(quizFooterStatus, e.message || "Could not add block.", "error"); } };
-  $("qCovNAddBtn").onclick = () => { try { addBlock(covN, "qCovNStart", "qCovNEnd"); renderStepConsiderations(); } catch(e){ setStatus(quizFooterStatus, e.message || "Could not add block.", "error"); } };
-
-  // Remove buttons
-  quizContent.querySelectorAll("button[data-rm]").forEach(btn => {
-    btn.onclick = () => {
-      const spec = btn.getAttribute("data-rm") || "";
-      const [key, idxStr] = spec.split(":");
-      const idx = Number(idxStr);
-      const map = { uaK, uaJ, covKa, covN };
-      const list = map[key];
-      if (!list || !Number.isFinite(idx)) return;
-      list.splice(idx, 1);
-      renderStepConsiderations();
-    };
-  });
-}
-
-function readStepConsiderations() {
-  const c = quizDraftPlan.considerations;
-  c.bothWFH = $("qBothWFH").checked;
-  c.bedtimeOwner = $("qBedOwner").value;
-
-  // Ensure structures exist (in case of older plans)
-  if (!c.unavailability) c.unavailability = { Kristyn: [], Julio: [] };
-  if (!c.unavailability.Kristyn) c.unavailability.Kristyn = [];
-  if (!c.unavailability.Julio) c.unavailability.Julio = [];
-
-  if (!c.coverage) c.coverage = { Nanny: [], Kayden: [] };
-  if (!c.coverage.Nanny) c.coverage.Nanny = [];
-  if (!c.coverage.Kayden) c.coverage.Kayden = [];
-
-  // Remove any empty/invalid blocks
-  const clean = (arr) => (arr || []).filter(x => x && x.start && x.end && x.end > x.start);
-  c.unavailability.Kristyn = clean(c.unavailability.Kristyn);
-  c.unavailability.Julio = clean(c.unavailability.Julio);
-  c.coverage.Nanny = clean(c.coverage.Nanny);
-  c.coverage.Kayden = clean(c.coverage.Kayden);
-
-  // Back-compat fields are no longer used, but keep them if they exist.
-}
-
-
-// ---- Appointment helpers ----
-function apptCardHtml(prefix, appt) {
   return `
-    <div class="apptCard" data-appt="${escapeHtml(appt.id)}">
-      <div class="apptHeader">
-        <div style="flex:1;">
-          <div class="apptTitle">${escapeHtml(appt.title || "Appointment")}</div>
-          <div class="apptMeta">${escapeHtml(appt.start)}–${escapeHtml(appt.end)}</div>
-        </div>
-        <button class="danger" type="button" data-del="${escapeHtml(appt.id)}">Remove</button>
-      </div>
-    </div>
-  `;
-}
+    <div class="grid two">
+      <section class="card">
+        <h2>Tasks</h2>
+        <div class="note">Brain dump here anytime. Then assign tasks to today whenever you want.</div>
+        <div class="hr"></div>
 
-function renderApptList(containerId, list) {
-  const el = $(containerId);
-  el.innerHTML = list.length ? list.map(a => apptCardHtml(containerId, a)).join("") : `<div class="muted">None yet.</div>`;
-  el.querySelectorAll("button[data-del]").forEach(btn => {
-    btn.onclick = () => {
-      const id = btn.getAttribute("data-del");
-      const idx = list.findIndex(x => x.id === id);
-      if (idx >= 0) list.splice(idx, 1);
-      renderApptList(containerId, list);
-    };
-  });
-}
-
-function addApptTo(list, title, start, end) {
-  const t = (title || "").trim();
-  if (!t) throw new Error("Give the appointment a short title.");
-  if (!start || !end) throw new Error("Add start and end times.");
-  if (end <= start) throw new Error("End must be after start.");
-  list.push({ id: newId("appt"), title: t, start, end });
-}
-
-// ---- Step 3: appointments tonight ----
-async function renderStepTonightAppts() {
-  const tonightDate = dateToYMD(new Date());
-  const list = quizTonightAppts;
-  quizContent.innerHTML = `
-    <div class="muted">These are for tonight only (your planning). They don't change tomorrow’s baby schedule.</div>
-
-    <div class="apptCard">
-      <div class="apptTitle">Add an appointment tonight</div>
-      <div class="row" style="margin-top:10px;">
-        <div>
-          <label>Title</label>
-          <input id="qTonightTitle" placeholder="e.g., Late meeting, Dinner with friends" />
-        </div>
-        <div>
-          <label>&nbsp;</label>
-          <button class="primary" id="qTonightAddBtn" type="button">Add</button>
-        </div>
-      </div>
-
-      <div class="row" style="margin-top:10px;">
-        <div>
-          <label>Start</label>
-          <input id="qTonightStart" type="time" value="18:00" />
-        </div>
-        <div>
-          <label>End</label>
-          <input id="qTonightEnd" type="time" value="19:00" />
-        </div>
-      </div>
-
-      <div class="small" style="margin-top:8px;">Date: ${escapeHtml(tonightDate)}</div>
-    </div>
-
-    <div style="margin-top:12px;">
-      <div class="sectionTitle">Tonight appointments</div>
-      <div id="qTonightList"></div>
-    </div>
-  `;
-  renderApptList("qTonightList", list);
-
-  $("qTonightAddBtn").onclick = () => {
-    try {
-      addApptTo(list, $("qTonightTitle").value, $("qTonightStart").value, $("qTonightEnd").value);
-      $("qTonightTitle").value = "";
-      renderApptList("qTonightList", list);
-    } catch (e) {
-      setStatus(quizFooterStatus, e.message || String(e), "error");
-    }
-  };
-}
-
-async function readStepTonightAppts(skip=false) {
-  // save into draft plan
-  quizDraftPlan.appointments.tonight = quizTonightAppts;
-}
-
-// ---- Step 4: appointments tomorrow ----
-async function renderStepTomorrowAppts() {
-  const list = quizDraftPlan.appointments.tomorrow;
-  quizContent.innerHTML = `
-    <div class="muted">Appointments are fixed. If an appointment overlaps routine blocks, the routine shifts after the appointment. If it lands in open time, nothing changes.</div>
-
-    <div class="apptCard">
-      <div class="apptTitle">Add an appointment tomorrow</div>
-      <div class="row" style="margin-top:10px;">
-        <div>
-          <label>Title</label>
-          <input id="qTomorrowTitle" placeholder="e.g., Pediatrician, Errand, Call" />
-        </div>
-        <div>
-          <label>&nbsp;</label>
-          <button class="primary" id="qTomorrowAddBtn" type="button">Add</button>
-        </div>
-      </div>
-
-      <div class="row" style="margin-top:10px;">
-        <div>
-          <label>Start</label>
-          <input id="qTomorrowStart" type="time" value="10:00" />
-        </div>
-        <div>
-          <label>End</label>
-          <input id="qTomorrowEnd" type="time" value="10:30" />
-        </div>
-      </div>
-    </div>
-
-    <div style="margin-top:12px;">
-      <div class="sectionTitle">Tomorrow appointments</div>
-      <div id="qTomorrowList"></div>
-    </div>
-  `;
-  renderApptList("qTomorrowList", list);
-
-  $("qTomorrowAddBtn").onclick = () => {
-    try {
-      addApptTo(list, $("qTomorrowTitle").value, $("qTomorrowStart").value, $("qTomorrowEnd").value);
-      $("qTomorrowTitle").value = "";
-      renderApptList("qTomorrowList", list);
-    } catch (e) {
-      setStatus(quizFooterStatus, e.message || String(e), "error");
-    }
-  };
-}
-
-async function readStepTomorrowAppts() {
-  // already in draft
-}
-
-// ---- Step 5: bath planning ----
-function daysSince(dateStr) {
-  if (!dateStr) return null;
-  const d = ymdToDate(dateStr);
-  const now = new Date();
-  const diff = Math.floor((ymdToDate(dateToYMD(now)).getTime() - d.getTime()) / (24*60*60*1000));
-  return diff;
-}
-
-async function renderStepBath() {
-  const since = daysSince(settings.lastBathDate);
-  const shouldBath = (since === null) ? false : (since >= 3);
-  const c = quizDraftPlan.considerations || {};
-  const hasJulioBlocks = ((c.unavailability?.Julio) || []).length > 0;
-
-  quizContent.innerHTML = `
-    <div class="apptCard">
-      <div class="apptTitle">Bath reminder</div>
-      <div class="apptMeta">
-        Last bath date: ${settings.lastBathDate ? escapeHtml(settings.lastBathDate) : "Not set"}<br/>
-        ${since === null ? "Set it in Settings to enable reminders." : `Days since last bath: <b>${since}</b>`}
-      </div>
-      <div class="small" style="margin-top:6px;">
-        Rule: bath at least every 3 days. Not allowed when Julio is unavailable/working.
-      </div>
-    </div>
-
-    <div class="toggleRow">
-      <input id="qWantsBath" type="checkbox" ${quizDraftPlan.bathPlan.wantsBath ? "checked" : ""} />
-      <label style="margin:0;">Schedule a bath tomorrow</label>
-    </div>
-
-    <div class="row" id="qBathTimes" style="${quizDraftPlan.bathPlan.wantsBath ? "" : "display:none;"}">
-      <div>
-        <label>Preferred start (optional)</label>
-        <input id="qBathStart" type="time" value="${escapeHtml(quizDraftPlan.bathPlan.preferredStart || "18:10")}" />
-      </div>
-      <div>
-        <label>Note (optional)</label>
-        <input id="qBathNote" placeholder="e.g., messy day / hair wash" value="${escapeHtml(quizDraftPlan.bathPlan.reason || "")}" />
-      </div>
-    </div>
-
-    ${hasJulioBlocks ? `<div class="status muted" style="margin-top:10px;">Note: Julio has one or more unavailable blocks tomorrow. If your bath time overlaps those blocks, the schedule will automatically skip bath and add a note.</div>` : ""}
-
-    ${shouldBath ? `<div class="status success" style="margin-top:10px;">Reminder: it’s been 3+ days — consider doing bath tomorrow.</div>` : ""}
-  `;
-
-  const qWantsBath = $("qWantsBath");
-  const qBathTimes = $("qBathTimes");
-  qWantsBath.onchange = () => {
-    qBathTimes.style.display = qWantsBath.checked ? "" : "none";
-  };
-}
-
-
-
-function readStepBath(skip=false) {
-  if (skip) return;
-  const wants = $("qWantsBath")?.checked ?? false;
-
-  if (!wants) {
-    quizDraftPlan.bathPlan = { wantsBath: false, preferredStart: null, reason: "" };
-    return;
-  }
-  quizDraftPlan.bathPlan.wantsBath = true;
-  quizDraftPlan.bathPlan.preferredStart = clampTimeStr($("qBathStart").value, "18:10");
-  quizDraftPlan.bathPlan.reason = ($("qBathNote").value || "").trim();
-}
-
-
-// ---- Step 6: focus items ----
-async function renderStepFocus() {
-  const dateStr = quizDraftPlan.date;
-  const list = quizTempBacklog || [];
-
-  quizContent.innerHTML = `
-    <div class="apptCard">
-      <div class="apptTitle">Add a new item (optional)</div>
-      <div class="row" style="margin-top:10px;">
-        <div>
-          <label>Item</label>
-          <input id="qNewTask" placeholder="e.g., refill diaper caddy, order wipes" />
-        </div>
-        <div>
-          <label>&nbsp;</label>
-          <button class="primary" id="qAddTaskBtn" type="button">Add</button>
-        </div>
-      </div>
-      <div class="small" style="margin-top:8px;">Then tap “Focus” on a few items for tomorrow.</div>
-    </div>
-
-    <div style="margin-top:12px;">
-      <div class="sectionTitle">Running list</div>
-      <div id="qTaskList"></div>
-    </div>
-  `;
-
-  const qTaskList = $("qTaskList");
-
-  async function rerender() {
-    // refresh cache each render so focus toggles reflect
-    quizTempBacklog = await fetchBacklog();
-    const view = [...quizTempBacklog].sort((a,b)=>Number(a.done)-Number(b.done) || (new Date(a.created_at)-new Date(b.created_at)));
-
-    qTaskList.innerHTML = view.length ? "" : `<div class="muted">Nothing yet.</div>`;
-    for (const item of view) {
-      const focused = item.focus_date === dateStr;
-      const row = document.createElement("div");
-      row.className = "apptCard";
-      row.innerHTML = `
-        <div class="apptHeader">
-          <div style="flex:1;">
-            <div class="apptTitle" style="${item.done ? "text-decoration:line-through; color:#6b7280;" : ""}">${escapeHtml(item.text)}</div>
-            <div class="apptMeta">${item.focus_date ? `Focus: ${escapeHtml(item.focus_date)}` : ""}</div>
-          </div>
-          <div style="display:flex; gap:8px;">
-            <button type="button" class="ghost" data-focus="${escapeHtml(item.id)}">${focused ? "Unfocus" : "Focus"}</button>
+        <div class="field">
+          <label>Add a new task</label>
+          <div class="row stretch">
+            <input id="newTaskTitle" placeholder="e.g., Prep nursery for bed" />
+            <button class="btn primary" id="btnAddTask">Add</button>
           </div>
         </div>
-      `;
-      qTaskList.appendChild(row);
-    }
 
-    qTaskList.querySelectorAll("button[data-focus]").forEach(btn => {
-      btn.onclick = async () => {
-        const id = btn.getAttribute("data-focus");
-        const now = await fetchBacklog();
-        const item = now.find(x => x.id === id);
-        const newVal = item?.focus_date === dateStr ? null : dateStr;
-        await setBacklogFocusDate(id, newVal);
-        await rerender();
-      };
-    });
-  }
+        <div class="hr"></div>
+        <div class="note"><b>Open tasks</b></div>
+        ${open.length ? `<div class="list">${open.map(t => renderTaskRow(t, { context: "tasks", today })).join("")}</div>` :
+          `<div class="note">Nothing here yet. Add a quick brain dump task above.</div>`}
 
-  $("qAddTaskBtn").onclick = async () => {
-    try {
-      await addBacklogItem($("qNewTask").value);
-      $("qNewTask").value = "";
-      await rerender();
-    } catch (e) {
-      setStatus(quizFooterStatus, e.message || String(e), "error");
-    }
-  };
+        <div class="hr"></div>
+        <details>
+          <summary class="note">Show completed (${done.length})</summary>
+          <div style="margin-top:10px" class="list">${done.slice(0, 120).map(t => renderTaskRow(t, { context: "tasks", today })).join("") || `<div class="note">No completed tasks yet.</div>`}</div>
+        </details>
+      </section>
 
-  await rerender();
-}
+      <section class="card">
+        <h2>Quick actions</h2>
+        <div class="note">These are meant to be dead-simple for non-techy days.</div>
+        <div class="hr"></div>
 
-async function readStepFocus(skip=false) {
-  // focus toggles already persisted
-}
+        <div class="row">
+          <button class="btn" id="btnAssignAllOpenToToday">Move ALL open tasks to today</button>
+          <button class="btn danger" id="btnClearTodayAssignments">Clear today's assignments</button>
+        </div>
 
-// ---- Step 7: review + save ----
-async function renderStepReview() {
-  const p = quizDraftPlan;
-  const c = p.considerations || {};
-
-  const appts = p.appointments.tomorrow || [];
-  const apptSummary = appts.length ? appts.map(a => `${a.title} (${a.start}–${a.end})`).join(", ") : "None";
-  const bathSummary = p.bathPlan?.wantsBath ? `Yes (${p.bathPlan.preferredStart || "default time"})` : "No";
-
-  const fmtBlocks = (arr) => (arr && arr.length) ? arr.map(b => `${b.start}–${b.end}`).join(", ") : "No";
-  const uaKSummary = fmtBlocks(c.unavailability?.Kristyn || []);
-  const uaJSummary = fmtBlocks(c.unavailability?.Julio || []);
-  const covKaSummary = fmtBlocks(c.coverage?.Kayden || []);
-  const covNSummary = fmtBlocks(c.coverage?.Nanny || []);
-
-  quizContent.innerHTML = `
-    <div class="apptCard">
-      <div class="apptTitle">Summary</div>
-      <div class="apptMeta" style="line-height:1.5; margin-top:6px;">
-        <b>Date:</b> ${escapeHtml(p.date)}<br/>
-        <b>Wake guess:</b> ${escapeHtml(p.wakeDefault)}<br/>
-        <b>Bedtime owner:</b> ${escapeHtml(c.bedtimeOwner || "Kristyn")}<br/>
-        <b>Kristyn unavailable / working:</b> ${escapeHtml(uaKSummary)}<br/>
-        <b>Julio unavailable / working:</b> ${escapeHtml(uaJSummary)}<br/>
-        <b>Kayden coverage:</b> ${escapeHtml(covKaSummary)}<br/>
-        <b>Nanny coverage:</b> ${escapeHtml(covNSummary)}<br/>
-        <b>Bath:</b> ${escapeHtml(bathSummary)}<br/>
-        <b>Tomorrow appointments:</b> ${escapeHtml(apptSummary)}<br/>
-      </div>
-    </div>
-
-    <div class="apptCard">
-      <div class="apptTitle">Preview</div>
-      <div class="small">This is a forecast using your wake guess. Actual wake + naps tomorrow will update it.</div>
-      <ul id="qReviewPreview"></ul>
+        <div class="hr"></div>
+        <div class="note"><b>Today:</b> ${today}</div>
+        <div class="note">Anything “moved to today” will show on the Today page.</div>
+      </section>
     </div>
   `;
-
-  const fakeLog = { ...defaultLog(), wakeActual: p.wakeDefault };
-  const blocks = generateSchedule(p.date, p, fakeLog, "full");
-  renderScheduleList($("qReviewPreview"), blocks);
 }
 
-async function saveQuizPlan() {
-  // Persist plan locally (always), plus remote if enabled + signed in
-  // Normalize once more
-  quizDraftPlan = normalizePlan(quizDraftPlan, quizDraftPlan.date);
-  await savePlan(quizDraftPlan);
-
-  // Reset caches
-  quizTempBacklog = null;
-}
-
-// ==========================
-// Tomorrow preview actions
-// ==========================
-async function previewTomorrow() {
-  try {
-  const tomorrow = addDays(dateToYMD(new Date()), 1);
-  const plan = (await loadPlan(tomorrow)) || defaultPlan(tomorrow);
-  const log = await loadLog(tomorrow);
-  if (!log.wakeActual) log.wakeActual = plan.wakeDefault || settings.wakeDefault;
-
-  const blocks = generateSchedule(tomorrow, plan, log, "full");
-  renderTimeline(tomorrowPreview, blocks);
-  } catch (err) {
-    console.error("previewTomorrow failed:", err);
-    setStatus(tonightStatus, "Preview couldn’t load — open DevTools → Console for details.", "error");
-  }
-
-}
-
-startQuizBtn.onclick = async () => {
-  quizDraftPlan = null;
-  quizTempBacklog = null;
-  openQuiz();
-};
-
-quickPreviewBtn.onclick = async () => {
-  await previewTomorrow();
-  setStatus(tonightStatus, "Preview updated. (You can adjust in the quiz.)", "success");
-};
-
-// ==========================
-// Today actions / log buttons
-// ==========================
-reflowBtn.onclick = async () => { await reflowToday(true); };
-
-logWakeBtn.onclick = async () => {
-  todayWake.value = nowHHMM();
-  await reflowToday(true);
-  setStatus(todayStatus, "Logged wake time.", "success");
-};
-
-nap1StartBtn.onclick = async () => { nap1Start.value = nowHHMM(); await reflowToday(true); setStatus(todayStatus, "Logged Nap 1 start.", "success"); };
-nap1EndBtn.onclick = async () => { nap1End.value = nowHHMM(); await reflowToday(true); setStatus(todayStatus, "Logged Nap 1 end.", "success"); };
-nap2StartBtn.onclick = async () => { nap2Start.value = nowHHMM(); await reflowToday(true); setStatus(todayStatus, "Logged Nap 2 start.", "success"); };
-nap2EndBtn.onclick = async () => { nap2End.value = nowHHMM(); await reflowToday(true); setStatus(todayStatus, "Logged Nap 2 end.", "success"); };
-
-bedtimeNowBtn.onclick = async () => {
-  bedtimeActual.value = nowHHMM();
-  await reflowToday(true);
-};
-
-todayDate.onchange = async () => await loadTodayUI(todayDate.value);
-nannyView.onchange = async () => await reflowToday(false);
-todayWake.onchange = async () => await reflowToday(false);
-nap1Start.onchange = async () => await reflowToday(false);
-nap1End.onchange = async () => await reflowToday(false);
-nap2Start.onchange = async () => await reflowToday(false);
-nap2End.onchange = async () => await reflowToday(false);
-bedtimeActual.onchange = async () => await reflowToday(false);
-nightNotes.onchange = async () => await reflowToday(false);
-
-// Running list UI actions
-brainDumpAddBtn.onclick = async () => {
-  await addBacklogItem(brainDumpAdd.value);
-  brainDumpAdd.value = "";
-  await refreshRunningList();
-};
-showFocusBtn.onclick = async () => { runningListMode = "focus"; await refreshRunningList(); };
-showAllBtn.onclick = async () => { runningListMode = "all"; await refreshRunningList(); };
-
-// ==========================
-// Week view
-// ==========================
-function dayName(d) {
-  return d.toLocaleDateString([], { weekday: "short" });
-}
-function monthDay(d) {
-  return d.toLocaleDateString([], { month: "short", day: "numeric" });
-}
-
-async function refreshWeek() {
-  const start = weekStart.value;
-  if (!start) return;
-
-  const dates = Array.from({length: 7}, (_,i)=>addDays(start, i));
-  const backlog = await fetchBacklog();
-
-  weekList.innerHTML = "";
-  for (const ds of dates) {
-    const plan = (await loadPlan(ds)) || null;
-    const focusCount = backlog.filter(x => !x.done && x.focus_date === ds).length;
-    const apptCount = (plan?.appointments?.tomorrow || []).length;
-
-    const d = ymdToDate(ds);
-    const title = `${dayName(d)} • ${monthDay(d)} (${ds})`;
-    const wake = plan?.wakeDefault || settings.wakeDefault;
-    const bedOwner = plan?.considerations?.bedtimeOwner || "—";
-    const hasPlan = !!plan;
-
-    const row = document.createElement("div");
-    row.className = "dayRow";
-    row.innerHTML = `
-      <div class="dayTitle">
-        <div>${escapeHtml(title)}</div>
-        <button class="ghost" type="button" data-open="${escapeHtml(ds)}">Open</button>
-      </div>
-      <div class="dayBadges">
-        <span class="badge ${hasPlan ? "" : "dim"}">${hasPlan ? "Plan saved" : "No plan"}</span>
-        <span class="badge">Wake: ${escapeHtml(wake)}</span>
-        <span class="badge">Bedtime: ${escapeHtml(bedOwner)}</span>
-        <span class="badge">${apptCount} appt</span>
-        <span class="badge">${focusCount} focus</span>
+function viewHistory() {
+  const dates = Object.keys(state.logsByDate || {}).sort().reverse();
+  const items = dates.map(d => {
+    const log = state.logsByDate[d];
+    const w = log?.wakeTime || "—";
+    const n1 = (log?.nap1Start && log?.nap1End) ? `${log.nap1Start}→${log.nap1End}` : "—";
+    const n2 = (log?.nap2Start && log?.nap2End) ? `${log.nap2Start}→${log.nap2End}` : "—";
+    const bath = log?.bathDone ? "Bath ✅" : "Bath —";
+    const note = log?.overnightNotes ? ` • ${escapeHtml(log.overnightNotes)}` : "";
+    return `
+      <div class="item">
+        <div class="left">
+          <div class="title">${d}</div>
+          <div class="sub">Wake ${w} • Nap1 ${n1} • Nap2 ${n2} • ${bath}${note}</div>
+        </div>
+        <div class="actions">
+          <button class="btn mini" data-openlog="${d}">Open</button>
+        </div>
       </div>
     `;
-    weekList.appendChild(row);
+  }).join("");
+
+  return `
+    <div class="grid two">
+      <section class="card">
+        <h2>History</h2>
+        <div class="note">This is the actual day log archive. Tap any day to view details.</div>
+        <div class="hr"></div>
+
+        ${dates.length ? `<div class="list">${items}</div>` : `<div class="note">No day logs saved yet. Save a log from the Today page.</div>`}
+      </section>
+
+      <section class="card">
+        <h2>Bath tracker</h2>
+        <div class="note">Rule: bath at least every 3 days. Mark it on the Today page.</div>
+        <div class="hr"></div>
+        <div class="kpi">
+          <div class="chip"><b>Last bath:</b> ${lastBathISODate() || "None yet"}</div>
+          <div class="chip"><b>Status:</b> ${isBathDue() ? "Due ⚠" : "OK ✅"}</div>
+        </div>
+
+        <div class="hr"></div>
+        <div class="note">If bath is due, the schedule will show “Bath (due today)”. Also note: bath cannot be scheduled if Julio is unavailable—plan intentionally on those evenings.</div>
+      </section>
+    </div>
+  `;
+}
+
+function viewSettings() {
+  const cfg = loadConfig();
+
+  const needsSetup = !cfg.supabaseUrl || !cfg.supabaseAnonKey;
+  const signedIn = !!authSession;
+  const hidOk = !!cfg.householdId;
+
+  return `
+    <div class="grid two">
+      <section class="card">
+        <h2>Sync settings (Supabase)</h2>
+        <div class="note">This app is private by design. Supabase stores your household’s plans, logs, and tasks — and Row Level Security keeps other households out.</div>
+        <div class="hr"></div>
+
+        <div class="field">
+          <label>Supabase URL</label>
+          <input id="sbUrl" placeholder="https://xxxx.supabase.co" value="${escapeAttr(cfg.supabaseUrl)}" />
+        </div>
+        <div class="field">
+          <label>Supabase Anon key (publishable)</label>
+          <input id="sbKey" placeholder="sb_publishable_..." value="${escapeAttr(cfg.supabaseAnonKey)}" />
+        </div>
+        <div class="field">
+          <label>Household ID (UUID)</label>
+          <input id="householdId" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" value="${escapeAttr(cfg.householdId)}" />
+          <div class="note">All family members should use the same household ID to share data.</div>
+        </div>
+
+        <div class="row">
+          <button class="btn primary" id="btnSaveConfig">Save settings</button>
+          <button class="btn" id="btnTestConnection">Test connection</button>
+        </div>
+
+        ${needsSetup ? `<div class="hr"></div><div class="badge warn">⚠ Add your Supabase URL + key to enable sync.</div>` : ``}
+        ${!hidOk ? `<div class="hr"></div><div class="badge warn">⚠ Add a Household ID to scope your data.</div>` : ``}
+      </section>
+
+      <section class="card">
+        <h2>Account</h2>
+        <div class="note">Use email/password sign-in. (If your Supabase project requires email confirmation, you may need to confirm the signup email.)</div>
+        <div class="hr"></div>
+
+        ${signedIn ? `
+          <div class="note">Signed in as <b>${escapeHtml(state.me.email || "")}</b></div>
+          <div class="hr"></div>
+          <button class="btn danger" id="btnSignOut">Sign out</button>
+        ` : `
+          <div class="field">
+            <label>Email</label>
+            <input id="authEmail" type="email" placeholder="you@example.com" />
+          </div>
+          <div class="field">
+            <label>Password</label>
+            <input id="authPass" type="password" placeholder="••••••••" />
+          </div>
+          <div class="row">
+            <button class="btn primary" id="btnSignIn">Sign in</button>
+            <button class="btn" id="btnSignUp">Create account</button>
+          </div>
+        `}
+
+        <div class="hr"></div>
+        <h2 style="margin-top:0">Planner defaults</h2>
+
+        <div class="field">
+          <label>Expected wake time for forecasts (HH:MM)</label>
+          <input id="expectedWake" inputmode="numeric" placeholder="06:30" value="${escapeAttr(cfg.expectedWake)}" />
+        </div>
+        <div class="field">
+          <label>Default nap duration (minutes)</label>
+          <input id="defaultNapMinutes" inputmode="numeric" placeholder="75" value="${escapeAttr(String(cfg.defaultNapMinutes ?? DEFAULTS.defaultNapMinutes))}" />
+          <div class="note">Forecast uses this. During the day, actual nap end times override.</div>
+        </div>
+
+        <div class="row">
+          <button class="btn primary" id="btnSaveDefaults">Save defaults</button>
+          <button class="btn" id="btnResetCache">Reset local cache</button>
+        </div>
+
+        <div class="hr"></div>
+        <div class="note"><b>PWA tip:</b> If you ever see stale UI after an update, you can “Reset local cache” and also re-open the app. The service worker cache name is bumped with each zip.</div>
+      </section>
+    </div>
+  `;
+}
+
+/* ---------------------------
+   Timeline rendering
+---------------------------- */
+function renderTimeline(blocks) {
+  // 2-hour grid from 6:00 to 22:00 by default, but expand if needed.
+  const minStart = Math.min(...blocks.map(b=>b.startMin), 6*60);
+  const maxEnd = Math.max(...blocks.map(b=>b.endMin), 22*60);
+  const startGrid = Math.floor(minStart / 120) * 120;
+  const endGrid = Math.ceil(maxEnd / 120) * 120;
+
+  const totalMinutes = endGrid - startGrid;
+  const rows = [];
+  for (let t = startGrid; t < endGrid; t += 120) {
+    rows.push({ label: minutesToHHMM(t), startMin: t, endMin: t + 120 });
   }
 
-  weekList.querySelectorAll("button[data-open]").forEach(btn => {
-    btn.onclick = async () => {
-      const ds = btn.getAttribute("data-open");
-      todayDate.value = ds;
-      setActiveTab("today");
-      await loadTodayUI(ds);
-    };
-  });
+  const heightPx = 560;
+  const pxPerMin = heightPx / totalMinutes;
+
+  const gridHtml = rows.map((r, i) => `
+    <div class="gridRow" style="height:${Math.round((r.endMin-r.startMin)*pxPerMin)}px">
+      <div class="tlabel">${r.label}</div>
+    </div>
+  `).join("");
+
+  const blockHtml = blocks.map(b => {
+    const top = Math.round((b.startMin - startGrid) * pxPerMin) + 10;
+    const h = Math.max(34, Math.round((b.endMin - b.startMin) * pxPerMin) - 6);
+
+    const meta = [];
+    meta.push(`${minutesToHHMM(b.startMin)}–${minutesToHHMM(b.endMin)}`);
+
+    let badges = "";
+    if (b.meta?.kind === "nap") {
+      const c = b.meta.caregiver || { who:"—", status:"warn" };
+      const cls = c.status === "ok" ? "good" : (c.status === "bad" ? "bad" : "warn");
+      badges += ` <span class="badge ${cls}">🛌 ${escapeHtml(c.who)}</span>`;
+      if (b.meta.conflict) badges += ` <span class="badge warn">⚠ ${escapeHtml(b.meta.conflict)}</span>`;
+      if (b.meta.adjustedForAppt) badges += ` <span class="badge warn">↔ Adjusted</span>`;
+    }
+    if (b.meta?.kind === "bath") badges += ` <span class="badge warn">🛁 Due</span>`;
+    if (b.meta?.kind === "appointment") badges += ` <span class="badge good">📍 Appointment</span>`;
+    if (b.meta?.kind === "bedtime") badges += ` <span class="badge">🌙 ${escapeHtml(b.meta.bedtimeBy || "")}</span>`;
+
+    return `
+      <div class="block" style="top:${top}px; height:${h}px">
+        <div class="title">${escapeHtml(b.title)}</div>
+        <div class="meta">
+          <span>${meta.join(" • ")}</span>
+          ${badges}
+        </div>
+      </div>
+    `;
+  }).join("");
+
+  return `
+    <div class="timelineWrap" aria-label="Timeline schedule">
+      <div class="timelineGrid">${gridHtml}</div>
+      <div class="blocks">${blockHtml}</div>
+    </div>
+  `;
 }
 
-refreshWeekBtn.onclick = refreshWeek;
+/* ---------------------------
+   Task row rendering
+---------------------------- */
+function renderTaskRow(t, { context, today }) {
+  const done = t.status === "done";
+  const assigned = !!t.assignedDate;
+  const isToday = t.assignedDate === (today || toISODate(nowLocal()));
 
-// ==========================
-// Settings screen
-// ==========================
-function loadSettingsUI() {
-  setWakeDefault.value = settings.wakeDefault;
-  setNapDefault.value = settings.napDefaultMin;
-  setSoloBedBuffer.value = settings.soloBedtimeBufferMin;
-  setLastBath.value = settings.lastBathDate || "";
+  const subBits = [];
+  if (assigned) subBits.push(`Assigned: ${t.assignedDate}`);
+  if (done && t.completedAt) subBits.push(`Done: ${new Date(t.completedAt).toLocaleString()}`);
+
+  const sub = subBits.length ? subBits.join(" • ") : "Brain dump task";
+
+  const actions = [];
+  if (!done) actions.push(`<button class="btn mini" data-done="${t.id}">Mark done</button>`);
+  else actions.push(`<button class="btn mini" data-undone="${t.id}">Undo</button>`);
+
+  if (!done) {
+    if (isToday) actions.push(`<button class="btn mini" data-unassign="${t.id}">Remove from today</button>`);
+    else actions.push(`<button class="btn mini" data-assign="${t.id}">Move to today</button>`);
+  }
+
+  actions.push(`<button class="btn mini danger" data-delete="${t.id}">Delete</button>`);
+
+  return `
+    <div class="item ${done ? "done" : ""}">
+      <div class="left">
+        <div class="title"><span class="check">${done ? "✓" : ""}</span>${escapeHtml(t.title)}</div>
+        <div class="sub">${escapeHtml(sub)}</div>
+      </div>
+      <div class="actions">${actions.join("")}</div>
+    </div>
+  `;
 }
 
-saveSettingsBtn.onclick = async () => {
-  const s = {    wakeDefault: setWakeDefault.value || defaultSettings.wakeDefault,
-    napDefaultMin: Number(setNapDefault.value || defaultSettings.napDefaultMin),
-    soloBedtimeBufferMin: Number(setSoloBedBuffer.value || defaultSettings.soloBedtimeBufferMin),
-    lastBathDate: setLastBath.value || null,  };
-  settings = s;
-  saveSettings(settings);
-  setStatus(settingsStatus, "Saved settings.", "success");
-
-  // Reflow today so you immediately see the effect
-  await reflowToday(false);
-};
-
-// ==========================
-// Local export/import (per-device)
-// ==========================
-exportLocalBtn.onclick = () => {
-  const all = {
-    settings: loadSettings(),
-    backlog: loadBacklogLocal(),
-    plans: {},
-    logs: {},
-    calendarId: localStorage.getItem("calendarId") || DEFAULT_CALENDAR_ID
+/* ---------------------------
+   Plans summary
+---------------------------- */
+function renderPlanSummary(plan) {
+  const blocks = (label, arr) => {
+    const b = normalizeBlocks(arr || []).map(x => `${minutesToHHMM(x.startMin)}–${minutesToHHMM(x.endMin)}`);
+    return b.length ? `<div class="note"><b>${escapeHtml(label)}:</b> ${b.join(", ")}</div>` : `<div class="note"><b>${escapeHtml(label)}:</b> None</div>`;
   };
+  const appts = (plan.appointments || []).length ? `
+    <div class="note"><b>Appointments:</b> ${(plan.appointments||[]).map(a => `${escapeHtml(a.title)} (${escapeHtml(a.start)}–${escapeHtml(a.end)})`).join(", ")}</div>
+  ` : `<div class="note"><b>Appointments:</b> None</div>`;
 
-  // export next 60 days of keys (simple heuristic)
-  const today = dateToYMD(new Date());
-  for (let i=-7; i<=60; i++) {
-    const ds = addDays(today, i);
-    const p = loadPlanLocal(ds);
-    const l = loadLogLocal(ds);
-    if (p) all.plans[ds] = p;
-    if (l && (l.wakeActual || l.nap1Start || l.nap1End || l.nap2Start || l.nap2End || l.bedtimeActual || l.nightNotes)) all.logs[ds] = l;
-  }
+  const bedtimeBy = plan.bedtimeBy === "Julio" ? "Julio" : "Kristyn";
+  const nanny = plan.nannyWorking ? "Yes" : "No";
 
-  localTransferBox.value = JSON.stringify(all, null, 2);
-};
+  return `
+    <div class="note"><b>Bedtime by:</b> ${bedtimeBy}</div>
+    <div class="note"><b>Nanny working:</b> ${nanny}</div>
+    ${blocks("Julio unavailable", plan.julioUnavail)}
+    ${blocks("Kristyn unavailable", plan.kristynUnavail)}
+    ${plan.nannyWorking ? blocks("Nanny working blocks", plan.nannyBlocks) : ""}
+    ${blocks("Kayden working blocks", plan.kaydenBlocks)}
+    ${appts}
+    <div class="hr"></div>
+    <div class="row">
+      <button class="btn" id="btnEditTomorrowPlan">Edit tomorrow plan</button>
+    </div>
+  `;
+}
 
-importLocalBtn.onclick = () => {
-  const raw = (localTransferBox.value || "").trim();
-  if (!raw) return alert("Paste exported JSON first.");
-  const data = safeJSONParse(raw, null);
-  if (!data || typeof data !== "object") return alert("Invalid JSON.");
+/* ---------------------------
+   Event wiring
+---------------------------- */
+function wireViewHandlers() {
+  // Global: history open buttons, etc.
+  $all("[data-openlog]").forEach(btn => {
+    btn.addEventListener("click", () => openHistoryModal(btn.getAttribute("data-openlog")));
+  });
 
-  if (data.settings) saveSettings({ ...defaultSettings, ...data.settings });
-  if (Array.isArray(data.backlog)) saveBacklogLocal(data.backlog);
-  if (data.plans && typeof data.plans === "object") {
-    Object.entries(data.plans).forEach(([ds, p]) => {
-      if (p && p.date) savePlanLocal(p);
-    });
-  }
-  if (data.logs && typeof data.logs === "object") {
-    Object.entries(data.logs).forEach(([ds, l]) => {
-      if (l) saveLogLocal(ds, { ...defaultLog(), ...l });
-    });
-  }
-  if (data.calendarId) localStorage.setItem("calendarId", data.calendarId);
+  // Evening
+  const launch = $("#btnLaunchQuiz");
+  if (launch) launch.addEventListener("click", () => openEveningQuiz());
 
-  alert("Imported. Refreshing…");
-  location.reload();
-};
+  const prev = $("#btnPreviewTomorrow");
+  if (prev) prev.addEventListener("click", () => previewTomorrow());
 
-// ==========================
-// Supabase auth UI (optional sync)
-// ==========================
-signInBtn.onclick = async () => {
-  try {
-    if (!ENABLE_SUPABASE_SYNC) throw new Error("Enable sync first: set ENABLE_SUPABASE_SYNC=true in app.js.");
-    setStatus(authStatus, "Signing in…", "muted");
-    await signIn(authEmail.value.trim(), authPassword.value);
-    await refreshAuthStatus();
-    await refreshRunningList();
-    await loadTodayUI(todayDate.value);
-  } catch (e) {
-    setStatus(authStatus, e.message || String(e), "error");
-  }
-};
+  const expT = $("#btnExportTomorrowICS");
+  if (expT) expT.addEventListener("click", () => {
+    const today = toISODate(nowLocal());
+    const tomorrow = addDays(today, 1);
+    const plan = getPlan(tomorrow) || state.quiz.draft || {};
+    const sched = buildSchedule({ isoDate: tomorrow, plan, log: null, mode: "forecast" });
+    syncScheduleToGoogleCalendar({ isoDate: tomorrow, scheduleBlocks: sched.blocks });
+  });
 
-signOutBtn.onclick = async () => {
-  try {
+
+  const editTomorrow = $("#btnEditTomorrowPlan");
+  if (editTomorrow) editTomorrow.addEventListener("click", () => openEveningQuiz({ editExisting: true }));
+
+  // Today logging
+  const btnWake = $("#btnWakeNow");
+  if (btnWake) btnWake.addEventListener("click", () => {
+    const t = minutesToHHMM(nowLocal().getHours()*60 + nowLocal().getMinutes());
+    $("#wakeInput").value = t;
+    showToast("Wake time set. Tap Save.");
+  });
+
+  const btnNap1 = $("#btnNap1Toggle");
+  if (btnNap1) btnNap1.addEventListener("click", () => toggleNap(1));
+
+  const btnNap2 = $("#btnNap2Toggle");
+  if (btnNap2) btnNap2.addEventListener("click", () => toggleNap(2));
+
+  const btnBed = $("#btnBedtimeNow");
+  if (btnBed) btnBed.addEventListener("click", () => {
+    const t = minutesToHHMM(nowLocal().getHours()*60 + nowLocal().getMinutes());
+    $("#bedtimeInput").value = t;
+    showToast("Bedtime set. Tap Save.");
+  });
+
+  const btnSaveLog = $("#btnSaveLog");
+  if (btnSaveLog) btnSaveLog.addEventListener("click", saveTodayLog);
+
+  const expToday = $("#btnExportTodayICS");
+  if (expToday) expToday.addEventListener("click", () => {
+    const today = toISODate(nowLocal());
+    const plan = getPlan(today) || {};
+    const log = getLog(today) || {};
+    const sched = buildSchedule({ isoDate: today, plan, log, mode: "today" });
+    syncScheduleToGoogleCalendar({ isoDate: today, scheduleBlocks: sched.blocks });
+  });
+
+
+  // Task actions
+  $all("[data-assign]").forEach(btn => btn.addEventListener("click", () => taskAssign(btn.dataset.assign)));
+  $all("[data-unassign]").forEach(btn => btn.addEventListener("click", () => taskUnassign(btn.dataset.unassign)));
+  $all("[data-done]").forEach(btn => btn.addEventListener("click", () => taskDone(btn.dataset.done)));
+  $all("[data-undone]").forEach(btn => btn.addEventListener("click", () => taskUndone(btn.dataset.undone)));
+  $all("[data-delete]").forEach(btn => btn.addEventListener("click", () => taskDelete(btn.dataset.delete)));
+
+  const btnAdd = $("#btnAddTask");
+  if (btnAdd) btnAdd.addEventListener("click", addTaskFromInput);
+
+  const btnAll = $("#btnAssignAllOpenToToday");
+  if (btnAll) btnAll.addEventListener("click", assignAllOpenToToday);
+
+  const btnClear = $("#btnClearTodayAssignments");
+  if (btnClear) btnClear.addEventListener("click", clearTodayAssignments);
+
+  // Settings
+  const btnSaveCfg = $("#btnSaveConfig");
+  if (btnSaveCfg) btnSaveCfg.addEventListener("click", saveSettingsConfig);
+
+  const btnTest = $("#btnTestConnection");
+  if (btnTest) btnTest.addEventListener("click", testConnection);
+
+  const btnSignIn = $("#btnSignIn");
+  if (btnSignIn) btnSignIn.addEventListener("click", () => doAuth("signin"));
+
+  const btnSignUp = $("#btnSignUp");
+  if (btnSignUp) btnSignUp.addEventListener("click", () => doAuth("signup"));
+
+  const btnOut = $("#btnSignOut");
+  if (btnOut) btnOut.addEventListener("click", async () => {
     await signOut();
-    await refreshAuthStatus();
+    showToast("Signed out.");
+    render();
+  });
+
+  const btnSaveDefaults = $("#btnSaveDefaults");
+  if (btnSaveDefaults) btnSaveDefaults.addEventListener("click", saveDefaults);
+
+  const btnResetCache = $("#btnResetCache");
+  if (btnResetCache) btnResetCache.addEventListener("click", () => {
+    localStorage.removeItem(LS.localCache);
+    state.tasks = [];
+    state.plansByDate = {};
+    state.logsByDate = {};
+    showToast("Local cache reset.");
+    render();
+  });
+
+  // Quiz modal
+  wireQuizModal();
+}
+
+function escapeHtml(s) {
+  return String(s ?? "").replace(/[&<>"']/g, (ch) => ({
+    "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
+  }[ch]));
+}
+function escapeAttr(s) {
+  return escapeHtml(s).replace(/"/g, "&quot;");
+}
+
+/* ---------------------------
+   Today log save + nap toggles
+---------------------------- */
+function getTodayDraftLog() {
+  const today = toISODate(nowLocal());
+  const cur = getLog(today) || {};
+  return {
+    wakeTime: valueHHMM($("#wakeInput")?.value) || null,
+    nap1Start: valueHHMM($("#nap1StartInput")?.value) || null,
+    nap1End: valueHHMM($("#nap1EndInput")?.value) || null,
+    nap2Start: valueHHMM($("#nap2StartInput")?.value) || null,
+    nap2End: valueHHMM($("#nap2EndInput")?.value) || null,
+    bedtimeTime: valueHHMM($("#bedtimeInput")?.value) || null,
+    overnightNotes: $("#overnightInput")?.value || "",
+    bathDone: !!$("#bathDoneChk")?.checked,
+    updatedAt: new Date().toISOString(),
+    _v: 1,
+    _source: "today",
+  };
+}
+
+function valueHHMM(v) {
+  const s = (v || "").trim();
+  if (!s) return null;
+  if (!/^\d{1,2}:\d{2}$/.test(s)) return null;
+  const [h, m] = s.split(":").map(Number);
+  if (h < 0 || h > 23 || m < 0 || m > 59) return null;
+  return `${pad2(h)}:${pad2(m)}`;
+}
+
+async function saveTodayLog() {
+  const today = toISODate(nowLocal());
+  const log = getTodayDraftLog();
+  setLog(today, log);
+  showToast("Saved today’s log.");
+  render();
+  try {
+    await syncLog(today);
   } catch (e) {
-    setStatus(authStatus, e.message || String(e), "error");
+    console.warn(e);
+    showToast("Saved locally (sync pending).");
   }
-};
+}
 
-// ==========================
-// Google Auth + Publish (export)
-// ==========================
-let accessToken = null;
-let tokenClient = null;
-
-function ensureTokenClientReady() {
-  if (tokenClient) return;
-  if (!window.google?.accounts?.oauth2) {
-    throw new Error("Google sign-in library not loaded yet. Refresh and try again.");
+function toggleNap(n) {
+  const now = minutesToHHMM(nowLocal().getHours()*60 + nowLocal().getMinutes());
+  if (n === 1) {
+    const s = valueHHMM($("#nap1StartInput").value);
+    const e = valueHHMM($("#nap1EndInput").value);
+    if (!s) {
+      $("#nap1StartInput").value = now;
+      showToast("Nap 1 start set. Tap again to set Nap 1 end.");
+    } else if (!e) {
+      $("#nap1EndInput").value = now;
+      showToast("Nap 1 end set.");
+    } else {
+      // both set: gently ask to edit manually
+      showToast("Nap 1 already has start & end. Edit the fields if needed.");
+    }
+  } else if (n === 2) {
+    const s = valueHHMM($("#nap2StartInput").value);
+    const e = valueHHMM($("#nap2EndInput").value);
+    if (!s) {
+      $("#nap2StartInput").value = now;
+      showToast("Nap 2 start set. Tap again to set Nap 2 end.");
+    } else if (!e) {
+      $("#nap2EndInput").value = now;
+      showToast("Nap 2 end set.");
+    } else {
+      showToast("Nap 2 already has start & end. Edit the fields if needed.");
+    }
   }
-  tokenClient = window.google.accounts.oauth2.initTokenClient({
-    client_id: GOOGLE_OAUTH_CLIENT_ID,
-    scope: GOOGLE_SCOPES,
-    callback: (resp) => {
-      if (resp?.access_token) {
-        accessToken = resp.access_token;
-        setStatus(todayStatus, "Signed in. Ready to publish.", "success");
-      } else {
-        setStatus(todayStatus, "Sign-in did not return an access token.", "error");
-      }
-    },
+}
+
+/* ---------------------------
+   Tasks logic
+---------------------------- */
+async function addTaskFromInput() {
+  const input = $("#newTaskTitle");
+  const title = (input?.value || "").trim();
+  if (!title) { showToast("Type a task first."); return; }
+
+  const task = {
+    id: uid(),
+    title,
+    status: "open",
+    completedAt: null,
+    assignedDate: null,
+    createdAt: new Date().toISOString(),
+  };
+  upsertTask(task);
+  input.value = "";
+  showToast("Task added.");
+  render();
+
+  try { await syncTask(task); } catch (e) { console.warn(e); }
+}
+
+async function taskAssign(id) {
+  const today = toISODate(nowLocal());
+  const t = state.tasks.find(x => x.id === id);
+  if (!t) return;
+  t.assignedDate = today;
+  upsertTask(t);
+  showToast("Moved to today.");
+  render();
+  try { await syncTask(t); } catch (e) { console.warn(e); }
+}
+async function taskUnassign(id) {
+  const t = state.tasks.find(x => x.id === id);
+  if (!t) return;
+  t.assignedDate = null;
+  upsertTask(t);
+  showToast("Removed from today.");
+  render();
+  try { await syncTask(t); } catch (e) { console.warn(e); }
+}
+async function taskDone(id) {
+  const t = state.tasks.find(x => x.id === id);
+  if (!t) return;
+  t.status = "done";
+  t.completedAt = new Date().toISOString();
+  // Keep assignment date as history of what it was done for.
+  upsertTask(t);
+  showToast("Marked done.");
+  render();
+  try { await syncTask(t); } catch (e) { console.warn(e); }
+}
+async function taskUndone(id) {
+  const t = state.tasks.find(x => x.id === id);
+  if (!t) return;
+  t.status = "open";
+  t.completedAt = null;
+  upsertTask(t);
+  showToast("Reopened.");
+  render();
+  try { await syncTask(t); } catch (e) { console.warn(e); }
+}
+async function taskDelete(id) {
+  // local delete
+  deleteTaskLocal(id);
+  showToast("Deleted.");
+  render();
+
+  // remote delete if possible
+  try {
+    if (state.online && supabase && authSession) {
+      const { error } = await supabase.from("tasks").delete().eq("id", id);
+      if (error) throw error;
+    }
+  } catch (e) {
+    console.warn(e);
+    showToast("Deleted locally (sync pending).");
+  }
+}
+async function assignAllOpenToToday() {
+  const today = toISODate(nowLocal());
+  const open = state.tasks.filter(t => t.status !== "done");
+  for (const t of open) {
+    t.assignedDate = today;
+    upsertTask(t);
+    try { await syncTask(t); } catch {}
+  }
+  showToast("All open tasks moved to today.");
+  render();
+}
+async function clearTodayAssignments() {
+  const today = toISODate(nowLocal());
+  const targets = state.tasks.filter(t => t.assignedDate === today && t.status !== "done");
+  for (const t of targets) {
+    t.assignedDate = null;
+    upsertTask(t);
+    try { await syncTask(t); } catch {}
+  }
+  showToast("Cleared today’s assignments.");
+  render();
+}
+
+/* ---------------------------
+   Evening quiz wizard
+---------------------------- */
+const QUIZ_STEPS = [
+  { key: "cleanup", label: "Quick cleanup" },
+  { key: "braindump", label: "Brain dump" },
+  { key: "pick", label: "Pick tomorrow’s tasks" },
+  { key: "parents", label: "Parent availability" },
+  { key: "helpers", label: "Nanny + Kayden" },
+  { key: "bedtime", label: "Bedtime" },
+  { key: "appts", label: "Appointments" },
+  { key: "preview", label: "Preview + save" },
+];
+
+function openEveningQuiz({ editExisting } = {}) {
+  const today = toISODate(nowLocal());
+  const tomorrow = addDays(today, 1);
+  state.quiz.tomorrow = tomorrow;
+  state.quiz.step = 0;
+
+  const existing = getPlan(tomorrow);
+  state.quiz.draft = existing && editExisting ? structuredClone(existing) : makeEmptyPlanDraft();
+
+  $("#quizOverlay").classList.add("show");
+  state.quiz.open = true;
+  renderQuiz();
+}
+function closeEveningQuiz() {
+  $("#quizOverlay").classList.remove("show");
+  state.quiz.open = false;
+}
+
+function makeEmptyPlanDraft() {
+  return {
+    kristynUnavail: [],
+    julioUnavail: [],
+    nannyWorking: false,
+    nannyBlocks: [],
+    kaydenBlocks: [],
+    bedtimeBy: "Kristyn",
+    appointments: [],
+    tasksChosen: [],
+    cleanupTaskIds: [],
+    _v: 1,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+function wireQuizModal() {
+  const closeBtn = $("#quizCloseBtn");
+  if (closeBtn) closeBtn.addEventListener("click", closeEveningQuiz);
+
+  const backBtn = $("#quizBackBtn");
+  if (backBtn) backBtn.addEventListener("click", () => {
+    state.quiz.step = Math.max(0, state.quiz.step - 1);
+    renderQuiz();
+  });
+
+  const nextBtn = $("#quizNextBtn");
+  if (nextBtn) nextBtn.addEventListener("click", async () => {
+    // Validate/save step data into draft
+    const ok = readQuizStepIntoDraft();
+    if (!ok) return;
+
+    if (state.quiz.step < QUIZ_STEPS.length - 1) {
+      state.quiz.step += 1;
+      renderQuiz();
+      return;
+    }
+
+    // Save plan
+    await saveTomorrowPlanFromDraft();
   });
 }
 
-googleBtn.onclick = () => {
-  try {
-    ensureTokenClientReady();
-    setStatus(todayStatus, "Opening Google sign-in…", "muted");
-    tokenClient.requestAccessToken({ prompt: "" });
-  } catch (e) {
-    setStatus(todayStatus, e.message, "error");
+function renderQuiz() {
+  const stepper = $("#quizStepper");
+  const body = $("#quizBody");
+  const hint = $("#quizHint");
+  const nextBtn = $("#quizNextBtn");
+  const backBtn = $("#quizBackBtn");
+
+  if (!stepper || !body || !hint || !nextBtn || !backBtn) return;
+
+  stepper.innerHTML = QUIZ_STEPS.map((s, i) => `<div class="step ${i===state.quiz.step ? "active":""}">${i+1}. ${escapeHtml(s.label)}</div>`).join("");
+
+  hint.textContent = `Step ${state.quiz.step + 1} of ${QUIZ_STEPS.length}`;
+  backBtn.style.visibility = (state.quiz.step === 0) ? "hidden" : "visible";
+  nextBtn.textContent = (state.quiz.step === QUIZ_STEPS.length - 1) ? "Save tomorrow" : "Next";
+
+  const stepKey = QUIZ_STEPS[state.quiz.step].key;
+  body.innerHTML = quizStepView(stepKey);
+
+  // Attach dynamic handlers inside step
+  wireQuizStepHandlers(stepKey);
+}
+
+function quizStepView(stepKey) {
+  const tomorrow = state.quiz.tomorrow;
+  const draft = state.quiz.draft;
+
+  if (stepKey === "cleanup") {
+    const today = toISODate(nowLocal());
+    const todays = state.tasks.filter(t => t.assignedDate === today && t.status !== "done");
+    const open = state.tasks.filter(t => t.status !== "done").slice(0, 24);
+    const options = (todays.length ? todays : open);
+
+    return `
+      <div class="note"><b>Before anything else:</b> quickly check off anything you already finished today.</div>
+      <div class="note">This keeps tomorrow’s plan clean.</div>
+      <div class="hr"></div>
+
+      ${options.length ? `
+        <div class="list">
+          ${options.map(t => `
+            <div class="item">
+              <div class="left">
+                <div class="title">${escapeHtml(t.title)}</div>
+                <div class="sub">${t.assignedDate ? `Assigned: ${t.assignedDate}` : "Open task"}</div>
+              </div>
+              <div class="actions">
+                <label class="badge"><input type="checkbox" data-cleanup="${t.id}" ${draft.cleanupTaskIds?.includes(t.id) ? "checked":""} /> Mark done</label>
+              </div>
+            </div>
+          `).join("")}
+        </div>
+      ` : `<div class="note">No open tasks to clean up right now.</div>`}
+
+      <div class="hr"></div>
+      <div class="note">Tomorrow we’re planning for: <b>${tomorrow}</b></div>
+    `;
   }
-};
 
-async function gcalFetch(url, options = {}) {
-  if (!accessToken) throw new Error("Sign in to Google first.");
+  if (stepKey === "braindump") {
+    return `
+      <div class="note">Brain dump anything on your mind. Each line becomes a task in your master list.</div>
+      <div class="hr"></div>
+      <div class="field">
+        <label>Brain dump</label>
+        <textarea id="brainDumpText" placeholder="One task per line..."></textarea>
+      </div>
+      <div class="note">Examples: “Prep baby’s lunch”, “Fold laundry”, “Email daycare”, “Restock wipes”.</div>
+    `;
+  }
 
-  const headers = {
-    ...(options.headers || {}),
-    Authorization: `Bearer ${accessToken}`,
-    "Content-Type": "application/json",
+  if (stepKey === "pick") {
+    const openTasks = state.tasks.filter(t => t.status !== "done");
+    return `
+      <div class="note">Pick what you want to focus on tomorrow. You can always move tasks to today later.</div>
+      <div class="hr"></div>
+      ${openTasks.length ? `
+        <div class="list">
+          ${openTasks.slice(0, 120).map(t => `
+            <div class="item">
+              <div class="left">
+                <div class="title">${escapeHtml(t.title)}</div>
+                <div class="sub">${t.assignedDate ? `Currently assigned: ${t.assignedDate}` : "Not assigned yet"}</div>
+              </div>
+              <div class="actions">
+                <label class="badge"><input type="checkbox" data-pick="${t.id}" ${draft.tasksChosen?.includes(t.id) ? "checked":""} /> Do tomorrow</label>
+              </div>
+            </div>
+          `).join("")}
+        </div>
+      ` : `<div class="note">No tasks yet. Add a few in the Brain dump step.</div>`}
+    `;
+  }
+
+  if (stepKey === "parents") {
+    return `
+      <div class="note">Add time blocks when each parent is unavailable tomorrow.</div>
+      <div class="note">Tip: leave this blank if someone is available all day.</div>
+      <div class="hr"></div>
+
+      <h2 style="margin:0 0 6px">Julio unavailable</h2>
+      ${timeBlockEditor("julioUnavail", draft.julioUnavail)}
+
+      <div class="hr"></div>
+
+      <h2 style="margin:0 0 6px">Kristyn unavailable</h2>
+      ${timeBlockEditor("kristynUnavail", draft.kristynUnavail)}
+    `;
+  }
+
+  if (stepKey === "helpers") {
+    return `
+      <div class="note">Tell the app when helpers are available. This only affects nap caregiver assignment.</div>
+      <div class="hr"></div>
+
+      <div class="row" style="justify-content: space-between;">
+        <h2 style="margin:0">Nanny working?</h2>
+        <label class="badge"><input type="checkbox" id="nannyWorkingChk" ${draft.nannyWorking ? "checked":""} /> Yes</label>
+      </div>
+
+      <div class="note">If yes, add working blocks:</div>
+      ${timeBlockEditor("nannyBlocks", draft.nannyBlocks, { disabled: !draft.nannyWorking })}
+
+      <div class="hr"></div>
+
+      <h2 style="margin:0 0 6px">Kayden working hours</h2>
+      ${timeBlockEditor("kaydenBlocks", draft.kaydenBlocks)}
+    `;
+  }
+
+  if (stepKey === "bedtime") {
+    return `
+      <div class="note">Who is doing bedtime tomorrow?</div>
+      <div class="hr"></div>
+
+      <div class="field">
+        <label>Bedtime parent (Kristyn or Julio)</label>
+        <select id="bedtimeBySel">
+          <option value="Kristyn" ${draft.bedtimeBy === "Kristyn" ? "selected":""}>Kristyn</option>
+          <option value="Julio" ${draft.bedtimeBy === "Julio" ? "selected":""}>Julio</option>
+        </select>
+      </div>
+      <div class="note">Bedtime is a scheduled block, but bedtime time itself is tracking-only on the Today page.</div>
+    `;
+  }
+
+  if (stepKey === "appts") {
+    const appts = draft.appointments || [];
+    return `
+      <div class="note">Add appointments for tomorrow (they only affect the schedule if they overlap a scheduled block).</div>
+      <div class="hr"></div>
+
+      <div class="row">
+        <button class="btn" id="btnAddAppt">Add an appointment</button>
+      </div>
+
+      <div class="hr"></div>
+
+      ${appts.length ? `
+        <div class="list">
+          ${appts.map(a => `
+            <div class="item">
+              <div class="left" style="flex:1">
+                <div class="split">
+                  <div class="field" style="margin:0">
+                    <label>Title</label>
+                    <input data-appt-title="${a.id}" value="${escapeAttr(a.title||"")}" placeholder="Doctor" />
+                  </div>
+                  <div class="field" style="margin:0">
+                    <label>Start</label>
+                    <input data-appt-start="${a.id}" inputmode="numeric" value="${escapeAttr(a.start||"")}" placeholder="10:30" />
+                  </div>
+                  <div class="field" style="margin:0">
+                    <label>End</label>
+                    <input data-appt-end="${a.id}" inputmode="numeric" value="${escapeAttr(a.end||"")}" placeholder="11:15" />
+                  </div>
+                </div>
+              </div>
+              <div class="actions">
+                <button class="btn mini danger" data-appt-del="${a.id}">Remove</button>
+              </div>
+            </div>
+          `).join("")}
+        </div>
+      ` : `<div class="note">No appointments added.</div>`}
+      <div class="note" style="margin-top:10px;">Format: <b>HH:MM</b> (24-hour time). Example: 14:05.</div>
+    `;
+  }
+
+  if (stepKey === "preview") {
+    const schedule = buildSchedule({ isoDate: tomorrow, plan: draft, log: null, mode: "forecast" });
+    const warning = bathWarningTextForTomorrow(draft);
+
+    const tasksChosen = (draft.tasksChosen || []).map(id => state.tasks.find(t => t.id === id)).filter(Boolean);
+
+    return `
+      <div class="note">Here’s the forecast schedule for <b>${tomorrow}</b>, anchored on the default wake time <b>${loadConfig().expectedWake}</b>.</div>
+      ${warning ? `<div class="hr"></div><div class="badge warn">⚠ ${escapeHtml(warning)}</div>` : ""}
+      <div class="hr"></div>
+
+      ${renderTimeline(schedule.blocks)}
+
+      <div class="hr"></div>
+      <h2 style="margin-top:0">Tasks you picked for tomorrow</h2>
+      ${tasksChosen.length ? `
+        <div class="list">
+          ${tasksChosen.map(t => `<div class="item"><div class="left"><div class="title">${escapeHtml(t.title)}</div><div class="sub">Will be assigned to tomorrow when you save</div></div></div>`).join("")}
+        </div>
+      ` : `<div class="note">No tasks selected. That’s okay — you can assign tasks anytime.</div>`}
+
+      <div class="hr"></div>
+      <div class="note">When you tap <b>Save tomorrow</b>, we will:</div>
+      <ul class="note" style="margin-top:8px">
+        <li>Save the “Day Plan” (availability + appointments + bedtime parent)</li>
+        <li>Assign your chosen tasks to tomorrow</li>
+        <li>Mark any cleanup tasks as done</li>
+      </ul>
+    `;
+  }
+
+  return `<div class="note">Unknown step.</div>`;
+}
+
+function timeBlockEditor(fieldKey, blocks, { disabled } = {}) {
+  const list = (blocks || []).map((b, idx) => `
+    <div class="item">
+      <div class="left" style="flex:1">
+        <div class="split">
+          <div class="field" style="margin:0">
+            <label>Start</label>
+            <input ${disabled ? "disabled":""} data-block-start="${fieldKey}:${idx}" inputmode="numeric" value="${escapeAttr(b.start||"")}" placeholder="09:00" />
+          </div>
+          <div class="field" style="margin:0">
+            <label>End</label>
+            <input ${disabled ? "disabled":""} data-block-end="${fieldKey}:${idx}" inputmode="numeric" value="${escapeAttr(b.end||"")}" placeholder="11:30" />
+          </div>
+        </div>
+      </div>
+      <div class="actions">
+        <button class="btn mini danger" ${disabled ? "disabled":""} data-block-del="${fieldKey}:${idx}">Remove</button>
+      </div>
+    </div>
+  `).join("");
+
+  return `
+    <div class="row" style="margin:10px 0">
+      <button class="btn" ${disabled ? "disabled":""} data-block-add="${fieldKey}">Add a time block</button>
+    </div>
+    ${list ? `<div class="list">${list}</div>` : `<div class="note">No time blocks added.</div>`}
+    ${disabled ? `<div class="note">Turn on “Nanny working” to edit these blocks.</div>` : ``}
+  `;
+}
+
+function wireQuizStepHandlers(stepKey) {
+  const draft = state.quiz.draft;
+
+  // Nanny working toggle re-render
+  if (stepKey === "helpers") {
+    const chk = $("#nannyWorkingChk");
+    if (chk) chk.addEventListener("change", () => {
+      draft.nannyWorking = !!chk.checked;
+      renderQuiz();
+    });
+  }
+
+  // Add block buttons
+  $all("[data-block-add]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const key = btn.getAttribute("data-block-add");
+      draft[key] = draft[key] || [];
+      draft[key].push({ start: "", end: "" });
+      renderQuiz();
+    });
+  });
+
+  // Remove block buttons
+  $all("[data-block-del]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const [key, idxS] = btn.getAttribute("data-block-del").split(":");
+      const idx = Number(idxS);
+      if (!Array.isArray(draft[key])) return;
+      draft[key].splice(idx, 1);
+      renderQuiz();
+    });
+  });
+
+  // Appointments add/remove
+  if (stepKey === "appts") {
+    const add = $("#btnAddAppt");
+    if (add) add.addEventListener("click", () => {
+      draft.appointments = draft.appointments || [];
+      draft.appointments.push({ id: uid(), title: "", start: "", end: "" });
+      renderQuiz();
+    });
+    $all("[data-appt-del]").forEach(btn => {
+      btn.addEventListener("click", () => {
+        const id = btn.getAttribute("data-appt-del");
+        draft.appointments = (draft.appointments || []).filter(a => a.id !== id);
+        renderQuiz();
+      });
+    });
+  }
+}
+
+function readQuizStepIntoDraft() {
+  const stepKey = QUIZ_STEPS[state.quiz.step].key;
+  const draft = state.quiz.draft;
+
+  if (stepKey === "cleanup") {
+    const picked = $all("[data-cleanup]").filter(chk => chk.checked).map(chk => chk.getAttribute("data-cleanup"));
+    draft.cleanupTaskIds = picked;
+    return true;
+  }
+
+  if (stepKey === "braindump") {
+    const text = $("#brainDumpText")?.value || "";
+    draft._brainDumpLines = text.split("\n").map(s => s.trim()).filter(Boolean);
+    return true;
+  }
+
+  if (stepKey === "pick") {
+    const chosen = $all("[data-pick]").filter(chk => chk.checked).map(chk => chk.getAttribute("data-pick"));
+    draft.tasksChosen = chosen;
+    return true;
+  }
+
+  if (stepKey === "parents" || stepKey === "helpers") {
+    // Read all block inputs back into draft (preserving order)
+    for (const key of ["julioUnavail","kristynUnavail","nannyBlocks","kaydenBlocks"]) {
+      if (!Array.isArray(draft[key])) continue;
+      for (let i = 0; i < draft[key].length; i++) {
+        const sEl = document.querySelector(`[data-block-start="${key}:${i}"]`);
+        const eEl = document.querySelector(`[data-block-end="${key}:${i}"]`);
+        const s = valueHHMM(sEl?.value);
+        const e = valueHHMM(eEl?.value);
+        draft[key][i].start = s || (sEl?.value || "").trim();
+        draft[key][i].end = e || (eEl?.value || "").trim();
+      }
+    }
+    // nannyWorking already captured
+    return true;
+  }
+
+  if (stepKey === "bedtime") {
+    const sel = $("#bedtimeBySel");
+    draft.bedtimeBy = (sel?.value === "Julio") ? "Julio" : "Kristyn";
+    return true;
+  }
+
+  if (stepKey === "appts") {
+    // Read appointment edits
+    draft.appointments = (draft.appointments || []).map(a => {
+      const title = document.querySelector(`[data-appt-title="${a.id}"]`)?.value || a.title || "";
+      const start = valueHHMM(document.querySelector(`[data-appt-start="${a.id}"]`)?.value) || (document.querySelector(`[data-appt-start="${a.id}"]`)?.value || "").trim();
+      const end   = valueHHMM(document.querySelector(`[data-appt-end="${a.id}"]`)?.value) || (document.querySelector(`[data-appt-end="${a.id}"]`)?.value || "").trim();
+      return { ...a, title, start, end };
+    });
+    // lightweight validation warning for wrong formats
+    const bad = (draft.appointments || []).some(a => a.start && !valueHHMM(a.start) || a.end && !valueHHMM(a.end));
+    if (bad) {
+      showToast("One or more appointment times don’t look like HH:MM yet.");
+      // Still allow continuing (user might fix on preview)
+    }
+    return true;
+  }
+
+  if (stepKey === "preview") return true;
+
+  return true;
+}
+
+async function saveTomorrowPlanFromDraft() {
+  const tomorrow = state.quiz.tomorrow;
+  const draft = state.quiz.draft;
+
+  // 1) Add brain dump tasks to master list
+  const lines = (draft._brainDumpLines || []).slice(0, 80);
+  for (const title of lines) {
+    const t = {
+      id: uid(),
+      title,
+      status: "open",
+      completedAt: null,
+      assignedDate: null,
+      createdAt: new Date().toISOString(),
+    };
+    upsertTask(t);
+    try { await syncTask(t); } catch {}
+  }
+
+  // 2) Mark cleanup tasks as done
+  for (const id of (draft.cleanupTaskIds || [])) {
+    const t = state.tasks.find(x => x.id === id);
+    if (t && t.status !== "done") {
+      t.status = "done";
+      t.completedAt = new Date().toISOString();
+      upsertTask(t);
+      try { await syncTask(t); } catch {}
+    }
+  }
+
+  // 3) Assign chosen tasks to tomorrow
+  for (const id of (draft.tasksChosen || [])) {
+    const t = state.tasks.find(x => x.id === id);
+    if (t && t.status !== "done") {
+      t.assignedDate = tomorrow;
+      upsertTask(t);
+      try { await syncTask(t); } catch {}
+    }
+  }
+
+  // 4) Save the plan itself (without transient fields)
+  const plan = {
+    kristynUnavail: draft.kristynUnavail || [],
+    julioUnavail: draft.julioUnavail || [],
+    nannyWorking: !!draft.nannyWorking,
+    nannyBlocks: draft.nannyBlocks || [],
+    kaydenBlocks: draft.kaydenBlocks || [],
+    bedtimeBy: draft.bedtimeBy === "Julio" ? "Julio" : "Kristyn",
+    appointments: (draft.appointments || []).map(a => ({
+      id: a.id || uid(),
+      title: (a.title || "").trim(),
+      start: valueHHMM(a.start) || "",
+      end: valueHHMM(a.end) || "",
+    })).filter(a => a.title || a.start || a.end),
+    tasksChosen: draft.tasksChosen || [], // keep for context
+    updatedAt: new Date().toISOString(),
+    _v: 1,
   };
 
-  const res = await fetch(url, { ...options, headers });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Google API error ${res.status}: ${text}`);
-  }
-  return res.status === 204 ? null : res.json();
-}
+  setPlan(tomorrow, plan);
+  showToast("Tomorrow plan saved.");
+  closeEveningQuiz();
+  render();
 
-async function insertEvent(calId, body) {
-  const url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calId)}/events`;
-  return gcalFetch(url, { method: "POST", body: JSON.stringify(body) });
-}
-
-async function deleteEvent(calId, eventId) {
-  const url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calId)}/events/${encodeURIComponent(eventId)}`;
-  return gcalFetch(url, { method: "DELETE" });
-}
-
-async function clearPublishedForDate(calId, dateStr) {
-  const ids = safeJSONParse(localStorage.getItem(keyPublishedIds(dateStr)) || "[]", []);
-  if (!ids.length) return 0;
-
-  let deleted = 0;
-  for (const id of ids) {
-    try { await deleteEvent(calId, id); deleted++; }
-    catch { /* ignore */ }
-  }
-  localStorage.removeItem(keyPublishedIds(dateStr));
-  return deleted;
-}
-
-async function publishForDate(dateStr) {
-  const calId = calendarId.value || DEFAULT_CALENDAR_ID;
-  localStorage.setItem("calendarId", calId);
-
-  const plan = (await loadPlan(dateStr)) || defaultPlan(dateStr);
-  const log = await loadLog(dateStr);
-
-  // Update log from UI if publishing "today"
-  if (dateStr === todayDate.value) {
-    log.wakeActual = todayWake.value || plan.wakeDefault || settings.wakeDefault;
-    log.nap1Start = nap1Start.value || null;
-    log.nap1End = nap1End.value || null;
-    log.nap2Start = nap2Start.value || null;
-    log.nap2End = nap2End.value || null;
-  }
-
-  const blocksFull = generateSchedule(dateStr, plan, log, "full");
-  const blocks = blocksFull;
-
-  setStatus(todayStatus, "Clearing previous publish for this date…", "muted");
-  await clearPublishedForDate(calId, dateStr);
-
-  setStatus(todayStatus, "Publishing…", "muted");
-  const dayPlanId = `${dateStr}-${Math.random().toString(16).slice(2)}`;
-  const createdIds = [];
-
-  for (const b of blocks) {
-    const body = {
-      summary: b.title,
-      description: `${b.category || ""}${b.category ? " • " : ""}${b.visibility || ""}`.trim(),
-      start: { dateTime: toRFC3339Local(b.start), timeZone: TIME_ZONE },
-      end: { dateTime: toRFC3339Local(b.end), timeZone: TIME_ZONE },
-      extendedProperties: {
-        private: {
-          app: "family-day-planner",
-          dayPlanId,
-          blockId: b.id,
-          category: b.category || "",
-          visibility: b.visibility || "",
-        },
-      },
-    };
-    const created = await insertEvent(calId, body);
-    createdIds.push(created.id);
-  }
-
-  localStorage.setItem(keyPublishedIds(dateStr), JSON.stringify(createdIds));
-  setStatus(todayStatus, `Published ${createdIds.length} events to Google Calendar.`, "success");
-}
-
-publishBtn.onclick = async () => {
   try {
-    await publishForDate(todayDate.value);
+    await syncPlan(tomorrow);
   } catch (e) {
-    setStatus(todayStatus, e.message, "error");
+    console.warn(e);
+    showToast("Saved locally (sync pending).");
   }
-};
-
-clearBtn.onclick = async () => {
-  try {
-    const dateStr = todayDate.value;
-    const calId = calendarId.value || DEFAULT_CALENDAR_ID;
-    if (!dateStr) throw new Error("Choose a date.");
-    setStatus(todayStatus, "Clearing…", "muted");
-    const deleted = await clearPublishedForDate(calId, dateStr);
-    setStatus(todayStatus, `Cleared ${deleted} events.`, "success");
-  } catch (e) {
-    setStatus(todayStatus, e.message, "error");
-  }
-};
-
-// ==========================
-// Bootstrapping
-// ==========================
-function initDates() {
-  const now = new Date();
-  const todayStr = dateToYMD(now);
-  const tomorrowStr = addDays(todayStr, 1);
-
-  // Default today
-  todayDate.value = todayStr;
-  todayWake.value = settings.wakeDefault;
-
-  // Week start default = today
-  weekStart.value = todayStr;
-
-  calendarId.value = localStorage.getItem("calendarId") || DEFAULT_CALENDAR_ID;
 }
 
+function previewTomorrow() {
+  // Lightweight preview: open quiz to preview step (without forcing edits)
+  if (!state.quiz.open) openEveningQuiz({ editExisting: true });
+  state.quiz.step = QUIZ_STEPS.findIndex(s => s.key === "preview");
+  if (state.quiz.step < 0) state.quiz.step = QUIZ_STEPS.length - 1;
+  renderQuiz();
+}
+
+/* ---------------------------
+   History modal (simple)
+---------------------------- */
+function openHistoryModal(isoDate) {
+  const log = getLog(isoDate);
+  if (!log) return;
+
+  // Reuse quiz modal overlay for simplicity (friendly)
+  const overlay = $("#quizOverlay");
+  overlay.classList.add("show");
+
+  $("#quizStepper").innerHTML = `<div class="step active">History • ${escapeHtml(isoDate)}</div>`;
+  $("#quizHint").textContent = "Viewing saved day log";
+  $("#quizBackBtn").style.visibility = "hidden";
+  $("#quizNextBtn").textContent = "Close";
+  $("#quizNextBtn").onclick = () => closeEveningQuiz();
+  $("#quizCloseBtn").onclick = () => closeEveningQuiz();
+
+  $("#quizBody").innerHTML = `
+    <div class="note">Saved actuals for <b>${escapeHtml(isoDate)}</b>.</div>
+    <div class="hr"></div>
+
+    <div class="note"><b>Wake:</b> ${escapeHtml(log.wakeTime || "—")}</div>
+    <div class="note"><b>Nap 1:</b> ${escapeHtml(log.nap1Start || "—")} → ${escapeHtml(log.nap1End || "—")}</div>
+    <div class="note"><b>Nap 2:</b> ${escapeHtml(log.nap2Start || "—")} → ${escapeHtml(log.nap2End || "—")}</div>
+    <div class="note"><b>Bedtime (tracking):</b> ${escapeHtml(log.bedtimeTime || "—")}</div>
+    <div class="note"><b>Bath done:</b> ${log.bathDone ? "Yes ✅" : "No"}</div>
+
+    <div class="hr"></div>
+    <div class="note"><b>Overnight notes:</b></div>
+    <div class="card" style="box-shadow:none; margin-top:10px">${escapeHtml(log.overnightNotes || "(none)")}</div>
+
+    <div class="hr"></div>
+    <div class="note">To edit: open the Today page on that date (coming soon). For now, you can re-save today’s log only.</div>
+  `;
+}
+
+/* ---------------------------
+   Settings actions
+---------------------------- */
+async function saveSettingsConfig() {
+  const url = ($("#sbUrl")?.value || "").trim();
+  const key = ($("#sbKey")?.value || "").trim();
+  const householdId = ($("#householdId")?.value || "").trim();
+
+  saveConfig({ supabaseUrl: url, supabaseAnonKey: key, householdId });
+  showToast("Saved settings. Reconnecting…");
+
+  await initSupabaseFromConfig();
+  await refreshAll();
+  render();
+}
+
+async function testConnection() {
+  try {
+    await initSupabaseFromConfig();
+    if (!supabase) throw new Error("No Supabase config");
+    const { data, error } = await supabase.auth.getSession();
+    if (error) throw error;
+    showToast("Connection looks OK.");
+  } catch (e) {
+    console.warn(e);
+    showToast("Could not connect. Double-check URL/key.");
+  }
+}
+
+async function doAuth(mode) {
+  const email = ($("#authEmail")?.value || "").trim();
+  const pass = ($("#authPass")?.value || "").trim();
+  if (!email || !pass) { showToast("Enter email + password."); return; }
+  try {
+    if (mode === "signin") await ensureSignedIn(email, pass);
+    else await signUp(email, pass);
+    showToast(mode === "signin" ? "Signed in." : "Account created.");
+    await refreshAll();
+    render();
+  } catch (e) {
+    console.warn(e);
+    showToast(e?.message || "Auth failed.");
+  }
+}
+
+function saveDefaults() {
+  const expectedWake = valueHHMM($("#expectedWake")?.value) || DEFAULTS.expectedWake;
+  const napMins = Number($("#defaultNapMinutes")?.value || DEFAULTS.defaultNapMinutes);
+  const defaultNapMinutes = clamp(Math.round(napMins), 40, 90);
+  saveConfig({ expectedWake, defaultNapMinutes });
+  showToast("Saved planner defaults.");
+  render();
+}
+
+/* ---------------------------
+   PWA install
+---------------------------- */
+async function registerServiceWorker() {
+  if (!("serviceWorker" in navigator)) return;
+  try {
+    await navigator.serviceWorker.register("./service-worker.js");
+  } catch (e) {
+    console.warn("SW registration failed:", e);
+  }
+}
+
+/* ---------------------------
+   Routing
+---------------------------- */
+function setRoute(hash) {
+  const allowed = ["#evening","#today","#tasks","#history","#settings"];
+  state.route = allowed.includes(hash) ? hash : "#today";
+  localStorage.setItem(LS.lastView, state.route);
+  render();
+}
+
+function setupRouting() {
+  window.addEventListener("hashchange", () => setRoute(location.hash || "#today"));
+  const saved = localStorage.getItem(LS.lastView);
+  setRoute(location.hash || saved || "#today");
+}
+
+/* ---------------------------
+   Boot
+---------------------------- */
 async function boot() {
-  settings = loadSettings();
-  loadSettingsUI();
-  initDates();
+  listenConnectivity();
+  await registerServiceWorker();
 
-  await initSupabaseIfEnabled();
-  await refreshAuthStatus();
+  await initSupabaseFromConfig();
 
-  await loadTodayUI(todayDate.value);
-  await previewTomorrow();
+  // Load cache immediately, then refresh from Supabase if possible
+  await refreshAll();
 
-  // Start on Tonight tab
-  setActiveTab("tonight");
+  setupRouting();
+  setAuthPill();
+
+  // Allow ESC to close modal
+  window.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && state.quiz.open) closeEveningQuiz();
+  });
+
+  render();
 }
 
-boot();
-
-// ==========================
-// SUPABASE SQL (optional)
-// ==========================
-// If you enable sync, create these tables + policies in Supabase:
-//
-// -- tables
-// create table if not exists households (
-//   id uuid primary key default gen_random_uuid(),
-//   name text not null
-// );
-//
-// create table if not exists household_members (
-//   household_id uuid not null references households(id) on delete cascade,
-//   user_id uuid not null,
-//   role text not null default 'member',
-//   created_at timestamptz not null default now(),
-//   primary key (household_id, user_id)
-// );
-//
-// create table if not exists backlog_tasks (
-//   id uuid primary key default gen_random_uuid(),
-//   household_id uuid not null references households(id) on delete cascade,
-//   text text not null,
-//   done boolean not null default false,
-//   focus_date date null,
-//   created_at timestamptz not null default now(),
-//   done_at timestamptz null
-// );
-//
-// create table if not exists day_plans (
-//   date date not null,
-//   household_id uuid not null references households(id) on delete cascade,
-//   plan_json text not null,
-//   updated_at timestamptz not null default now(),
-//   primary key (household_id, date)
-// );
-//
-// create table if not exists day_logs (
-//   date date not null,
-//   household_id uuid not null references households(id) on delete cascade,
-//   log_json text not null,
-//   updated_at timestamptz not null default now(),
-//   primary key (household_id, date)
-// );
-//
-// -- RLS + policies
-// alter table households enable row level security;
-// alter table household_members enable row level security;
-// alter table backlog_tasks enable row level security;
-// alter table day_plans enable row level security;
-// alter table day_logs enable row level security;
-//
-// create or replace function public.is_household_member(hid uuid)
-// returns boolean language sql stable as $$
-//   select exists (select 1 from household_members m where m.household_id = hid and m.user_id = auth.uid());
-// $$;
-//
-// create policy "households read" on households for select to authenticated using (public.is_household_member(id));
-// create policy "memberships read" on household_members for select to authenticated using (user_id = auth.uid() or public.is_household_member(household_id));
-//
-// create policy "tasks read" on backlog_tasks for select to authenticated using (public.is_household_member(household_id));
-// create policy "tasks insert" on backlog_tasks for insert to authenticated with check (public.is_household_member(household_id));
-// create policy "tasks update" on backlog_tasks for update to authenticated using (public.is_household_member(household_id));
-// create policy "tasks delete" on backlog_tasks for delete to authenticated using (public.is_household_member(household_id));
-//
-// create policy "plans read" on day_plans for select to authenticated using (public.is_household_member(household_id));
-// create policy "plans upsert" on day_plans for insert to authenticated with check (public.is_household_member(household_id));
-// create policy "plans update" on day_plans for update to authenticated using (public.is_household_member(household_id));
-//
-// create policy "logs read" on day_logs for select to authenticated using (public.is_household_member(household_id));
-// create policy "logs upsert" on day_logs for insert to authenticated with check (public.is_household_member(household_id));
-// create policy "logs update" on day_logs for update to authenticated using (public.is_household_member(household_id));
+document.addEventListener("DOMContentLoaded", () => {
+  boot().catch((e) => {
+    console.error(e);
+    showToast("Something went wrong booting the app.");
+  });
+});

@@ -1,555 +1,497 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <meta name="theme-color" content="#1f6feb" />
   <title>Family Day Planner</title>
   <link rel="manifest" href="./manifest.json" />
-  <meta name="theme-color" content="#0f172a" />
-
-  <!-- Google Identity Services -->
-  <script src="https://accounts.google.com/gsi/client" async defer></script>
-
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%231f6feb'/%3E%3Cpath d='M20 44V24a6 6 0 0 1 6-6h12a6 6 0 0 1 6 6v20' stroke='white' stroke-width='4' fill='none' stroke-linecap='round'/%3E%3Cpath d='M24 44v-8m16 8v-8' stroke='white' stroke-width='4' stroke-linecap='round'/%3E%3Ccircle cx='28' cy='28' r='2.5' fill='white'/%3E%3Ccircle cx='36' cy='28' r='2.5' fill='white'/%3E%3C/svg%3E" />
   <style>
-    :root{
-      --bg:#f6f7fb;
-      --card:#ffffff;
-      --text:#0f172a;
-      --muted:#6b7280;
-      --border:#e5e7eb;
-      --accent:#2563eb;
-      --accent2:#14b8a6;
-      --danger:#b00020;
-      --shadow: 0 10px 25px rgba(2,6,23,.08);
-      --radius: 18px;
+    :root {
+      --bg: #0b1220;
+      --card: #0f1b32;
+      --muted: #9fb2d1;
+      --text: #eaf1ff;
+      --accent: #6ee7ff;
+      --accent2: #a78bfa;
+      --good: #34d399;
+      --warn: #fbbf24;
+      --bad: #fb7185;
+      --line: rgba(255,255,255,.09);
+      --shadow: 0 10px 30px rgba(0,0,0,.35);
+      --radius: 16px;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      --sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji";
     }
-    *{box-sizing:border-box}
-    body{
-      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial;
-      margin:0; padding:16px;
-      background:var(--bg); color:var(--text);
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: var(--sans);
+      color: var(--text);
+      background: radial-gradient(1200px 600px at 30% -10%, rgba(110,231,255,.18), transparent 60%),
+                  radial-gradient(1000px 700px at 110% 10%, rgba(167,139,250,.16), transparent 55%),
+                  var(--bg);
+      -webkit-font-smoothing: antialiased;
+      padding-bottom: 88px; /* for bottom nav */
     }
-    header{
-      display:flex; align-items:flex-end; justify-content:space-between;
-      gap:12px; margin-bottom:12px;
+    a { color: inherit; }
+    .app {
+      max-width: 980px;
+      margin: 0 auto;
+      padding: 18px 14px 0;
     }
-    h1{ margin:0; font-size:20px; letter-spacing:.2px; }
-    .sub{ color:var(--muted); font-size:13px; line-height:1.35; max-width: 60ch; }
-
-    .tabs{ display:flex; gap:8px; flex-wrap:wrap; margin: 12px 0 14px 0; }
-    .tab{
-      padding: 10px 12px;
-      border-radius: 999px;
-      border:1px solid var(--border);
-      background:rgba(255,255,255,.75);
-      font-weight:800;
-      cursor:pointer;
-      user-select:none;
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 4px 16px;
     }
-    .tab.active{ background:var(--text); color:#fff; border-color:var(--text); }
-
-    .card{
-      background:var(--card);
-      border:1px solid var(--border);
-      border-radius: var(--radius);
-      padding: 14px;
-      margin: 12px 0;
+    .brand {
+      display:flex;
+      align-items:center;
+      gap:10px;
+      min-width: 0;
+    }
+    .logo {
+      width: 38px;
+      height: 38px;
+      border-radius: 14px;
+      background: linear-gradient(135deg, var(--accent), var(--accent2));
       box-shadow: var(--shadow);
+      flex: 0 0 auto;
     }
-
-    .sectionTitle{
-      font-weight: 950;
-      font-size:14px;
-      letter-spacing:.25px;
-      margin:0 0 6px 0;
-      text-transform: none;
+    .brand h1 {
+      margin: 0;
+      font-size: 18px;
+      letter-spacing: .2px;
+      line-height: 1.2;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
-    .muted{ color:var(--muted); font-size:13px; }
-    .small{ color:var(--muted); font-size:12px; }
-
-    label{ display:block; font-weight:800; margin: 10px 0 6px; font-size:13px; color:#111827; }
-    input, textarea, select{
-      width:100%;
-      padding: 12px;
-      border-radius: 14px;
-      border: 1px solid var(--border);
-      font-size:16px;
-      background:#fff;
-      outline:none;
-    }
-    input:focus, textarea:focus, select:focus{
-      border-color: rgba(37,99,235,.45);
-      box-shadow: 0 0 0 4px rgba(37,99,235,.12);
-    }
-    textarea{ resize:vertical; }
-
-    .row{ display:grid; grid-template-columns: 1fr 1fr; gap:10px; }
-    .row3{ display:grid; grid-template-columns: 1fr 1fr 1fr; gap:10px; }
-    @media (max-width: 680px){ .row, .row3{ grid-template-columns:1fr; } }
-
-    button{
-      padding: 12px 14px;
-      border-radius: 14px;
-      border: 1px solid var(--border);
-      background: #fff;
-      font-weight: 900;
-      cursor:pointer;
-    }
-    button.primary{ background: var(--accent); color:#fff; border-color: var(--accent); }
-    button.ghost{ background: rgba(37,99,235,.08); border-color: rgba(37,99,235,.12); color: #1d4ed8; }
-    button.danger{ background:#fff; border-color: rgba(176,0,32,.55); color: var(--danger); }
-    button:disabled{ opacity:.55; cursor:not-allowed; }
-
-    .btnbar{ display:flex; gap:10px; flex-wrap:wrap; margin-top: 12px; }
-
-    .pillRow{ display:flex; flex-wrap:wrap; gap:8px; margin-top:8px; }
-    .pill{
-      display:inline-flex; align-items:center; gap:8px;
-      padding: 6px 10px;
-      border-radius: 999px;
-      border:1px solid var(--border);
-      background:#fff;
-      font-size:12px;
-      color:#111827;
-    }
-    .pill b{ font-weight:950; }
-
-    .hr{ height:1px; background:var(--border); margin: 12px 0; }
-
-    .status{
-      border-radius: 14px;
-      padding: 10px 12px;
-      border:1px solid var(--border);
-      background:#fff;
-      font-weight:800;
-      font-size:13px;
-    }
-    .status.success{ border-color: rgba(20,184,166,.35); background: rgba(20,184,166,.10); color:#065f46; }
-    .status.error{ border-color: rgba(176,0,32,.35); background: rgba(176,0,32,.08); color: var(--danger); }
-    .status.muted{ color: var(--muted); }
-
-    ul{ padding-left: 18px; margin: 8px 0 0 0; }
-    li{ margin: 6px 0; }
-    .timeTag{
-      font-variant-numeric: tabular-nums;
-      font-weight:950;
-      padding: 2px 8px;
-      border-radius: 999px;
-      border:1px solid var(--border);
-      background:#fff;
-      margin-right:8px;
-    }
-    .catTag{ font-size:11px; color: var(--muted); margin-left: 8px; }
-
-    .toggleRow{
-      display:flex; align-items:center; gap:10px;
-      margin-top: 10px;
-      padding: 10px 12px;
-      border-radius: 14px;
-      border:1px solid var(--border);
-      background: rgba(15,23,42,.02);
-    }
-    .toggleRow input{ width: 18px; height: 18px; }
-
-    .modalOverlay{
-      position:fixed; inset:0;
-      background: rgba(2,6,23,.55);
-      display:none;
-      align-items:center; justify-content:center;
-      padding:16px;
-      z-index: 9999;
-    }
-    .modal{
-      width: min(760px, 100%);
-      max-height: min(86vh, 900px);
-      overflow:auto;
-      background: var(--card);
-      border-radius: 22px;
-      border: 1px solid rgba(255,255,255,.25);
-      box-shadow: 0 25px 60px rgba(2,6,23,.35);
-      padding: 14px;
-    }
-    .modalHeader{ display:flex; justify-content:space-between; align-items:flex-start; gap:10px; }
-    .modalHeader h2{ margin:0; font-size:16px; font-weight: 950; letter-spacing:.2px; }
-    .modalHeader .muted{ margin-top:3px; }
-    .xBtn{
-      border-radius: 999px;
-      width: 40px; height: 40px;
-      display:flex; align-items:center; justify-content:center;
-      background: rgba(15,23,42,.06);
-      border:1px solid rgba(15,23,42,.08);
-      font-weight: 950;
-    }
-    .progress{
-      height: 8px;
-      background: rgba(15,23,42,.06);
-      border-radius: 999px;
-      overflow:hidden;
-      margin-top:10px;
-    }
-    .progress > div{ height:100%; width:0%; background: linear-gradient(90deg, var(--accent), var(--accent2)); }
-
-    .apptCard{
-      border:1px solid var(--border);
-      border-radius: 16px;
-      padding: 12px;
-      background: rgba(255,255,255,.7);
-      margin-top: 10px;
-    }
-    .apptHeader{ display:flex; justify-content:space-between; gap:10px; align-items:center; margin-bottom: 8px; }
-    .apptTitle{ font-weight: 950; font-size: 13px; }
-    .apptMeta{ font-size: 12px; color: var(--muted); margin-top: 2px; }
-
-    .dayRow{
-      border:1px solid var(--border);
-      border-radius: 16px;
-      padding: 12px;
-      background: rgba(255,255,255,.7);
-      margin-top:10px;
-    }
-    .dayTitle{ font-weight:950; display:flex; justify-content:space-between; gap:10px; }
-    .dayBadges{ display:flex; flex-wrap:wrap; gap:6px; margin-top:6px; }
-    .badge{ font-size:11px; border:1px solid var(--border); border-radius:999px; padding: 4px 8px; background:#fff; color:#111827; }
-    .badge.dim{ color: var(--muted); }
-  
-    .timelineShell{ margin-top:10px; }
-    .timelineViewport{
-      position:relative;
-      border:1px solid var(--border);
-      border-radius: 18px;
-      background:#fff;
-      overflow:auto;
-      height: 680px;
-      box-shadow: 0 10px 25px rgba(2,6,23,.06);
-    }
-    .timelineInner{
-      position:relative;
-      min-height: 1200px;
-      padding-left: 72px;
-    }
-    .timeMarker{
-      position:absolute;
-      left:0;
-      width: 72px;
-      transform: translateY(-50%);
+    .brand .subtitle {
+      margin: 2px 0 0;
       font-size: 12px;
       color: var(--muted);
-      font-variant-numeric: tabular-nums;
-      padding-left: 10px;
     }
-    .gridLine{
-      position:absolute;
-      left: 72px;
-      right: 0;
-      height: 1px;
-      background: rgba(229,231,235,.9);
-      transform: translateY(-50%);
+    .pill {
+      font-size: 12px;
+      padding: 8px 10px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: rgba(255,255,255,.03);
+      display:flex;
+      align-items:center;
+      gap:8px;
+      min-width: 0;
     }
-    .tlBlock{
-      position:absolute;
-      left: 88px;
-      right: 14px;
-      border-radius: 16px;
-      border: 1px solid rgba(37,99,235,.18);
-      background: rgba(37,99,235,.08);
+    .pill small { color: var(--muted); }
+    .btn {
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,.04);
+      color: var(--text);
+      border-radius: 12px;
       padding: 10px 12px;
-      overflow:hidden;
+      font-weight: 650;
+      cursor: pointer;
+      box-shadow: 0 6px 18px rgba(0,0,0,.18);
     }
-    .tlBlock .tltitle{ font-weight: 950; font-size: 13px; }
-    .tlBlock .tltime{ margin-top:3px; font-size:12px; color: var(--muted); font-variant-numeric: tabular-nums; }
-    .tlBlock .tlmeta{ margin-top:6px; font-size:11px; color: #0f172a; opacity:.8; }
-    
+    .btn:active { transform: translateY(1px); }
+    .btn.primary {
+      border: 0;
+      background: linear-gradient(135deg, var(--accent), var(--accent2));
+      color: #07101e;
+    }
+    .btn.ghost {
+      box-shadow:none;
+      background: transparent;
+      border-color: var(--line);
+      color: var(--muted);
+      font-weight: 600;
+    }
+    .btn.danger {
+      border: 0;
+      background: rgba(251,113,133,.16);
+      color: #ffd2db;
+    }
+    .grid {
+      display:grid;
+      gap: 14px;
+    }
+    @media (min-width: 900px) {
+      .grid.two {
+        grid-template-columns: 1.4fr 1fr;
+      }
+    }
+    .card {
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,.03);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      padding: 14px;
+    }
+    .card h2 {
+      margin: 0 0 8px;
+      font-size: 16px;
+    }
+    .muted { color: var(--muted); }
+    .row {
+      display:flex;
+      gap:10px;
+      align-items:center;
+      flex-wrap: wrap;
+    }
+    .row.stretch > * { flex: 1 1 auto; }
+    .field {
+      display:flex;
+      flex-direction: column;
+      gap: 6px;
+      margin: 10px 0;
+    }
+    label {
+      font-size: 12px;
+      color: var(--muted);
+    }
+    input, textarea, select {
+      width: 100%;
+      padding: 10px 12px;
+      border-radius: 12px;
+      border: 1px solid var(--line);
+      background: rgba(0,0,0,.2);
+      color: var(--text);
+      font: inherit;
+      outline: none;
+    }
+    textarea { min-height: 90px; resize: vertical; }
+    .split {
+      display:flex; gap:10px; flex-wrap:wrap;
+    }
+    .split > * { flex: 1 1 160px; }
+    .note {
+      font-size: 12px;
+      color: var(--muted);
+      line-height: 1.35;
+    }
+    .hr {
+      height: 1px;
+      background: var(--line);
+      margin: 12px 0;
+    }
+    .bottomnav {
+      position: fixed;
+      left: 0; right: 0; bottom: 0;
+      background: rgba(11,18,32,.78);
+      backdrop-filter: blur(10px);
+      border-top: 1px solid var(--line);
+      padding: 10px 10px calc(10px + env(safe-area-inset-bottom));
+      z-index: 50;
+    }
+    .tabs {
+      max-width: 980px;
+      margin: 0 auto;
+      display:flex;
+      gap: 8px;
+      justify-content: space-between;
+    }
+    .tab {
+      flex: 1 1 0;
+      text-align:center;
+      padding: 10px 8px;
+      border-radius: 14px;
+      border: 1px solid transparent;
+      color: var(--muted);
+      text-decoration: none;
+      font-size: 12px;
+      font-weight: 650;
+    }
+    .tab.active {
+      background: rgba(255,255,255,.05);
+      border-color: var(--line);
+      color: var(--text);
+    }
+    .toast {
+      position: fixed;
+      top: 14px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(15,27,50,.92);
+      border: 1px solid var(--line);
+      padding: 10px 12px;
+      border-radius: 14px;
+      box-shadow: var(--shadow);
+      display:none;
+      z-index: 80;
+      max-width: min(680px, calc(100vw - 24px));
+    }
+    .toast.show { display:block; }
+    .kpi {
+      display:flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-top: 10px;
+    }
+    .kpi .chip {
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,.03);
+      padding: 8px 10px;
+      border-radius: 999px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    /* Timeline */
+    .timelineWrap {
+      position: relative;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      overflow: hidden;
+      background: rgba(0,0,0,.18);
+      min-height: 540px;
+    }
+    .timelineGrid {
+      position:absolute; inset: 0;
+      display:flex;
+      flex-direction: column;
+    }
+    .gridRow {
+      flex: 1 1 auto;
+      border-top: 1px solid rgba(255,255,255,.06);
+      position: relative;
+      padding-left: 64px;
+    }
+    .gridRow:first-child { border-top: 0; }
+    .gridRow .tlabel {
+      position:absolute;
+      left: 10px;
+      top: 8px;
+      font-size: 12px;
+      color: rgba(234,241,255,.62);
+      font-family: var(--mono);
+    }
+    .blocks {
+      position:absolute;
+      inset: 0;
+      padding: 10px;
+      pointer-events: none;
+    }
+    .block {
+      position:absolute;
+      left: 74px;
+      right: 10px;
+      border-radius: 14px;
+      border: 1px solid rgba(255,255,255,.11);
+      background: linear-gradient(135deg, rgba(110,231,255,.22), rgba(167,139,250,.16));
+      color: var(--text);
+      padding: 10px 12px;
+      box-shadow: 0 10px 22px rgba(0,0,0,.25);
+      pointer-events: auto;
+    }
+    .block .title {
+      font-weight: 750;
+      font-size: 13px;
+      margin-bottom: 4px;
+    }
+    .block .meta {
+      font-size: 12px;
+      color: rgba(234,241,255,.75);
+      display:flex;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    .badge {
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      border: 1px solid rgba(255,255,255,.12);
+      background: rgba(0,0,0,.18);
+      color: rgba(234,241,255,.8);
+      display:inline-flex;
+      align-items:center;
+      gap:6px;
+    }
+    .badge.good { border-color: rgba(52,211,153,.4); }
+    .badge.warn { border-color: rgba(251,191,36,.5); }
+    .badge.bad { border-color: rgba(251,113,133,.45); }
+    /* Lists */
+    .list {
+      display:flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .item {
+      display:flex;
+      justify-content: space-between;
+      gap: 10px;
+      align-items: center;
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,.03);
+      border-radius: 14px;
+      padding: 10px 12px;
+    }
+    .item .left {
+      min-width: 0;
+    }
+    .item .title {
+      font-weight: 700;
+      font-size: 14px;
+      overflow:hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .item .sub {
+      color: var(--muted);
+      font-size: 12px;
+      margin-top: 2px;
+    }
+    .item .actions {
+      display:flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      flex: 0 0 auto;
+    }
+    .mini {
+      padding: 8px 10px;
+      border-radius: 12px;
+      font-size: 12px;
+    }
+    .check {
+      width: 18px;
+      height: 18px;
+      border-radius: 6px;
+      border: 1px solid rgba(255,255,255,.22);
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+      margin-right: 8px;
+      flex: 0 0 auto;
+    }
+    .done .title {
+      text-decoration: line-through;
+      color: rgba(234,241,255,.6);
+    }
+    /* Modal */
+    .modalOverlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,.55);
+      display:none;
+      z-index: 100;
+      padding: 14px;
+    }
+    .modalOverlay.show { display:flex; align-items: center; justify-content:center; }
+    .modal {
+      width: min(880px, 100%);
+      max-height: min(92vh, 900px);
+      overflow: auto;
+      border-radius: 20px;
+      border: 1px solid var(--line);
+      background: rgba(15,27,50,.96);
+      box-shadow: 0 24px 60px rgba(0,0,0,.55);
+      padding: 14px;
+    }
+    .modalHeader {
+      display:flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 10px;
+      padding-bottom: 8px;
+    }
+    .stepper {
+      display:flex;
+      gap: 8px;
+      flex-wrap:wrap;
+    }
+    .step {
+      font-size: 11px;
+      color: var(--muted);
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,.03);
+      padding: 6px 10px;
+      border-radius: 999px;
+    }
+    .step.active {
+      color: var(--text);
+      border-color: rgba(110,231,255,.35);
+    }
+    .footerBar {
+      display:flex;
+      justify-content: space-between;
+      gap: 10px;
+      align-items:center;
+      margin-top: 12px;
+      padding-top: 10px;
+      border-top: 1px solid var(--line);
+      position: sticky;
+      bottom: 0;
+      background: rgba(15,27,50,.92);
+      backdrop-filter: blur(6px);
+    }
+    .hint {
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .tiny {
+      font-size: 12px;
+      color: rgba(234,241,255,.75);
+    }
   </style>
 </head>
-
 <body>
-  <header>
-    <div>
-      <h1>Family Day Planner</h1>
-      <div class="sub">Tonight quiz → tomorrow plan → today live log → export to Google Calendar for Skylight. Open time stays blank (no “play” blocks).</div>
-    </div>
-  </header>
+  <div class="toast" id="toast"></div>
 
-  <div class="tabs">
-    <div class="tab active" id="tabTonight">Tonight</div>
-    <div class="tab" id="tabToday">Today</div>
-    <div class="tab" id="tabWeek">Week</div>
-    <div class="tab" id="tabSettings">Settings</div>
+  <div class="app">
+    <header>
+      <div class="brand">
+        <div class="logo" aria-hidden="true"></div>
+        <div style="min-width:0">
+          <h1>Family Day Planner</h1>
+          <div class="subtitle">Simple schedule + tasks, synced for your household</div>
+        </div>
+      </div>
+      <div class="pill" id="authPill">
+        <span id="authDot" class="badge warn">Offline</span>
+        <small id="authText">Not signed in</small>
+      </div>
+    </header>
+
+    <main id="viewRoot"></main>
   </div>
 
-  <section id="screenTonight">
-    <div class="card">
-      <div class="sectionTitle">Tonight</div>
-      <div class="muted">Use the quiz to capture what’s different tomorrow, add appointments (today and tomorrow), pick focus items from the running list, and save.</div>
-
-      <div class="btnbar">
-        <button class="primary" id="startQuizBtn">Start tonight quiz (5 min)</button>
-        <button id="quickPreviewBtn">Preview tomorrow (uses estimated wake time)</button>
-      </div>
-
-      <div id="tonightStatus" style="margin-top:10px;"></div>
+  <nav class="bottomnav" aria-label="Primary">
+    <div class="tabs">
+      <a class="tab" href="#evening" id="tab-evening">Evening</a>
+      <a class="tab" href="#today" id="tab-today">Today</a>
+      <a class="tab" href="#tasks" id="tab-tasks">Tasks</a>
+      <a class="tab" href="#history" id="tab-history">History</a>
+      <a class="tab" href="#settings" id="tab-settings">Settings</a>
     </div>
+  </nav>
 
-    <div class="card">
-      <div class="sectionTitle">Tomorrow preview</div>
-      <div class="muted">This preview uses your best-guess wake time. Tomorrow, logging actual wake + naps will update it.</div>
-      <div id="tomorrowPreview" class="timelineShell"></div>
-    </div>
-  </section>
-
-  <section id="screenToday" style="display:none;">
-    <div class="card">
-      <div class="sectionTitle">Today command center</div>
-
-      <div class="row">
-        <div>
-          <label>Date</label>
-          <input id="todayDate" type="date" />
-        </div>
-        <div>
-          <label>Wake time (actual)</label>
-          <input id="todayWake" type="time" />
-        </div>
-      </div>
-
-      <div class="toggleRow">
-        <input id="nannyView" type="checkbox" />
-        <label style="margin:0;">Nanny view (hide parent-only items)</label>
-      </div>
-
-      <div class="hr"></div>
-
-      <div class="sectionTitle">Quick log</div>
-      <div class="btnbar">
-        <button id="logWakeBtn" class="primary">Log wake time (set to now)</button>
-        <button id="nap1StartBtn">Nap 1 started</button>
-        <button id="nap1EndBtn">Nap 1 ended</button>
-        <button id="nap2StartBtn">Nap 2 started</button>
-        <button id="nap2EndBtn">Nap 2 ended</button>
-      </div>
-      <div class="small">Buttons auto-fill times with “now”. You can also manually edit below.</div>
-
-      <div class="row" style="margin-top:10px;">
-        <div>
-          <label>Nap 1 actual start</label>
-          <input id="nap1Start" type="time" />
-        </div>
-        <div>
-          <label>Nap 1 actual end</label>
-          <input id="nap1End" type="time" />
-        </div>
-      </div>
-
-      <div class="row">
-        <div>
-          <label>Nap 2 actual start</label>
-          <input id="nap2Start" type="time" />
-        </div>
-        <div>
-          <label>Nap 2 actual end</label>
-          <input id="nap2End" type="time" />
-        </div>
-      </div>
-
-      <div class="hr"></div>
-
-      <div class="sectionTitle">Overnight sleep (tracking only)</div>
-      <div class="muted">This does not affect scheduling. Wake time does.</div>
-
-      <div class="row" style="margin-top:10px;">
-        <div>
-          <label>Actual bedtime (last night)</label>
-          <input id="bedtimeActual" type="time" />
-          <div class="small">Optional — just for tracking.</div>
-        </div>
-        <div>
-          <label>&nbsp;</label>
-          <button id="bedtimeNowBtn" type="button">Set bedtime = now</button>
-        </div>
-      </div>
-
-      <label>Overnight notes</label>
-      <textarea id="nightNotes" rows="2" placeholder="e.g., woke at 1:40am for 10 min"></textarea>
-
-      <div class="btnbar">
-        <button id="reflowBtn" class="primary">Update schedule using logged times</button>
-      </div>
-
-      <div class="hr"></div>
-
-      <div class="sectionTitle">Running list</div>
-      <div class="muted">Add items anytime. Check them off over time. Use Tonight to pick focus items for tomorrow.</div>
-
-      <div class="row" style="margin-top:10px;">
-        <div>
-          <label>Add item</label>
-          <input id="brainDumpAdd" placeholder="e.g., wash sleep sack, order wipes" />
-        </div>
-        <div>
-          <label>&nbsp;</label>
-          <button class="primary" id="brainDumpAddBtn" type="button">Add</button>
-        </div>
-      </div>
-
-      <div class="btnbar">
-        <button id="showFocusBtn" class="ghost" type="button">Show focus only</button>
-        <button id="showAllBtn" type="button">Show all</button>
-      </div>
-
-      <div id="brainDumpList" style="margin-top:10px;"></div>
-
-      <div class="hr"></div>
-
-      <div class="sectionTitle">Export to Skylight</div>
-      <div class="muted">Publishes today’s schedule to your Google calendar. Open gaps are not exported.</div>
-
-      <label>Calendar ID</label>
-      <input id="calendarId" />
-
-      <div class="btnbar">
-        <button id="googleBtn">Sign in to Google</button>
-        <button id="publishBtn" class="primary">Export schedule to Google Calendar</button>
-        <button id="clearBtn" class="danger">Remove exported events (today)</button>
-      </div>
-
-      <div id="todayStatus" style="margin-top:10px;"></div>
-    </div>
-
-    <div class="card">
-      <div class="sectionTitle">Today preview</div>
-      <div class="muted">
-        <div class="pillRow">
-          <span class="pill" id="nowPill"><b>Now</b> —</span>
-          <span class="pill" id="nextPill"><b>Next</b> —</span>
-        </div>
-      </div>
-      <div id="todayPreview" class="timelineShell"></div>
-    </div>
-  </section>
-
-  <section id="screenWeek" style="display:none;">
-    <div class="card">
-      <div class="sectionTitle">Week view</div>
-      <div class="muted">A quick look at the next 7 days: plan status, appointments, and focus items.</div>
-
-      <div class="row" style="margin-top:10px;">
-        <div>
-          <label>Week starts</label>
-          <input id="weekStart" type="date" />
-          <div class="small">Tip: set this to Monday to match your mental model.</div>
-        </div>
-        <div>
-          <label>&nbsp;</label>
-          <button class="primary" id="refreshWeekBtn">Refresh week</button>
-        </div>
-      </div>
-
-      <div id="weekList" style="margin-top:12px;"></div>
-    </div>
-  </section>
-
-  <section id="screenSettings" style="display:none;">
-    <div class="card">
-      <div class="sectionTitle">Routine defaults</div>
-      <div class="muted">These control the generated schedule. You can tweak anytime.</div>
-
-      <div class="row">
-<div>
-          <label>Default wake time</label>
-          <input id="setWakeDefault" type="time" />
-        </div>
-      </div>
-
-      <div class="row">
-        <div>
-          <label>Nap default duration (minutes)</label>
-          <input id="setNapDefault" type="number" min="30" step="5" />
-        </div>
-        <div>
-          <label>Solo bedtime buffer (minutes)</label>
-          <input id="setSoloBedBuffer" type="number" min="0" step="5" />
-        </div>
-      </div>
-
-      <div class="row">
-        <div>
-          <label>Last bath date</label>
-          <input id="setLastBath" type="date" />
-          <div class="small">Used for the “bath every 3 days” reminder.</div>
-        </div>
-</div>
-
-      <div class="btnbar">
-        <button class="primary" id="saveSettingsBtn">Save settings</button>
-      </div>
-
-      <div id="settingsStatus" style="margin-top:10px;"></div>
-    </div>
-
-    <div class="card">
-      <div class="sectionTitle">Shared between devices (optional)</div>
-      <div class="muted">
-        If you want the running list + plans to sync across iPhones + Android, enable Supabase in <b>app.js</b> and sign in here.
-        If you don't enable Supabase, the app still works — it just stays per-device.
-      </div>
-
-      <label>Email</label>
-      <input id="authEmail" type="email" placeholder="you@example.com" />
-
-      <label>Password</label>
-      <input id="authPassword" type="password" placeholder="••••••••" />
-
-      <div class="btnbar">
-        <button class="primary" id="signInBtn" type="button">Sign in</button>
-        <button id="signOutBtn" type="button">Sign out</button>
-      </div>
-
-      <div id="authStatus" style="margin-top:10px;"></div>
-
-      <div class="hr"></div>
-      <div class="sectionTitle">Data tools (per-device)</div>
-      <div class="muted">If you are not using sync, you can still move data between devices using export/import.</div>
-
-      <div class="btnbar">
-        <button id="exportLocalBtn" type="button">Export local data</button>
-        <button id="importLocalBtn" type="button">Import local data</button>
-      </div>
-      <textarea id="localTransferBox" rows="6" placeholder="Export shows here. Paste JSON here to import."></textarea>
-      <div class="small">Import will overwrite existing local data for the same dates.</div>
-    </div>
-  </section>
-
-  <div class="modalOverlay" id="quizOverlay" aria-hidden="true">
+  <!-- Evening Quiz Modal -->
+  <div class="modalOverlay" id="quizOverlay" role="dialog" aria-modal="true" aria-label="Prepare for the Day Ahead">
     <div class="modal">
       <div class="modalHeader">
         <div>
-          <h2 id="quizTitle">Tonight quiz</h2>
-          <div class="muted" id="quizHint">A quick guided plan for tomorrow.</div>
+          <h2 style="margin:0">Prepare for the Day Ahead</h2>
+          <div class="note" id="quizSubtitle">A quick, friendly wizard to set tomorrow up for success.</div>
         </div>
-        <button class="xBtn" id="quizCloseBtn" aria-label="Close">✕</button>
+        <button class="btn ghost" id="quizCloseBtn">Close</button>
       </div>
-
-      <div class="progress"><div id="quizProgress"></div></div>
-
-      <div id="quizContent" style="margin-top:12px;"></div>
-
-      <div class="btnbar" style="justify-content:space-between;">
-        <button id="quizBackBtn" type="button">Back</button>
-        <div style="display:flex; gap:10px; flex-wrap:wrap;">
-          <button id="quizSkipBtn" type="button">Skip</button>
-          <button class="primary" id="quizNextBtn" type="button">Next</button>
+      <div class="stepper" id="quizStepper"></div>
+      <div class="hr"></div>
+      <div id="quizBody"></div>
+      <div class="footerBar">
+        <div class="hint" id="quizHint">Step 1 of 8</div>
+        <div class="row">
+          <button class="btn ghost" id="quizBackBtn">Back</button>
+          <button class="btn primary" id="quizNextBtn">Next</button>
         </div>
       </div>
-
-      <div id="quizFooterStatus" style="margin-top:10px;"></div>
     </div>
   </div>
 
   <script type="module" src="./app.js"></script>
-  <script>
-    if ("serviceWorker" in navigator) {
-      navigator.serviceWorker.register("./service-worker.js");
-    }
-  </script>
 </body>
 </html>
