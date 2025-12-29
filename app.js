@@ -2522,7 +2522,7 @@ async function boot(){
   } catch (e){
     console.error(e);
     setSubhead("Config needed");
-    $("#view").innerHTML = `<div class="card"><div class="hd"><div><h2>Config needed</h2><p>Please set CONFIG.supabaseUrl and CONFIG.supabaseKey in app.js.</p></div></div></div>`;
+    $("#view").innerHTML = `<div class="card"><div class="hd"><div><h2>Config needed</h2><p>Please verify CONFIG.supabaseUrl and CONFIG.supabaseKey in app.js, and that the Supabase script loaded (window.supabase).</p></div></div></div>`;
     return;
   }
 
