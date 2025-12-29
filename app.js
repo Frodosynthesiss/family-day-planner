@@ -111,8 +111,19 @@
   }
 
   async function sbTry(fn, failMsg){
-    try { return await fn(); }
-    catch(err){ console.error(err); toast(failMsg || (err?.message || String(err))); return null; }
+    try {
+      const res = await fn();
+      if (res && typeof res === "object" && "error" in res && res.error){
+        console.error(res.error);
+        toast(failMsg || res.error.message || "Supabase error");
+        return null;
+      }
+      return res;
+    } catch (e){
+      console.error(e);
+      toast(failMsg || (e && e.message) || "Supabase error");
+      return null;
+    }
   }
 
   async function refreshUser(){
@@ -536,7 +547,7 @@
     const startHour = clamp(Math.floor((minStart-60)/60), 0, 23);
     const endHour = clamp(Math.ceil((maxEnd+60)/60), startHour+1, 24);
 
-    const pxPerMin = 40/60; // 40px per hour
+    const pxPerMin = 1; // 60px/hour => 120px per 2-hour row // 40px per hour
     const dayOffset = startHour*60;
     const totalMin = (endHour*60) - dayOffset;
 
@@ -705,8 +716,19 @@
   // ---------- Auth modal ----------
   function showAuth(open){
     const m = $("#authModal");
-    m.classList.toggle("hidden", !open);
-    m.setAttribute("aria-hidden", String(!open));
+    if (!m) return;
+    if (open){
+      m.classList.remove("hidden");
+      m.removeAttribute("inert");
+      m.setAttribute("aria-hidden","false");
+      setTimeout(()=>{ try{ $("#authEmail")?.focus(); }catch(_e){} }, 0);
+    } else {
+      const fallback = document.querySelector(".tabbar .tab.active") || document.querySelector(".tabbar .tab");
+      try{ fallback?.focus(); }catch(_e){}
+      m.setAttribute("aria-hidden","true");
+      m.setAttribute("inert","");
+      m.classList.add("hidden");
+    }
   }
 
   async function updateGate(){
@@ -718,9 +740,19 @@
   // ---------- Wizard ----------
   function showWizard(open){
     const m = $("#wizardModal");
-    m.classList.toggle("hidden", !open);
-    m.setAttribute("aria-hidden", String(!open));
-    App.state.wizard.open=open;
+    if (!m) return;
+    if (open){
+      m.classList.remove("hidden");
+      m.removeAttribute("inert");
+      m.setAttribute("aria-hidden","false");
+      setTimeout(()=>{ try{ $("#wizChecklist1")?.focus(); }catch(_e){} }, 0);
+    } else {
+      const fallback = document.querySelector(".tabbar .tab.active") || document.querySelector(".tabbar .tab");
+      try{ fallback?.focus(); }catch(_e){}
+      m.setAttribute("aria-hidden","true");
+      m.setAttribute("inert","");
+      m.classList.add("hidden");
+    }
   }
 
   function buildStepper(){
@@ -747,6 +779,7 @@
   }
 
   async function openWizardFor(dateISO){
+    showWizard(true);
     const existing = await loadPlan(dateISO);
     const draft = normPlan(existing, dateISO);
     App.state.wizard = { open:true, dateISO, step:1, maxStep:1, draft };
@@ -901,8 +934,19 @@
   // ---------- Quick edit ----------
   function showQuick(open){
     const m = $("#quickModal");
-    m.classList.toggle("hidden", !open);
-    m.setAttribute("aria-hidden", String(!open));
+    if (!m) return;
+    if (open){
+      m.classList.remove("hidden");
+      m.removeAttribute("inert");
+      m.setAttribute("aria-hidden","false");
+      setTimeout(()=>{ try{ $("#quickConstraints")?.focus(); }catch(_e){} }, 0);
+    } else {
+      const fallback = document.querySelector(".tabbar .tab.active") || document.querySelector(".tabbar .tab");
+      try{ fallback?.focus(); }catch(_e){}
+      m.setAttribute("aria-hidden","true");
+      m.setAttribute("inert","");
+      m.classList.add("hidden");
+    }
   }
 
   function renderQuick(dateISO, title){
@@ -1017,71 +1061,75 @@
   // ---------- Today ----------
   async function loadAndRenderToday(){
     const iso = dateToISO(new Date());
-    const planRaw = await loadPlan(iso);
-    const logRaw = await loadLog(iso);
-    const plan = normPlan(planRaw, iso);
-    const log = normLog(logRaw, iso);
+    let log = await loadLog(iso);
+    log = normLog(log, iso);
     App.state.logs.set(iso, log);
 
-    // bind UI (overwrite handlers each time safely)
+    // Prefill UI
     $("#wakeTime").value = log.wakeTime || "";
-    $("#nap1On").checked = !!log.nap1.enabled;
-    $("#nap2On").checked = !!log.nap2.enabled;
+    $("#bedTime").value = log.bedTime || "";
+    $("#overnightNotes").value = log.notes || "";
+
+    $("#nap1Enabled").checked = !!log.nap1.enabled;
+    $("#nap2Enabled").checked = !!log.nap2.enabled;
     $("#nap1Start").value = log.nap1.start || "";
     $("#nap1End").value = log.nap1.end || "";
     $("#nap2Start").value = log.nap2.start || "";
     $("#nap2End").value = log.nap2.end || "";
-    $("#bedtime").value = log.bedtime || "";
-    $("#overnightNotes").value = log.overnightNotes || "";
 
-    const setNapEnabled = (n,on)=>{
-      $(`#nap${n}Start`).disabled=!on;
-      $(`#nap${n}End`).disabled=!on;
-    };
-    setNapEnabled(1, log.nap1.enabled);
-    setNapEnabled(2, log.nap2.enabled);
+    const plan = App.state.todayPlan || blankPlan(iso);
+    const settings = App.state.settings || DEFAULT_SETTINGS;
 
-    const regen = () => {
-      const current = normLog(App.state.logs.get(iso), iso);
-      const sched = generateSchedule(iso, normPlan(App.state.plans.get(iso), iso), current, App.state.settings);
-      $("#todayMeta").textContent = `Date: ${isoToShort(iso)} • Blocks: ${sched.blocks.length}`;
-      buildTimeline($("#todayTimeline"), sched.blocks);
-    };
-
-    const persist = debounce(async () => {
+    const debouncedSave = debounce(async () => {
       const current = normLog(App.state.logs.get(iso), iso);
       await saveLog(iso, current);
-      regen();
-    }, 250);
+    }, 350);
 
-    $("#btnWakeNow").onclick = async () => {
-      const now = new Date();
-      const t = `${pad2(now.getHours())}:${pad2(now.getMinutes())}`;
-      $("#wakeTime").value = t;
-      log.wakeTime=t;
-      App.state.logs.set(iso, log);
-      await persist();
+    const rerender = () => {
+      const current = normLog(App.state.logs.get(iso), iso);
+      const sched = generateSchedule(iso, plan, current, settings);
+      buildTimeline($("#todayTimeline"), sched.blocks);
+      $("#todayMeta").textContent = `Date: ${isoToShort(iso)} • Blocks: ${sched.blocks.length}`;
+      const b = bathStatus(iso);
+      $("#bathFlag").classList.toggle("hidden", !b.overdue);
+      $("#bathFlag").textContent = b.overdue ? `Bath overdue (${b.daysSince}d). Suggest: ${b.suggest}` : "";
+      // tasks sidebar always refreshes in case today date rolled over
+      renderTasks();
     };
 
-    $("#wakeTime").onchange = async () => { log.wakeTime = $("#wakeTime").value || null; App.state.logs.set(iso, log); await persist(); };
+    const setLog = (updater) => {
+      const cur = App.state.logs.get(iso) || normLog(null, iso);
+      updater(cur);
+      App.state.logs.set(iso, cur);
+      rerender();
+      debouncedSave();
+    };
 
-    $("#nap1On").onchange = async () => { log.nap1.enabled=$("#nap1On").checked; setNapEnabled(1, log.nap1.enabled); App.state.logs.set(iso, log); await persist(); };
-    $("#nap2On").onchange = async () => { log.nap2.enabled=$("#nap2On").checked; setNapEnabled(2, log.nap2.enabled); App.state.logs.set(iso, log); await persist(); };
+    $("#btnWakeNow").onclick = () => {
+      const now = new Date();
+      const hh24 = String(now.getHours()).padStart(2,"0");
+      const mm = String(now.getMinutes()).padStart(2,"0");
+      const val = `${hh24}:${mm}`;
+      $("#wakeTime").value = val;
+      setLog(l => { l.wakeTime = val; });
+    };
 
-    $("#nap1Start").onchange = async () => { log.nap1.start=$("#nap1Start").value||null; App.state.logs.set(iso, log); await persist(); };
-    $("#nap1End").onchange   = async () => { log.nap1.end=$("#nap1End").value||null; App.state.logs.set(iso, log); await persist(); };
-    $("#nap2Start").onchange = async () => { log.nap2.start=$("#nap2Start").value||null; App.state.logs.set(iso, log); await persist(); };
-    $("#nap2End").onchange   = async () => { log.nap2.end=$("#nap2End").value||null; App.state.logs.set(iso, log); await persist(); };
+    $("#wakeTime").onchange = () => setLog(l => { l.wakeTime = $("#wakeTime").value || null; });
 
-    $("#bedtime").onchange = async () => { log.bedtime=$("#bedtime").value||null; App.state.logs.set(iso, log); await persist(); };
-    $("#overnightNotes").oninput = debounce(async () => { log.overnightNotes=$("#overnightNotes").value||""; App.state.logs.set(iso, log); await persist(); }, 400);
+    $("#nap1Enabled").onchange = () => setLog(l => { l.nap1.enabled = $("#nap1Enabled").checked; });
+    $("#nap2Enabled").onchange = () => setLog(l => { l.nap2.enabled = $("#nap2Enabled").checked; });
 
-    // initial render
-    const sched = generateSchedule(iso, plan, log, App.state.settings);
-    $("#todayMeta").textContent = `Date: ${isoToShort(iso)} • Blocks: ${sched.blocks.length}`;
-    buildTimeline($("#todayTimeline"), sched.blocks);
-    renderTasks();
-  }
+    $("#nap1Start").onchange = () => setLog(l => { l.nap1.start = $("#nap1Start").value || null; });
+    $("#nap1End").onchange = () => setLog(l => { l.nap1.end = $("#nap1End").value || null; });
+    $("#nap2Start").onchange = () => setLog(l => { l.nap2.start = $("#nap2Start").value || null; });
+    $("#nap2End").onchange = () => setLog(l => { l.nap2.end = $("#nap2End").value || null; });
+
+    $("#bedTime").onchange = () => setLog(l => { l.bedTime = $("#bedTime").value || null; });
+    $("#overnightNotes").onchange = () => setLog(l => { l.notes = $("#overnightNotes").value || ""; });
+
+    // Initial render
+    rerender();
+}
 
   // ---------- Tomorrow ----------
   async function loadAndRenderTomorrow(){
@@ -1164,10 +1212,7 @@
     $("#btnSignOut").onclick = signOut;
 
     // Wizard open/close
-    $("#btnOpenWizard").onclick = async () => {
-      const iso = dateToISO(addDays(new Date(),1));
-      await openWizardFor(iso);
-    };
+    $("#btnOpenWizard").onclick = async () => { try { const iso = dateToISO(addDays(new Date(),1)); await openWizardFor(iso); } catch(e){ console.error(e); toast("Couldn\u2019t open the planner."); } };
     $("#btnCloseWizard").onclick = () => showWizard(false);
     $("#wizardScrim").onclick = () => showWizard(false);
 

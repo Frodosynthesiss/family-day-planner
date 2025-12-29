@@ -177,7 +177,7 @@ h2,h3,h4{margin:0}
 .timelineTop{display:flex;justify-content:space-between;align-items:baseline;gap:10px;margin:10px 0}
 .timelineTitle{font-weight:900}
 .timeline{position:relative;border-radius:16px;border:1px solid var(--line);background:rgba(255,255,255,.55);overflow:hidden}
-.timeRow{position:relative;height:80px;border-top:1px solid rgba(31,42,36,.07)}
+.timeRow{position:relative;height:120px;border-top:1px solid rgba(31,42,36,.07)}
 .timeLabel{position:absolute;left:10px;top:8px;font-size:12px;color:var(--muted);font-weight:800}
 .layer{position:absolute;inset:0;padding-left:70px;padding-right:10px}
 .event{position:absolute;border-radius:14px;padding:8px 10px;border:1px solid rgba(31,42,36,.12);background:rgba(124,154,134,.16);overflow:hidden}
@@ -187,10 +187,10 @@ h2,h3,h4{margin:0}
 .eventTitle{font-weight:900;font-size:12.5px;line-height:1.2}
 .eventMeta{font-size:12px;color:rgba(31,42,36,.72);margin-top:4px}
 .logGrid{display:grid;gap:10px;margin-bottom:12px}
-.logRow{display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap}
+.logRow{display:grid;grid-template-columns:160px 1fr;gap:10px;align-items:center}
 .logRowStack{flex-direction:column;align-items:stretch}
 .logLabel{font-weight:900}
-.logControls{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.logControls{display:flex;gap:8px;align-items:center;justify-content:flex-end;flex-wrap:wrap}
 .toast{
   position:fixed;left:16px;right:16px;
   bottom:calc(var(--tabH) + 14px + env(safe-area-inset-bottom));
@@ -198,4 +198,10 @@ h2,h3,h4{margin:0}
   padding:12px 14px;border-radius:14px;
   background:rgba(31,42,36,.92);color:white;
   box-shadow:0 20px 40px rgba(0,0,0,.26);
+}
+
+
+@media (max-width:520px){
+  .logRow{grid-template-columns:1fr}
+  .logControls{justify-content:flex-start}
 }
