@@ -11,8 +11,8 @@
    ========================= */
 const CONFIG = {
   // Supabase
-  supabaseUrl: https://qsnmuojajbtyxdvijwon.supabase.co,                       // e.g. https://xxxx.supabase.co
-  supabaseKey: sb_publishable_9AFfe1UiuDpQs8FpRUWCvw_wmzFKTMm,   // e.g. sb_publishable_...
+  supabaseUrl: "https://qsnmuojajbtyxdvijwon.supabase.co",                       // e.g. https://xxxx.supabase.co
+  supabaseKey: "sb_publishable_9AFfe1UiuDpQs8FpRUWCvw_wmzFKTMm",   // e.g. sb_publishable_...
   // Apps Script export (optional)
   appsScriptUrl: "YOUR_APPS_SCRIPT_WEB_APP_URL",          // optional; leave blank to hide export button
   appsScriptApiKey: "YOUR_SHARED_API_KEY",                // optional; if using export
