@@ -9,17 +9,18 @@
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%231f6feb'/%3E%3Cpath d='M20 44V24a6 6 0 0 1 6-6h12a6 6 0 0 1 6 6v20' stroke='white' stroke-width='4' fill='none' stroke-linecap='round'/%3E%3Cpath d='M24 44v-8m16 8v-8' stroke='white' stroke-width='4' stroke-linecap='round'/%3E%3Ccircle cx='28' cy='28' r='2.5' fill='white'/%3E%3Ccircle cx='36' cy='28' r='2.5' fill='white'/%3E%3C/svg%3E" />
   <style>
     :root {
-      --bg: #0b1220;
-      --card: #0f1b32;
-      --muted: #9fb2d1;
-      --text: #eaf1ff;
-      --accent: #6ee7ff;
-      --accent2: #a78bfa;
-      --good: #34d399;
-      --warn: #fbbf24;
-      --bad: #fb7185;
-      --line: rgba(255,255,255,.09);
-      --shadow: 0 10px 30px rgba(0,0,0,.35);
+
+      --bg: #f6f7fb;
+      --card: #ffffff;
+      --muted: #475467;
+      --text: #101828;
+      --accent: #2563eb;
+      --accent2: #7c3aed;
+      --good: #16a34a;
+      --warn: #d97706;
+      --bad: #e11d48;
+      --line: rgba(16,24,40,.14);
+      --shadow: 0 12px 30px rgba(16,24,40,.10);
       --radius: 16px;
       --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
       --sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji";
@@ -29,9 +30,11 @@
       margin: 0;
       font-family: var(--sans);
       color: var(--text);
-      background: radial-gradient(1200px 600px at 30% -10%, rgba(110,231,255,.18), transparent 60%),
-                  radial-gradient(1000px 700px at 110% 10%, rgba(167,139,250,.16), transparent 55%),
+      background: radial-gradient(1200px 700px at 20% -10%, rgba(37,99,235,.12), transparent 60%),
+                  radial-gradient(1000px 700px at 110% 10%, rgba(124,58,237,.10), transparent 55%),
                   var(--bg);
+      -webkit-font-smoothing: antialiased;
+      padding-bottom: 88px; /* for bottom nav */
       -webkit-font-smoothing: antialiased;
       padding-bottom: 88px; /* for bottom nav */
     }
@@ -246,7 +249,7 @@
       border: 1px solid var(--line);
       border-radius: 16px;
       overflow: hidden;
-      background: rgba(0,0,0,.18);
+      background: rgba(255,255,255,.9);
       min-height: 540px;
     }
     .timelineGrid {
@@ -277,11 +280,9 @@
     }
     .block {
       position:absolute;
-      left: 74px;
-      right: 10px;
       border-radius: 14px;
-      border: 1px solid rgba(255,255,255,.11);
-      background: linear-gradient(135deg, rgba(110,231,255,.22), rgba(167,139,250,.16));
+      border: 1px solid var(--line);
+      background: linear-gradient(135deg, rgba(37,99,235,.14), rgba(124,58,237,.10));
       color: var(--text);
       padding: 10px 12px;
       box-shadow: 0 10px 22px rgba(0,0,0,.25);
@@ -304,7 +305,7 @@
       padding: 2px 8px;
       border-radius: 999px;
       border: 1px solid rgba(255,255,255,.12);
-      background: rgba(0,0,0,.18);
+      background: rgba(255,255,255,.9);
       color: rgba(234,241,255,.8);
       display:inline-flex;
       align-items:center;
@@ -334,7 +335,7 @@
     }
     .item .title {
       font-weight: 700;
-      font-size: 14px;
+      font-size: 15px;
       overflow:hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
@@ -436,7 +437,25 @@
       font-size: 12px;
       color: rgba(234,241,255,.75);
     }
-  </style>
+  
+    /* Quiz stepper buttons */
+    #quizStepper { display:flex; flex-wrap: wrap; gap: 8px; }
+    #quizStepper .step { 
+      appearance: none;
+      border: 1px solid var(--line);
+      background: rgba(16,24,40,.03);
+      color: var(--text);
+      padding: 8px 10px;
+      border-radius: 999px;
+      font-size: 13px;
+      cursor: pointer;
+    }
+    #quizStepper .step.active {
+      background: rgba(37,99,235,.12);
+      border-color: rgba(37,99,235,.35);
+      font-weight: 600;
+    }
+</style>
 </head>
 <body>
   <div class="toast" id="toast"></div>

@@ -1,5 +1,5 @@
 /* Family Day Planner service worker */
-const CACHE_NAME = "fdp-cache-v2025-12-26-4";
+const CACHE_NAME = "fdp-cache-v2025-12-28-1";
 const ASSETS = [
   "./",
   "./index.html",

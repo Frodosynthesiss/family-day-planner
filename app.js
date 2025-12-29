@@ -72,6 +72,31 @@ function minutesToHHMM(mins) {
   const m = ((mins % 1440) + 1440) % 1440;
   return `${pad2(Math.floor(m / 60))}:${pad2(m % 60)}`;
 }
+
+function formatShortDate(isoDate) {
+  // isoDate: YYYY-MM-DD -> MM/DD/YY
+  if (!isoDate || typeof isoDate !== "string" || isoDate.length < 10) return String(isoDate || "");
+  const mm = isoDate.slice(5,7);
+  const dd = isoDate.slice(8,10);
+  const yy = isoDate.slice(2,4);
+  return `${mm}/${dd}/${yy}`;
+}
+function minutesToClock12(mins) {
+  const m = ((mins % 1440) + 1440) % 1440;
+  let h = Math.floor(m / 60);
+  const mi = m % 60;
+  const ampm = h >= 12 ? "PM" : "AM";
+  h = h % 12;
+  if (h === 0) h = 12;
+  return `${h}:${pad2(mi)} ${ampm}`;
+}
+function hhmmToClock12(hhmm) {
+  const v = valueHHMM(hhmm);
+  if (!v) return "—";
+  const [h, m] = v.split(":").map(Number);
+  return minutesToClock12(h*60 + m);
+}
+
 function clamp(n, min, max) { return Math.max(min, Math.min(max, n)); }
 function uid() { return crypto.randomUUID(); }
 
@@ -899,8 +924,8 @@ function viewEvening() {
           <button class="btn" id="btnExportTomorrowICS">Sync tomorrow to Google Calendar</button>
         </div>
         <div class="kpi">
-          <div class="chip"><b>Tomorrow:</b> ${tomorrow}</div>
-          <div class="chip"><b>Expected wake:</b> ${loadConfig().expectedWake}</div>
+          <div class="chip"><b>Tomorrow:</b> ${formatShortDate(tomorrow)}</div>
+          <div class="chip"><b>Expected wake:</b> ${hhmmToClock12(loadConfig().expectedWake)}</div>
         </div>
         ${warning ? `<div class="hr"></div><div class="badge warn">⚠ ${escapeHtml(warning)}</div>` : ""}
         <div class="hr"></div>
@@ -945,7 +970,7 @@ function viewToday() {
         <div class="hr"></div>
 
         <div class="row" style="justify-content: space-between;">
-          <div class="tiny"><b>Date:</b> ${today}</div>
+          <div class="tiny"><b>Date:</b> ${formatShortDate(today)}</div>
           ${bathDue ? `<span class="badge warn">⚠ Bath is due</span>` : `<span class="badge good">Bath OK</span>`}
         </div>
 
@@ -1091,7 +1116,7 @@ function viewTasks() {
         </div>
 
         <div class="hr"></div>
-        <div class="note"><b>Today:</b> ${today}</div>
+        <div class="note"><b>Today:</b> ${formatShortDate(today)}</div>
         <div class="note">Anything “moved to today” will show on the Today page.</div>
       </section>
     </div>
@@ -1100,49 +1125,50 @@ function viewTasks() {
 
 function viewHistory() {
   const dates = Object.keys(state.logsByDate || {}).sort().reverse();
+
   const items = dates.map(d => {
     const log = state.logsByDate[d];
-    const w = log?.wakeTime || "—";
-    const n1 = (log?.nap1Start && log?.nap1End) ? `${log.nap1Start}→${log.nap1End}` : "—";
-    const n2 = (log?.nap2Start && log?.nap2End) ? `${log.nap2Start}→${log.nap2End}` : "—";
+    const w = log?.wakeTime ? hhmmToClock12(log.wakeTime) : "—";
+    const n1 = (log?.nap1Start && log?.nap1End) ? `${hhmmToClock12(log.nap1Start)} → ${hhmmToClock12(log.nap1End)}` : "—";
+    const n2 = (log?.nap2Start && log?.nap2End) ? `${hhmmToClock12(log.nap2Start)} → ${hhmmToClock12(log.nap2End)}` : "—";
     const bath = log?.bathDone ? "Bath ✅" : "Bath —";
     const note = log?.overnightNotes ? ` • ${escapeHtml(log.overnightNotes)}` : "";
+
     return `
       <div class="item">
         <div class="left">
-          <div class="title">${d}</div>
+          <div class="title">${formatShortDate(d)}</div>
           <div class="sub">Wake ${w} • Nap1 ${n1} • Nap2 ${n2} • ${bath}${note}</div>
         </div>
         <div class="actions">
-          <button class="btn mini" data-openlog="${d}">Open</button>
+          <button class="btn btnGhost" data-openlog="${escapeHtml(d)}">View</button>
         </div>
       </div>
     `;
   }).join("");
 
+  const lastBath = lastBathISODate();
+  const bathDue = isBathDue();
+
   return `
-    <div class="grid two">
-      <section class="card">
-        <h2>History</h2>
-        <div class="note">This is the actual day log archive. Tap any day to view details.</div>
-        <div class="hr"></div>
+    <section class="card">
+      <h2>History</h2>
+      <div class="note">This is the actual day log archive. Tap any day to view details.</div>
+      <div class="hr"></div>
 
-        ${dates.length ? `<div class="list">${items}</div>` : `<div class="note">No day logs saved yet. Save a log from the Today page.</div>`}
-      </section>
+      ${dates.length ? `<div class="list">${items}</div>` : `<div class="note">No day logs saved yet. Save a log from the Today page.</div>`}
+    </section>
 
-      <section class="card">
-        <h2>Bath tracker</h2>
-        <div class="note">Rule: bath at least every 3 days. Mark it on the Today page.</div>
-        <div class="hr"></div>
-        <div class="kpi">
-          <div class="chip"><b>Last bath:</b> ${lastBathISODate() || "None yet"}</div>
-          <div class="chip"><b>Status:</b> ${isBathDue() ? "Due ⚠" : "OK ✅"}</div>
-        </div>
+    <section class="card">
+      <h2>Bath tracker</h2>
+      <div class="note">Rule: bath at least every 3 days. Mark it on the Today page.</div>
+      <div class="hr"></div>
 
-        <div class="hr"></div>
-        <div class="note">If bath is due, the schedule will show “Bath (due today)”. Also note: bath cannot be scheduled if Julio is unavailable—plan intentionally on those evenings.</div>
-      </section>
-    </div>
+      <div class="kpi">
+        <div class="chip"><b>Last bath:</b> ${lastBath ? formatShortDate(lastBath) : "None yet"}</div>
+        <div class="chip"><b>Status:</b> ${bathDue ? `<span class="badge warn">⚠ Bath is due</span>` : `<span class="badge good">✅ Not due</span>`}</div>
+      </div>
+    </section>
   `;
 }
 
@@ -1236,33 +1262,55 @@ function viewSettings() {
    Timeline rendering
 ---------------------------- */
 function renderTimeline(blocks) {
-  // 2-hour grid from 6:00 to 22:00 by default, but expand if needed.
-  const minStart = Math.min(...blocks.map(b=>b.startMin), 6*60);
-  const maxEnd = Math.max(...blocks.map(b=>b.endMin), 22*60);
+  if (!Array.isArray(blocks) || !blocks.length) {
+    return `<div class="note">No scheduled blocks yet.</div>`;
+  }
+
+  // Expand grid to include all blocks, in a 2-hour labeled grid.
+  const minStart = Math.min(...blocks.map(b => b.startMin), 6 * 60);
+  const maxEnd = Math.max(...blocks.map(b => b.endMin), 22 * 60);
   const startGrid = Math.floor(minStart / 120) * 120;
   const endGrid = Math.ceil(maxEnd / 120) * 120;
 
-  const totalMinutes = endGrid - startGrid;
+  const totalMinutes = Math.max(120, endGrid - startGrid);
+
+  // Make it more detailed than before (more pixels per minute).
+  const pxPerMin = 1.6; // higher = more detailed
+  const heightPx = Math.max(780, Math.round(totalMinutes * pxPerMin) + 40);
+
+  // Grid rows (2-hour)
   const rows = [];
   for (let t = startGrid; t < endGrid; t += 120) {
-    rows.push({ label: minutesToHHMM(t), startMin: t, endMin: t + 120 });
+    rows.push({ label: minutesToClock12(t), startMin: t, endMin: t + 120 });
   }
 
-  const heightPx = 560;
-  const pxPerMin = heightPx / totalMinutes;
-
-  const gridHtml = rows.map((r, i) => `
-    <div class="gridRow" style="height:${Math.round((r.endMin-r.startMin)*pxPerMin)}px">
+  const gridHtml = rows.map(r => `
+    <div class="trow">
+      <div class="tline"></div>
       <div class="tlabel">${r.label}</div>
     </div>
   `).join("");
 
-  const blockHtml = blocks.map(b => {
-    const top = Math.round((b.startMin - startGrid) * pxPerMin) + 10;
-    const h = Math.max(34, Math.round((b.endMin - b.startMin) * pxPerMin) - 6);
+  // Lane assignment so overlapping blocks are shown side-by-side instead of stacked.
+  // Greedy: assign the first lane whose last end is <= this start.
+  const sorted = [...blocks].sort((a, b) => (a.startMin - b.startMin) || (a.endMin - b.endMin));
+  const laneEnds = []; // per lane: last endMin
+  const withLane = sorted.map(b => {
+    let lane = 0;
+    for (; lane < laneEnds.length; lane++) {
+      if (laneEnds[lane] <= b.startMin) break;
+    }
+    if (lane === laneEnds.length) laneEnds.push(b.endMin);
+    else laneEnds[lane] = b.endMin;
+    return { ...b, _lane: lane };
+  });
+  const lanes = Math.max(1, laneEnds.length);
 
-    const meta = [];
-    meta.push(`${minutesToHHMM(b.startMin)}–${minutesToHHMM(b.endMin)}`);
+  const blockHtml = withLane.map(b => {
+    const top = Math.round((b.startMin - startGrid) * pxPerMin) + 12;
+    const h = Math.max(36, Math.round((b.endMin - b.startMin) * pxPerMin) - 8);
+
+    const timeLabel = `${minutesToClock12(b.startMin)}–${minutesToClock12(b.endMin)}`;
 
     let badges = "";
     if (b.meta?.kind === "nap") {
@@ -1276,11 +1324,17 @@ function renderTimeline(blocks) {
     if (b.meta?.kind === "appointment") badges += ` <span class="badge good">📍 Appointment</span>`;
     if (b.meta?.kind === "bedtime") badges += ` <span class="badge">🌙 ${escapeHtml(b.meta.bedtimeBy || "")}</span>`;
 
+    // label column is ~74px; keep a small right gutter
+    const labelGutter = 84; // px (74 label col + 10 padding)
+    const laneGap = 8; // px gap between lanes
+    const leftExpr = `calc(74px + (${b._lane} * ((100% - ${labelGutter}px) / ${lanes})) + ${laneGap/2}px)`;
+    const widthExpr = `calc(((100% - ${labelGutter}px) / ${lanes}) - ${laneGap}px)`;
+
     return `
-      <div class="block" style="top:${top}px; height:${h}px">
+      <div class="block" style="top:${top}px; height:${h}px; left:${leftExpr}; width:${widthExpr};">
         <div class="title">${escapeHtml(b.title)}</div>
         <div class="meta">
-          <span>${meta.join(" • ")}</span>
+          <span>${timeLabel}</span>
           ${badges}
         </div>
       </div>
@@ -1288,7 +1342,7 @@ function renderTimeline(blocks) {
   }).join("");
 
   return `
-    <div class="timelineWrap" aria-label="Timeline schedule">
+    <div class="timelineWrap" style="min-height:${heightPx}px" aria-label="Timeline schedule">
       <div class="timelineGrid">${gridHtml}</div>
       <div class="blocks">${blockHtml}</div>
     </div>
@@ -1718,24 +1772,35 @@ function wireQuizModal() {
 
   const backBtn = $("#quizBackBtn");
   if (backBtn) backBtn.addEventListener("click", () => {
+    readQuizStepIntoDraft();
     state.quiz.step = Math.max(0, state.quiz.step - 1);
     renderQuiz();
   });
 
   const nextBtn = $("#quizNextBtn");
   if (nextBtn) nextBtn.addEventListener("click", async () => {
-    // Validate/save step data into draft
-    const ok = readQuizStepIntoDraft();
-    if (!ok) return;
+    if (state.quiz._busy) return;
+    state.quiz._busy = true;
+    nextBtn.disabled = true;
 
-    if (state.quiz.step < QUIZ_STEPS.length - 1) {
-      state.quiz.step += 1;
-      renderQuiz();
-      return;
+    try {
+      // Save current step inputs into draft
+      const ok = readQuizStepIntoDraft();
+      if (!ok) return;
+
+      // Move forward until the final step
+      if (state.quiz.step < QUIZ_STEPS.length - 1) {
+        state.quiz.step += 1;
+        renderQuiz();
+        return;
+      }
+
+      // Final step: save plan
+      await saveTomorrowPlanFromDraft();
+    } finally {
+      state.quiz._busy = false;
+      nextBtn.disabled = false;
     }
-
-    // Save plan
-    await saveTomorrowPlanFromDraft();
   });
 }
 
@@ -1748,7 +1813,10 @@ function renderQuiz() {
 
   if (!stepper || !body || !hint || !nextBtn || !backBtn) return;
 
-  stepper.innerHTML = QUIZ_STEPS.map((s, i) => `<div class="step ${i===state.quiz.step ? "active":""}">${i+1}. ${escapeHtml(s.label)}</div>`).join("");
+  stepper.innerHTML = QUIZ_STEPS.map((s, i) => {
+    const cls = (i === state.quiz.step) ? "step active" : "step";
+    return `<button class="${cls}" type="button" data-quiz-step="${i}">${i+1}. ${escapeHtml(s.label)}</button>`;
+  }).join("");
 
   hint.textContent = `Step ${state.quiz.step + 1} of ${QUIZ_STEPS.length}`;
   backBtn.style.visibility = (state.quiz.step === 0) ? "hidden" : "visible";
@@ -1759,6 +1827,25 @@ function renderQuiz() {
 
   // Attach dynamic handlers inside step
   wireQuizStepHandlers(stepKey);
+
+  // Make steps clickable (so editing is easy)
+  $all("[data-quiz-step]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      // Save current step inputs before jumping
+      readQuizStepIntoDraft();
+      const i = Number(btn.getAttribute("data-quiz-step"));
+      if (!Number.isFinite(i)) return;
+      state.quiz.step = clamp(i, 0, QUIZ_STEPS.length - 1);
+      renderQuiz();
+    });
+  });
+
+  // Autosave inputs on this step (prevents losing edits when adding/removing blocks)
+  $all("#quizBody input, #quizBody textarea, #quizBody select").forEach(el => {
+    el.addEventListener("input", () => readQuizStepIntoDraft());
+    el.addEventListener("change", () => readQuizStepIntoDraft());
+  });
+
 }
 
 function quizStepView(stepKey) {
@@ -1793,7 +1880,7 @@ function quizStepView(stepKey) {
       ` : `<div class="note">No open tasks to clean up right now.</div>`}
 
       <div class="hr"></div>
-      <div class="note">Tomorrow we’re planning for: <b>${tomorrow}</b></div>
+      <div class="note">Tomorrow we’re planning for: <b>${formatShortDate(tomorrow)}</b></div>
     `;
   }
 
@@ -1934,7 +2021,7 @@ function quizStepView(stepKey) {
     const tasksChosen = (draft.tasksChosen || []).map(id => state.tasks.find(t => t.id === id)).filter(Boolean);
 
     return `
-      <div class="note">Here’s the forecast schedule for <b>${tomorrow}</b>, anchored on the default wake time <b>${loadConfig().expectedWake}</b>.</div>
+      <div class="note">Here’s the forecast schedule for <b>${formatShortDate(tomorrow)}</b>, anchored on the default wake time <b>${hhmmToClock12(loadConfig().expectedWake)}</b>.</div>
       ${warning ? `<div class="hr"></div><div class="badge warn">⚠ ${escapeHtml(warning)}</div>` : ""}
       <div class="hr"></div>
 
@@ -1999,6 +2086,7 @@ function wireQuizStepHandlers(stepKey) {
     const chk = $("#nannyWorkingChk");
     if (chk) chk.addEventListener("change", () => {
       draft.nannyWorking = !!chk.checked;
+      readQuizStepIntoDraft();
       renderQuiz();
     });
   }
@@ -2009,6 +2097,7 @@ function wireQuizStepHandlers(stepKey) {
       const key = btn.getAttribute("data-block-add");
       draft[key] = draft[key] || [];
       draft[key].push({ start: "", end: "" });
+      readQuizStepIntoDraft();
       renderQuiz();
     });
   });
@@ -2020,6 +2109,7 @@ function wireQuizStepHandlers(stepKey) {
       const idx = Number(idxS);
       if (!Array.isArray(draft[key])) return;
       draft[key].splice(idx, 1);
+      readQuizStepIntoDraft();
       renderQuiz();
     });
   });
@@ -2030,13 +2120,15 @@ function wireQuizStepHandlers(stepKey) {
     if (add) add.addEventListener("click", () => {
       draft.appointments = draft.appointments || [];
       draft.appointments.push({ id: uid(), title: "", start: "", end: "" });
+      readQuizStepIntoDraft();
       renderQuiz();
     });
     $all("[data-appt-del]").forEach(btn => {
       btn.addEventListener("click", () => {
         const id = btn.getAttribute("data-appt-del");
         draft.appointments = (draft.appointments || []).filter(a => a.id !== id);
-        renderQuiz();
+        readQuizStepIntoDraft();
+      renderQuiz();
       });
     });
   }
@@ -2200,7 +2292,7 @@ function openHistoryModal(isoDate) {
   const overlay = $("#quizOverlay");
   overlay.classList.add("show");
 
-  $("#quizStepper").innerHTML = `<div class="step active">History • ${escapeHtml(isoDate)}</div>`;
+  $("#quizStepper").innerHTML = `<div class="step active">History • ${escapeHtml(formatShortDate(isoDate))}</div>`;
   $("#quizHint").textContent = "Viewing saved day log";
   $("#quizBackBtn").style.visibility = "hidden";
   $("#quizNextBtn").textContent = "Close";
@@ -2208,13 +2300,13 @@ function openHistoryModal(isoDate) {
   $("#quizCloseBtn").onclick = () => closeEveningQuiz();
 
   $("#quizBody").innerHTML = `
-    <div class="note">Saved actuals for <b>${escapeHtml(isoDate)}</b>.</div>
+    <div class="note">Saved actuals for <b>${escapeHtml(formatShortDate(isoDate))}</b>.</div>
     <div class="hr"></div>
 
-    <div class="note"><b>Wake:</b> ${escapeHtml(log.wakeTime || "—")}</div>
-    <div class="note"><b>Nap 1:</b> ${escapeHtml(log.nap1Start || "—")} → ${escapeHtml(log.nap1End || "—")}</div>
-    <div class="note"><b>Nap 2:</b> ${escapeHtml(log.nap2Start || "—")} → ${escapeHtml(log.nap2End || "—")}</div>
-    <div class="note"><b>Bedtime (tracking):</b> ${escapeHtml(log.bedtimeTime || "—")}</div>
+    <div class="note"><b>Wake:</b> ${escapeHtml(log.wakeTime ? hhmmToClock12(log.wakeTime) : "—")}</div>
+    <div class="note"><b>Nap 1:</b> ${escapeHtml(log.nap1Start ? hhmmToClock12(log.nap1Start) : "—")} → ${escapeHtml(log.nap1End ? hhmmToClock12(log.nap1End) : "—")}</div>
+    <div class="note"><b>Nap 2:</b> ${escapeHtml(log.nap2Start ? hhmmToClock12(log.nap2Start) : "—")} → ${escapeHtml(log.nap2End ? hhmmToClock12(log.nap2End) : "—")}</div>
+    <div class="note"><b>Bedtime (tracking):</b> ${escapeHtml(log.bedtimeTime ? hhmmToClock12(log.bedtimeTime) : "—")}</div>
     <div class="note"><b>Bath done:</b> ${log.bathDone ? "Yes ✅" : "No"}</div>
 
     <div class="hr"></div>
