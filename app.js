@@ -9,7 +9,7 @@
 /* =========================
    CONFIG (edit these)
    ========================= */
-const BUILD_VERSION = "1.0.5";
+const BUILD_VERSION = "1.0.6";
 
 const CONFIG = {
   // Supabase
@@ -61,6 +61,24 @@ async function getHouseholdMembershipDebug() {
   }
 }
 
+async function hardRefreshApp(){
+  try {
+    if (navigator.serviceWorker?.getRegistrations) {
+      const regs = await navigator.serviceWorker.getRegistrations();
+      await Promise.all(regs.map(r => r.unregister()));
+    }
+    if (window.caches?.keys) {
+      const keys = await caches.keys();
+      await Promise.all(keys.map(k => caches.delete(k)));
+    }
+    toast("Cleared app cache. Reloading…");
+    setTimeout(() => location.reload(), 350);
+  } catch (e) {
+    toast("Could not clear cache: " + String(e), "warn");
+  }
+}
+
+
 function renderDiagnosticsCard(containerEl) {
   const card = el("div", { className: "card" });
   card.appendChild(el("div", { className: "card-title", textContent: "Diagnostics" }));
@@ -91,23 +109,7 @@ function renderDiagnosticsCard(containerEl) {
   });
 
   const hardReloadBtn = el("button", { className: "btn btn-secondary", textContent: "Hard refresh app" });
-  hardReloadBtn.addEventListener("click", async () => {
-    try {
-      // Unregister SW + clear caches
-      if (navigator.serviceWorker?.getRegistrations) {
-        const regs = await navigator.serviceWorker.getRegistrations();
-        await Promise.all(regs.map(r => r.unregister()));
-      }
-      if (window.caches?.keys) {
-        const keys = await caches.keys();
-        await Promise.all(keys.map(k => caches.delete(k)));
-      }
-      toast("Cleared app cache. Reloading…");
-      setTimeout(() => location.reload(true), 300);
-    } catch (e) {
-      toast("Could not clear cache: " + String(e), "warn");
-    }
-  });
+  hardReloadBtn.addEventListener("click", async () => { await hardRefreshApp(); });
 
   btnRow.appendChild(runBtn);
   btnRow.appendChild(hardReloadBtn);
@@ -2529,16 +2531,61 @@ function render(){
   }
 
   if (!App.householdId){
+    // Allow diagnostics + hard refresh even before household link succeeds
     view.innerHTML = `
       <div class="card">
         <div class="hd"><div><h2>Account not linked to household</h2>
           <p>Ask the household admin to add your user to <code>household_members</code> in Supabase.</p></div></div>
         <div class="bd">
           <div class="hint"><strong>Your email:</strong> ${escapeHtml(App.user.email)}</div>
-          <div class="hint" style="margin-top:6px;">After linking, reopen the app.</div>
+          <div class="hint" style="margin-top:6px;">If you believe you are linked already, run diagnostics below.</div>
+
+          <div class="row" style="margin-top:12px; gap:10px; flex-wrap:wrap;">
+            <button class="btn" id="btnDiag">Run diagnostics</button>
+            <button class="btn btn-secondary" id="btnHard">Hard refresh app</button>
+            <button class="btn btn-secondary" id="btnSignOut">Sign out</button>
+          </div>
+
+          <pre class="diag-pre" id="diagOut">Tap "Run diagnostics" to see what the app can read from Supabase.</pre>
         </div>
       </div>
     `;
+    const btnDiag = $("#btnDiag");
+    const btnHard = $("#btnHard");
+    const btnSignOut = $("#btnSignOut");
+    const diagOut = $("#diagOut");
+
+    btnHard?.addEventListener("click", async () => { await hardRefreshApp(); });
+    btnSignOut?.addEventListener("click", async () => {
+      try { await App.sb.auth.signOut(); } catch(e){}
+      toast("Signed out");
+      location.reload();
+    });
+
+    btnDiag?.addEventListener("click", async () => {
+      btnDiag.disabled = true;
+      btnDiag.textContent = "Running…";
+      const dbg = await getHouseholdMembershipDebug();
+      const safe = {
+        build: (typeof BUILD_VERSION !== "undefined" ? BUILD_VERSION : "unknown"),
+        supabaseUrl: CONFIG?.supabaseUrl || null,
+        userEmail: App.user?.email || null,
+        userId: App.user?.id || null,
+        membership: dbg.membership,
+        error: dbg.error,
+        ok: dbg.ok
+      };
+      diagOut.textContent = JSON.stringify(safe, null, 2);
+      btnDiag.disabled = false;
+      btnDiag.textContent = "Run diagnostics";
+      if (!dbg.ok && dbg.error?.message) toast("Diagnostics: " + dbg.error.message, "warn");
+      if (dbg.ok && dbg.membership?.household_id) toast("Membership found. Try reopening the app.", "success");
+    });
+
+    // Still allow Settings tab even when not linked
+    if (App.activeTab === "settings") {
+      view.appendChild(renderSettings());
+    }
     return;
   }
 
