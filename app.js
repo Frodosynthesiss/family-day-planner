@@ -58,6 +58,12 @@ function toISODate(d) {
   const day = pad2(d.getDate());
   return `${y}-${m}-${day}`;
 }
+function formatDateShort(isoDate) {
+  const [y, m, d] = String(isoDate || "").split("-");
+  if (!y || !m || !d) return String(isoDate || "");
+  return `${m}/${d}/${y.slice(2)}`;
+}
+
 function addDays(isoDate, days) {
   const d = new Date(isoDate + "T12:00:00");
   d.setDate(d.getDate() + days);
@@ -72,6 +78,21 @@ function minutesToHHMM(mins) {
   const m = ((mins % 1440) + 1440) % 1440;
   return `${pad2(Math.floor(m / 60))}:${pad2(m % 60)}`;
 }
+function formatTime12FromHHMM(hhmm) {
+  const parts = String(hhmm || "00:00").split(":");
+  const H = Number(parts[0] || 0);
+  const M = Number(parts[1] || 0);
+  const ampm = (H >= 12) ? "PM" : "AM";
+  const h12 = ((H + 11) % 12) + 1;
+  return `${h12}:${String(M).padStart(2,"0")} ${ampm}`;
+}
+function formatTime12FromMinutes(mins) {
+  return formatTime12FromHHMM(minutesToHHMM(mins));
+}
+function formatRange12(startMin, endMin) {
+  return `${formatTime12FromMinutes(startMin)}–${formatTime12FromMinutes(endMin)}`;
+}
+
 
 function formatShortDate(isoDate) {
   // isoDate: YYYY-MM-DD -> MM/DD/YY
@@ -1261,90 +1282,89 @@ function viewSettings() {
 /* ---------------------------
    Timeline rendering
 ---------------------------- */
-function renderTimeline(blocks) {
-  if (!Array.isArray(blocks) || !blocks.length) {
-    return `<div class="note">No scheduled blocks yet.</div>`;
+function renderTimeline(arg) {
+  // Calendar-like timeline (Google/Outlook style)
+  const blocks = (arg && arg.blocks) ? arg.blocks : (Array.isArray(arg) ? arg : []);
+  const opts = (arg && arg.opts) ? arg.opts : {};
+  const pxPerMin = Number(opts.pxPerMin || 1.6); // higher detail
+  const padStartMin = 30;
+  const padEndMin = 30;
+
+  let minStart = 6*60, maxEnd = 20*60;
+  if (blocks && blocks.length) {
+    minStart = Math.min(...blocks.map(b => b.startMin));
+    maxEnd = Math.max(...blocks.map(b => b.endMin));
+    minStart = Math.floor((minStart - padStartMin) / 30) * 30;
+    maxEnd = Math.ceil((maxEnd + padEndMin) / 30) * 30;
+    minStart = Math.max(0, minStart);
+    maxEnd = Math.min(24*60, maxEnd);
   }
+  const totalMins = Math.max(60, maxEnd - minStart);
+  const height = Math.round(totalMins * pxPerMin);
 
-  // Expand grid to include all blocks, in a 2-hour labeled grid.
-  const minStart = Math.min(...blocks.map(b => b.startMin), 6 * 60);
-  const maxEnd = Math.max(...blocks.map(b => b.endMin), 22 * 60);
-  const startGrid = Math.floor(minStart / 120) * 120;
-  const endGrid = Math.ceil(maxEnd / 120) * 120;
-
-  const totalMinutes = Math.max(120, endGrid - startGrid);
-
-  // Make it more detailed than before (more pixels per minute).
-  const pxPerMin = 1.6; // higher = more detailed
-  const heightPx = Math.max(780, Math.round(totalMinutes * pxPerMin) + 40);
-
-  // Grid rows (2-hour)
-  const rows = [];
-  for (let t = startGrid; t < endGrid; t += 120) {
-    rows.push({ label: minutesToClock12(t), startMin: t, endMin: t + 120 });
-  }
-
-  const gridHtml = rows.map(r => `
-    <div class="trow">
-      <div class="tline"></div>
-      <div class="tlabel">${r.label}</div>
-    </div>
-  `).join("");
-
-  // Lane assignment so overlapping blocks are shown side-by-side instead of stacked.
-  // Greedy: assign the first lane whose last end is <= this start.
-  const sorted = [...blocks].sort((a, b) => (a.startMin - b.startMin) || (a.endMin - b.endMin));
-  const laneEnds = []; // per lane: last endMin
-  const withLane = sorted.map(b => {
+  // Lane assignment (no overlap stacking)
+  const sorted = [...(blocks || [])].sort((a,b)=> (a.startMin-b.startMin) || (a.endMin-b.endMin));
+  const lanes = [];
+  const placed = sorted.map(b => {
     let lane = 0;
-    for (; lane < laneEnds.length; lane++) {
-      if (laneEnds[lane] <= b.startMin) break;
-    }
-    if (lane === laneEnds.length) laneEnds.push(b.endMin);
-    else laneEnds[lane] = b.endMin;
-    return { ...b, _lane: lane };
+    while (lane < lanes.length && lanes[lane] > b.startMin) lane++;
+    if (lane === lanes.length) lanes.push(b.endMin);
+    else lanes[lane] = b.endMin;
+    return Object.assign({}, b, { _lane: lane });
   });
-  const lanes = Math.max(1, laneEnds.length);
+  const laneCount = Math.max(1, lanes.length);
+  const gap = 6;
 
-  const blockHtml = withLane.map(b => {
-    const top = Math.round((b.startMin - startGrid) * pxPerMin) + 12;
-    const h = Math.max(36, Math.round((b.endMin - b.startMin) * pxPerMin) - 8);
+  // Time labels every 30 minutes, text on hour only
+  let labelsHtml = "";
+  for (let t = minStart; t <= maxEnd; t += 30) {
+    const show = (t % 60 === 0);
+    labelsHtml += `<div class="timeLabel" style="height:${Math.round(30*pxPerMin)}px">${show ? formatTime12FromMinutes(t) : ""}</div>`;
+  }
 
-    const timeLabel = `${minutesToClock12(b.startMin)}–${minutesToClock12(b.endMin)}`;
+  // Grid lines
+  let linesHtml = "";
+  for (let t = minStart; t <= maxEnd; t += 30) {
+    const y = Math.round((t - minStart) * pxPerMin);
+    const major = (t % 60 === 0) ? "major" : "";
+    linesHtml += `<div class="hLine ${major}" style="top:${y}px"></div>`;
+  }
 
-    let badges = "";
-    if (b.meta?.kind === "nap") {
-      const c = b.meta.caregiver || { who:"—", status:"warn" };
-      const cls = c.status === "ok" ? "good" : (c.status === "bad" ? "bad" : "warn");
-      badges += ` <span class="badge ${cls}">🛌 ${escapeHtml(c.who)}</span>`;
-      if (b.meta.conflict) badges += ` <span class="badge warn">⚠ ${escapeHtml(b.meta.conflict)}</span>`;
-      if (b.meta.adjustedForAppt) badges += ` <span class="badge warn">↔ Adjusted</span>`;
-    }
-    if (b.meta?.kind === "bath") badges += ` <span class="badge warn">🛁 Due</span>`;
-    if (b.meta?.kind === "appointment") badges += ` <span class="badge good">📍 Appointment</span>`;
-    if (b.meta?.kind === "bedtime") badges += ` <span class="badge">🌙 ${escapeHtml(b.meta.bedtimeBy || "")}</span>`;
+  // Events
+  const colW = 100 / laneCount;
+  let eventsHtml = "";
+  for (const b of placed) {
+    const top = Math.round((b.startMin - minStart) * pxPerMin);
+    const h = Math.max(22, Math.round((b.endMin - b.startMin) * pxPerMin));
+    const leftPct = b._lane * colW;
+    const widthPct = colW;
 
-    // label column is ~74px; keep a small right gutter
-    const labelGutter = 84; // px (74 label col + 10 padding)
-    const laneGap = 8; // px gap between lanes
-    const leftExpr = `calc(74px + (${b._lane} * ((100% - ${labelGutter}px) / ${lanes})) + ${laneGap/2}px)`;
-    const widthExpr = `calc(((100% - ${labelGutter}px) / ${lanes}) - ${laneGap}px)`;
+    const range = formatRange12(b.startMin, b.endMin);
+    const kind = (b.meta && b.meta.kind) ? b.meta.kind : "";
+    let cls = "event";
+    if (kind === "uncovered") cls += " danger";
+    if (kind === "bath" && b.meta && b.meta.due) cls += " warn";
 
-    return `
-      <div class="block" style="top:${top}px; height:${h}px; left:${leftExpr}; width:${widthExpr};">
-        <div class="title">${escapeHtml(b.title)}</div>
-        <div class="meta">
-          <span>${timeLabel}</span>
-          ${badges}
-        </div>
-      </div>
-    `;
-  }).join("");
+    eventsHtml += `
+      <div class="${cls}" style="top:${top}px;height:${h}px;left:calc(${leftPct}% + ${gap}px);width:calc(${widthPct}% - ${gap*2}px)">
+        <div class="t">${escapeHtml(b.title)}</div>
+        <div class="s">${range}</div>
+      </div>`;
+  }
 
   return `
-    <div class="timelineWrap" style="min-height:${heightPx}px" aria-label="Timeline schedule">
-      <div class="timelineGrid">${gridHtml}</div>
-      <div class="blocks">${blockHtml}</div>
+    <div class="timelineWrap">
+      <div class="timelineHeader">
+        <div><b>Timeline</b> <span class="muted">(12‑hour clock)</span></div>
+        <div class="muted">${formatTime12FromMinutes(minStart)}–${formatTime12FromMinutes(maxEnd)}</div>
+      </div>
+      <div class="timelineGrid" style="height:${height}px">
+        <div class="timeCol">${labelsHtml}</div>
+        <div class="canvas" style="height:${height}px">
+          ${linesHtml}
+          ${eventsHtml}
+        </div>
+      </div>
     </div>
   `;
 }
@@ -1390,7 +1410,7 @@ function renderTaskRow(t, { context, today }) {
 ---------------------------- */
 function renderPlanSummary(plan) {
   const blocks = (label, arr) => {
-    const b = normalizeBlocks(arr || []).map(x => `${minutesToHHMM(x.startMin)}–${minutesToHHMM(x.endMin)}`);
+    const b = normalizeBlocks(arr || []).map(x => `${formatTime12FromMinutes(x.startMin)}–${formatTime12FromMinutes(x.endMin)}`);
     return b.length ? `<div class="note"><b>${escapeHtml(label)}:</b> ${b.join(", ")}</div>` : `<div class="note"><b>${escapeHtml(label)}:</b> None</div>`;
   };
   const appts = (plan.appointments || []).length ? `
