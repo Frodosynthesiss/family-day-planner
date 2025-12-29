@@ -1,2747 +1,1320 @@
-/* Family Day Planner – Vanilla JS PWA (GitHub Pages friendly)
-   - Mobile-first, light earth-tone UI
-   - Supabase email/password auth + household-scoped RLS
-   - Evening wizard saves tomorrow plan (editable)
-   - Today timeline regenerates from actual wake/nap times
-   - Persistent tasks + History logs + Settings
+/* Family Day Planner (vanilla JS + Supabase)
+   - Stable init order (no use-before-init)
+   - Defensive Supabase calls + toasts
+   - Deterministic schedule generation
+   - Kayden NEVER assigned naps (hard rule)
 */
-
-/* =========================
-   CONFIG (edit these)
-   ========================= */
-const BUILD_VERSION = "1.0.6";
-
-const CONFIG = {
-  // Supabase
-  supabaseUrl: "https://qsnmuojajbtyxdvijwon.supabase.co",                       // e.g. https://xxxx.supabase.co
-  supabaseKey: "sb_publishable_9AFfe1UiuDpQs8FpRUWCvw_wmzFKTMm",   // e.g. sb_publishable_...
-  // Apps Script export (optional)
-  appsScriptUrl: "YOUR_APPS_SCRIPT_WEB_APP_URL",          // optional; leave blank to hide export button
-  appsScriptApiKey: "YOUR_SHARED_API_KEY",                // optional; if using export
-  // Display / scheduling
-  timezone: "America/Los_Angeles",
-};
-
-
-
-// ---------- Diagnostics ----------
-async function getHouseholdMembershipDebug() {
-  const out = { ok: false, membership: null, error: null };
-  try {
-    if (!state.sb || !state.sb.auth) {
-      out.error = { message: "Supabase client not initialized (state.sb missing)." };
-      return out;
-    }
-    const { data: sessionData, error: sessionErr } = await state.sb.auth.getSession();
-    if (sessionErr) {
-      out.error = { message: sessionErr.message || "Session error", details: sessionErr };
-      return out;
-    }
-    const user = sessionData?.session?.user || null;
-    if (!user) {
-      out.error = { message: "No active session user (not signed in)." };
-      return out;
-    }
-    const { data, error } = await state.sb
-      .from("household_members")
-      .select("household_id, role, created_at")
-      .eq("user_id", user.id)
-      .maybeSingle();
-
-    if (error) {
-      out.error = { message: error.message || "Query error", details: error };
-      return out;
-    }
-    out.ok = true;
-    out.membership = data || null;
-    return out;
-  } catch (e) {
-    out.error = { message: String(e) };
-    return out;
-  }
-}
-
-async function hardRefreshApp(){
-  try {
-    if (navigator.serviceWorker?.getRegistrations) {
-      const regs = await navigator.serviceWorker.getRegistrations();
-      await Promise.all(regs.map(r => r.unregister()));
-    }
-    if (window.caches?.keys) {
-      const keys = await caches.keys();
-      await Promise.all(keys.map(k => caches.delete(k)));
-    }
-    toast("Cleared app cache. Reloading…");
-    setTimeout(() => location.reload(), 350);
-  } catch (e) {
-    toast("Could not clear cache: " + String(e), "warn");
-  }
-}
-
-
-function renderDiagnosticsCard(containerEl) {
-  const card = el("div", { className: "card" });
-  card.appendChild(el("div", { className: "card-title", textContent: "Diagnostics" }));
-  card.appendChild(el("div", { className: "muted", style: "margin-top:4px" , textContent:
-    "Use this if the app says you are not linked to a household. It will show exactly what the app can see from Supabase."
-  }));
-  const pre = el("pre", { className: "diag-pre", textContent: "Tap 'Run diagnostics'…" });
-  const btnRow = el("div", { className: "row", style: "margin-top:10px; gap:10px; flex-wrap:wrap" });
-
-  const runBtn = el("button", { className: "btn", textContent: "Run diagnostics" });
-  runBtn.addEventListener("click", async () => {
-    runBtn.disabled = true;
-    runBtn.textContent = "Running…";
-    const dbg = await getHouseholdMembershipDebug();
-    const safe = {
-      build: (typeof BUILD_VERSION !== "undefined" ? BUILD_VERSION : "unknown"),
-      supabaseUrl: CONFIG?.supabaseUrl || null,
-      userEmail: state.user?.email || null,
-      userId: state.user?.id || null,
-      membership: dbg.membership,
-      error: dbg.error,
-      ok: dbg.ok
-    };
-    pre.textContent = JSON.stringify(safe, null, 2);
-    runBtn.disabled = false;
-    runBtn.textContent = "Run diagnostics";
-    if (!dbg.ok && dbg.error?.message) toast("Diagnostics: " + dbg.error.message, "warn");
-  });
-
-  const hardReloadBtn = el("button", { className: "btn btn-secondary", textContent: "Hard refresh app" });
-  hardReloadBtn.addEventListener("click", async () => { await hardRefreshApp(); });
-
-  btnRow.appendChild(runBtn);
-  btnRow.appendChild(hardReloadBtn);
-  card.appendChild(btnRow);
-  card.appendChild(pre);
-  containerEl.appendChild(card);
-}
-// ---------- /Diagnostics ----------
-
-/* =========================
-   Safe helpers
-   ========================= */
-function $(sel, root = document) { return root.querySelector(sel); }
-function $all(sel, root = document) { return Array.from(root.querySelectorAll(sel)); }
-
-function clamp(n, min, max){ return Math.max(min, Math.min(max, n)); }
-
-function pad2(n){ return String(n).padStart(2, "0"); }
-
-function toIsoDate(d){
-  // d: Date
-  const y = d.getFullYear();
-  const m = pad2(d.getMonth()+1);
-  const day = pad2(d.getDate());
-  return `${y}-${m}-${day}`;
-}
-
-function fromIsoDate(iso){
-  // iso: YYYY-MM-DD -> Date (local)
-  const [y,m,d] = iso.split("-").map(Number);
-  return new Date(y, m-1, d);
-}
-
-function formatDateShort(d){
-  // MM/DD/YY
-  const mm = pad2(d.getMonth()+1);
-  const dd = pad2(d.getDate());
-  const yy = String(d.getFullYear()).slice(-2);
-  return `${mm}/${dd}/${yy}`;
-}
-
-function minutesFromHHMM(hhmm){
-  if (!hhmm) return null;
-  const [h,m] = hhmm.split(":").map(Number);
-  return h*60 + m;
-}
-
-function hhmmFromMinutes(mins){
-  mins = ((mins % (24*60)) + 24*60) % (24*60);
-  const h = Math.floor(mins/60);
-  const m = mins % 60;
-  return `${pad2(h)}:${pad2(m)}`;
-}
-
-function formatTime12FromMinutes(mins){
-  const hhmm = hhmmFromMinutes(mins);
-  return formatTime12(hhmm);
-}
-
-function formatTime12(hhmm){
-  // hhmm: "HH:MM" (24h)
-  if (!hhmm) return "—";
-  const [hRaw, m] = hhmm.split(":").map(Number);
-  const ampm = hRaw >= 12 ? "PM" : "AM";
-  let h = hRaw % 12;
-  if (h === 0) h = 12;
-  return `${h}:${pad2(m)} ${ampm}`;
-}
-
-function nowHHMM(){
-  const d = new Date();
-  return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
-}
-
-function deepCopy(obj){ return JSON.parse(JSON.stringify(obj)); }
-
-function withTimeout(promise, ms, label="Request"){
-  let t;
-  const timeout = new Promise((_, reject) => {
-    t = setTimeout(() => reject(new Error(label + " timed out")), ms);
-  });
-  return Promise.race([promise, timeout]).finally(() => clearTimeout(t));
-}
-
-function debounce(fn, ms){
-  let t = null;
-  return (...args) => {
-    clearTimeout(t);
-    t = setTimeout(() => fn(...args), ms);
-  };
-}
-
-function uniqBy(arr, keyFn){
-  const seen = new Set();
-  const out = [];
-  for (const x of arr){
-    const k = keyFn(x);
-    if (seen.has(k)) continue;
-    seen.add(k);
-    out.push(x);
-  }
-  return out;
-}
-
-function overlaps(aStart, aEnd, bStart, bEnd){
-  return Math.max(aStart, bStart) < Math.min(aEnd, bEnd);
-}
-
-/* =========================
-   Supabase init (UMD global)
-   ========================= */
-let supabaseClient = null;
-function initSupabase(){
-  if (!window.supabase) throw new Error("Supabase library not loaded.");
-  // Use global supabase.createClient when loaded via CDN script tag.
-  supabaseClient = window.supabase.createClient(CONFIG.supabaseUrl, CONFIG.supabaseKey, {
-    auth: { persistSession: true, autoRefreshToken: true },
-  });
-  return supabaseClient;
-}
-
-/* =========================
-   Default settings
-   ========================= */
-const DEFAULT_SETTINGS = {
-  defaultWakeTime: "07:00",
-  // meal durations include prep + eat
-  breakfastDurationMin: 35,
-  lunchDurationMin: 35,
-  dinnerDurationMin: 40,
-  snackMilkDurationMin: 15,
-  napRoutineDurationMin: 15,
-  bedtimeRoutineDurationMin: 25,
-  // forecast nap duration (used when actual is missing)
-  nap1ForecastMin: 75,
-  nap2ForecastMin: 75,
-  // wake window midpoints (minutes) derived from ranges:
-  // WW1: 3–3.5 hours -> midpoint 3h15
-  // WW2: 3.5–4 hours -> midpoint 3h45
-  // WW3: 4–4.25 hours -> midpoint 4h07 (rounded)
-  ww1MidMin: 195,
-  ww2MidMin: 225,
-  ww3MidMin: 247,
-  // bedtime cap (helps keep forecast reasonable)
-  latestBedtimeHHMM: "20:15",
-  earliestBedtimeHHMM: "18:30",
-  // Morning mini-items
-  cuddleMin: 15,
-  getDressedMin: 15,
-  brushTeethMin: 5,
-};
-
-/* =========================
-   App state
-   ========================= */
-const App = {
-  ready: false,
-  user: null,
-  householdId: null,
-  householdRole: null,
-
-  // loaded from DB
-  settings: deepCopy(DEFAULT_SETTINGS),
-  tasks: [],
-  plansByDay: new Map(),  // iso -> payload
-  logsByDay: new Map(),   // iso -> log record
-
-  // derived
-  activeTab: "today",
-  todayIso: toIsoDate(new Date()),
-  tomorrowIso: toIsoDate(new Date(Date.now() + 24*60*60*1000)),
-
-  // wizard
-  wizard: {
-    open: false,
-    step: 0,
-    isoDay: null,
-    draft: null,
-    saving: false,
-    lastSavedAt: null,
-  },
-
-  quickEdit: {
-    open: false,
-    isoDay: null,
-    draft: null,
-  },
-
-  // subscriptions
-  channels: [],
-
-  // ui
-  toastTimer: null,
-};
-
-/* =========================
-   Data model
-   ========================= */
-function emptyPlanPayload(isoDay){
-  return {
-    day: isoDay,
-    // step 1: checklist
-    beforeChecklist: [
-      { id: "prep_bottles", label: "Prep bottles / milk needs", done: false },
-      { id: "restock_diapers", label: "Restock changing supplies", done: false },
-      { id: "set_outfits", label: "Set out outfits", done: false },
-      { id: "charge_devices", label: "Charge devices / baby monitor", done: false },
-    ],
-    // step 2: brain dump
-    brainDump: "",
-    // tasks chosen to focus tomorrow (task IDs)
-    focusTaskIds: [],
-    // constraints
-    constraints: {
-      julioUnavailable: [],
-      kristynUnavailable: [],
-      nannyWorking: { enabled: false, blocks: [] },
-      kaydenAvailable: [],
-      bedtimeBy: "Kristyn", // Kristyn or Julio
-      appointments: [], // {id,title,start,end}
-    }
-  };
-}
-
-function emptyLogRecord(isoDay){
-  return {
-    day: isoDay,
-    wake_time: null,
-    nap1_start: null,
-    nap1_end: null,
-    nap2_start: null,
-    nap2_end: null,
-    bedtime_time: null,
-    overnight_notes: "",
-    bath_done: false,
-  };
-}
-
-/* =========================
-   Toast
-   ========================= */
-function toast(msg){
-  const el = $("#toast");
-  if (!el) return;
-  el.textContent = msg;
-  el.classList.add("show");
-  clearTimeout(App.toastTimer);
-  App.toastTimer = setTimeout(() => el.classList.remove("show"), 2200);
-}
-
-/* =========================
-   UI: Tabs + routing
-   ========================= */
-const TABS = [
-  { id:"evening", label:"Evening", icon: `
-    <svg viewBox="0 0 24 24" fill="none"><path d="M21 14.5A8 8 0 0 1 9.5 3a6.5 6.5 0 1 0 11.5 11.5Z" stroke="currentColor" stroke-width="1.7"/></svg>
-  `},
-  { id:"today", label:"Today", icon: `
-    <svg viewBox="0 0 24 24" fill="none"><path d="M7 3v3M17 3v3" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><path d="M4 8h16" stroke="currentColor" stroke-width="1.7"/><path d="M6 12h6M6 16h10" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
-  `},
-  { id:"tasks", label:"Tasks", icon: `
-    <svg viewBox="0 0 24 24" fill="none"><path d="M8 6h13M8 12h13M8 18h13" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><path d="M3.5 6.5l1.5 1.5 2.5-3" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/><path d="M3.5 12.5l1.5 1.5 2.5-3" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
-  `},
-  { id:"history", label:"History", icon: `
-    <svg viewBox="0 0 24 24" fill="none"><path d="M12 8v5l3 2" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><path d="M4 12a8 8 0 1 0 2.3-5.7" stroke="currentColor" stroke-width="1.7"/><path d="M4 5v4h4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
-  `},
-  { id:"settings", label:"Settings", icon: `
-    <svg viewBox="0 0 24 24" fill="none"><path d="M12 15.5A3.5 3.5 0 1 0 12 8.5a3.5 3.5 0 0 0 0 7Z" stroke="currentColor" stroke-width="1.7"/><path d="M19.4 15a8.1 8.1 0 0 0 .1-2l2-1.2-2-3.5-2.3.6a7.5 7.5 0 0 0-1.7-1l-.4-2.3H10l-.4 2.3a7.5 7.5 0 0 0-1.7 1L5.6 8.3l-2 3.5 2 1.2a8.1 8.1 0 0 0 .1 2l-2 1.2 2 3.5 2.3-.6c.5.4 1.1.7 1.7 1l.4 2.3h4.1l.4-2.3c.6-.3 1.2-.6 1.7-1l2.3.6 2-3.5-2-1.2Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>
-  `},
-];
-
-function renderTabs(){
-  const root = $("#tabs");
-  root.innerHTML = "";
-  for (const t of TABS){
-    const btn = document.createElement("div");
-    btn.className = "tab" + (App.activeTab === t.id ? " active" : "");
-    btn.innerHTML = `${t.icon}<div>${t.label}</div>`;
-    btn.addEventListener("click", () => {
-      App.activeTab = t.id;
-      render();
-      renderTabs();
-    });
-    root.appendChild(btn);
-  }
-}
-
-function setSubhead(text){
-  const el = $("#subhead");
-  if (el) el.textContent = text;
-}
-
-/* =========================
-   Time picker (12-hour)
-   ========================= */
-function timePickerHTML(idPrefix, valueHHMM){
-  const mins = valueHHMM ? minutesFromHHMM(valueHHMM) : null;
-  let h = 12, m = 0, ap = "AM";
-  if (mins !== null){
-    const hr24 = Math.floor(mins/60);
-    m = mins % 60;
-    ap = hr24 >= 12 ? "PM" : "AM";
-    h = hr24 % 12; if (h === 0) h = 12;
-  }
-  const hours = Array.from({length:12}, (_,i)=>i+1).map(x=>`<option ${x===h?"selected":""} value="${x}">${x}</option>`).join("");
-  const minutes = [0,15,30,45].map(x=>`<option ${x===m?"selected":""} value="${x}">${pad2(x)}</option>`).join("");
-  const apm = ["AM","PM"].map(x=>`<option ${x===ap?"selected":""} value="${x}">${x}</option>`).join("");
-  return `
-    <div class="row" style="gap:8px; align-items:end;">
-      <div style="flex:1.1;">
-        <label class="sr" for="${idPrefix}_h">Hour</label>
-        <select id="${idPrefix}_h">${hours}</select>
-      </div>
-      <div style="flex:1.1;">
-        <label class="sr" for="${idPrefix}_m">Minute</label>
-        <select id="${idPrefix}_m">${minutes}</select>
-      </div>
-      <div style="flex:1.2;">
-        <label class="sr" for="${idPrefix}_ap">AM/PM</label>
-        <select id="${idPrefix}_ap">${apm}</select>
-      </div>
-    </div>
-  `;
-}
-
-function readTimePicker(idPrefix){
-  const h = Number($(`#${idPrefix}_h`)?.value ?? 12);
-  const m = Number($(`#${idPrefix}_m`)?.value ?? 0);
-  const ap = $(`#${idPrefix}_ap`)?.value ?? "AM";
-  let hr24 = h % 12;
-  if (ap === "PM") hr24 += 12;
-  return `${pad2(hr24)}:${pad2(m)}`;
-}
-
-/* =========================
-   Data loading
-   ========================= */
-async function loadHouseholdContext(){
-  // Fast local check first (does not require network)
-  const { data: { session } } = await supabaseClient.auth.getSession();
-  const sessionUser = session?.user || null;
-  App.user = sessionUser;
-
-  // If not signed in, don't block on any network call
-  if (!sessionUser){
-    App.householdId = null;
-    App.householdRole = null;
-    return;
-  }
-
-  // Confirm auth with a short timeout (prevents endless “Loading…” if offline)
-  try{
-    const { data: { user } } = await withTimeout(supabaseClient.auth.getUser(), 5000, "Auth check");
-    App.user = user || sessionUser;
-  } catch (e){
-    console.warn(e);
-    // keep sessionUser; app still works with cached/local data
-    toast("Can’t reach Supabase right now. Working offline.");
-  }
-
-  const user = App.user;
-  if (!user) return;
-
-  const { data: memberships, error } = await withTimeout(
-    supabaseClient
-      .from("household_members")
-      .select("household_id, role")
-      .eq("user_id", user.id)
-      .limit(1),
-    7000,
-    "Membership lookup"
-  );
-
-  if (error){
-    console.error(error);
-    toast("Couldn’t load household membership.");
-    return;
-  }
-  if (!memberships || memberships.length === 0){
-    App.householdId = null;
-    App.householdRole = null;
-    return;
-  }
-  App.householdId = memberships[0].household_id;
-  App.householdRole = memberships[0].role || "member";
-}
-
-async function loadSettings(){
-  if (!App.householdId) return;
-  const { data, error } = await supabaseClient
-    .from("household_settings")
-    .select("settings")
-    .eq("household_id", App.householdId)
-    .maybeSingle();
-
-  if (error){
-    console.error(error);
-    toast("Couldn’t load settings.");
-    return;
-  }
-
-  const merged = { ...deepCopy(DEFAULT_SETTINGS), ...(data?.settings || {}) };
-  App.settings = merged;
-}
-
-async function saveSettings(newSettings){
-  if (!App.householdId) return;
-  App.settings = { ...deepCopy(DEFAULT_SETTINGS), ...newSettings };
-  const payload = { household_id: App.householdId, settings: App.settings, updated_at: new Date().toISOString() };
-  const { error } = await supabaseClient
-    .from("household_settings")
-    .upsert(payload, { onConflict: "household_id" });
-
-  if (error){
-    console.error(error);
-    toast("Save failed.");
-    return;
-  }
-  toast("Settings saved.");
-}
-
-async function loadTasks(){
-  if (!App.householdId) return;
-  const { data, error } = await supabaseClient
-    .from("tasks")
-    .select("*")
-    .eq("household_id", App.householdId)
-    .order("created_at", { ascending: false })
-    .limit(400);
-
-  if (error){
-    console.error(error);
-    toast("Couldn’t load tasks.");
-    return;
-  }
-  App.tasks = data || [];
-}
-
-async function loadPlans(days){
-  if (!App.householdId || !days?.length) return;
-  const { data, error } = await supabaseClient
-    .from("day_plans")
-    .select("day, payload")
-    .eq("household_id", App.householdId)
-    .in("day", days);
-
-  if (error){
-    console.error(error);
-    toast("Couldn’t load plans.");
-    return;
-  }
-  for (const row of (data || [])){
-    App.plansByDay.set(row.day, row.payload);
-  }
-}
-
-async function loadLogs(days=null){
-  if (!App.householdId) return;
-  let q = supabaseClient
-    .from("day_logs")
-    .select("*")
-    .eq("household_id", App.householdId)
-    .order("day", { ascending: false });
-
-  if (days && days.length){
-    q = q.in("day", days);
-  } else {
-    q = q.limit(120);
-  }
-
-  const { data, error } = await q;
-  if (error){
-    console.error(error);
-    toast("Couldn’t load history.");
-    return;
-  }
-  for (const row of (data || [])){
-    App.logsByDay.set(row.day, row);
-  }
-}
-
-async function upsertPlan(isoDay, payload){
-  if (!App.householdId) return;
-  const row = { household_id: App.householdId, day: isoDay, payload, updated_at: new Date().toISOString() };
-  const { error } = await supabaseClient.from("day_plans").upsert(row, { onConflict: "household_id,day" });
-  if (error){
-    console.error(error);
-    toast("Plan save failed.");
-    return;
-  }
-  App.plansByDay.set(isoDay, payload);
-  toast("Saved.");
-}
-
-async function upsertLog(isoDay, record){
-  if (!App.householdId) return;
-  const row = { household_id: App.householdId, ...record, updated_at: new Date().toISOString() };
-  const { error } = await supabaseClient.from("day_logs").upsert(row, { onConflict: "household_id,day" });
-  if (error){
-    console.error(error);
-    toast("Log save failed.");
-    return;
-  }
-  App.logsByDay.set(isoDay, row);
-}
-
-async function addTask(title){
-  const t = title.trim();
-  if (!t) return;
-  const row = {
-    household_id: App.householdId,
-    title: t,
-    completed: false,
-    assigned_date: null,
-    created_at: new Date().toISOString(),
-  };
-  const { data, error } = await supabaseClient.from("tasks").insert(row).select("*").single();
-  if (error){
-    console.error(error);
-    toast("Couldn’t add task.");
-    return;
-  }
-  App.tasks = [data, ...App.tasks];
-}
-
-async function updateTask(taskId, patch){
-  const { data, error } = await supabaseClient
-    .from("tasks")
-    .update(patch)
-    .eq("id", taskId)
-    .select("*")
-    .single();
-
-  if (error){
-    console.error(error);
-    toast("Update failed.");
-    return;
-  }
-  App.tasks = App.tasks.map(t => (t.id === taskId ? data : t));
-}
-
-/* =========================
-   Realtime (optional)
-   ========================= */
-function clearRealtime(){
-  for (const ch of App.channels){
-    try { supabaseClient.removeChannel(ch); } catch {}
-  }
-  App.channels = [];
-}
-
-function setupRealtime(){
-  clearRealtime();
-  if (!App.householdId) return;
-
-  const watch = (table, handler) => {
-    const ch = supabaseClient
-      .channel(`fdp_${table}`)
-      .on("postgres_changes", { event: "*", schema: "public", table, filter: `household_id=eq.${App.householdId}` }, handler)
-      .subscribe();
-    App.channels.push(ch);
+(() => {
+  "use strict";
+
+  const SUPABASE_URL = "https://qsnmuojajbtyxdvijwon.supabase.co";
+  const SUPABASE_KEY = "sb_publishable_9AFfe1UiuDpQs8FpRUWCvw_wmzFKTMm";
+
+  const PARENTS = ["Kristyn","Julio"];
+
+  const DEFAULT_SETTINGS = {
+    defaultWake: "07:00",
+    breakfastMin: 35,
+    lunchMin: 35,
+    dinnerMin: 40,
+    napRoutineMin: 15,
+    bedRoutineMin: 25,
+    nap1ForecastMin: 70,
+    nap2ForecastMin: 60,
+    ww1Min: 3.0, ww1Max: 3.5,
+    ww2Min: 3.5, ww2Max: 4.0,
+    ww3Min: 4.0, ww3Max: 4.25,
+    gcal: { scriptUrl:"", calendarId:"", apiKey:"" }
   };
 
-  watch("tasks", async () => { await loadTasks(); if (App.activeTab==="tasks"||App.activeTab==="today"||App.activeTab==="evening") render(); });
-  watch("day_plans", async () => { await loadPlans([App.todayIso, App.tomorrowIso]); if (App.activeTab==="today"||App.activeTab==="evening") render(); });
-  watch("day_logs", async () => { await loadLogs(); if (App.activeTab==="today"||App.activeTab==="history") render(); });
-  watch("household_settings", async () => { await loadSettings(); if (App.activeTab==="settings"||App.activeTab==="today"||App.activeTab==="evening") render(); });
-}
-
-/* =========================
-   Evening wizard (autosave draft)
-   ========================= */
-function draftKey(isoDay){
-  const uid = App.user?.id || "anon";
-  return `fdp_wizard_draft_${uid}_${isoDay}`;
-}
-
-function loadWizardDraft(isoDay){
-  const existingPlan = App.plansByDay.get(isoDay);
-  const ls = localStorage.getItem(draftKey(isoDay));
-  if (ls){
-    try { return JSON.parse(ls); } catch {}
-  }
-  if (existingPlan) return deepCopy(existingPlan);
-  return emptyPlanPayload(isoDay);
-}
-
-function saveWizardDraftLocal(isoDay, draft){
-  localStorage.setItem(draftKey(isoDay), JSON.stringify(draft));
-  App.wizard.lastSavedAt = new Date();
-  const s = $("#wizStatus");
-  if (s) s.textContent = `Autosaved at ${formatTime12(nowHHMM())}`;
-}
-
-const saveWizardDraftLocalDebounced = debounce((isoDay, draft) => saveWizardDraftLocal(isoDay, draft), 250);
-
-function openWizard(isoDay){
-  App.wizard.open = true;
-  App.wizard.isoDay = isoDay;
-  App.wizard.step = 0;
-  App.wizard.draft = loadWizardDraft(isoDay);
-  $("#wizardModal").classList.add("open");
-  $("#wizardModal").setAttribute("aria-hidden","false");
-
-  const d = fromIsoDate(isoDay);
-  $("#wizSub").textContent = `Plan for ${formatDateShort(d)}`;
-  renderWizard();
-}
-
-function closeWizard(){
-  App.wizard.open = false;
-  $("#wizardModal").classList.remove("open");
-  $("#wizardModal").setAttribute("aria-hidden","true");
-}
-
-function wizardSteps(){
-  return [
-    { id:"checklist", label:"Checklist" },
-    { id:"brain", label:"Brain dump" },
-    { id:"focus", label:"Focus tasks" },
-    { id:"constraints", label:"Constraints" },
-    { id:"preview", label:"Preview + save" },
-  ];
-}
-
-function renderWizard(){
-  const steps = wizardSteps();
-  const stepper = $("#wizSteps");
-  stepper.innerHTML = "";
-
-  steps.forEach((s, idx) => {
-    const el = document.createElement("div");
-    el.className = "step" + (idx === App.wizard.step ? " active" : "");
-    el.textContent = `${idx+1}. ${s.label}`;
-    el.addEventListener("click", () => {
-      App.wizard.step = idx;
-      renderWizard();
-    });
-    stepper.appendChild(el);
-  });
-
-  const body = $("#wizBody");
-  body.innerHTML = "";
-
-  const draft = App.wizard.draft;
-  const isoDay = App.wizard.isoDay;
-
-  if (!draft) return;
-
-  if (App.wizard.step === 0){
-    body.innerHTML = `
-      <div class="card" style="box-shadow:none; border-radius:18px; background:rgba(255,255,255,.65);">
-        <div class="hd"><div><h2>Before we plan tomorrow…</h2><p>Quick check-in so tomorrow is smoother.</p></div></div>
-        <div class="bd" id="chkList"></div>
-      </div>
-    `;
-    const list = $("#chkList");
-    draft.beforeChecklist.forEach((it, i) => {
-      const row = document.createElement("div");
-      row.className = "item";
-      row.innerHTML = `
-        <input type="checkbox" ${it.done ? "checked":""} id="chk_${it.id}">
-        <div class="txt">
-          <div>${it.label}</div>
-        </div>
-      `;
-      row.querySelector("input").addEventListener("change", (e) => {
-        draft.beforeChecklist[i].done = e.target.checked;
-        saveWizardDraftLocalDebounced(isoDay, draft);
-      });
-      list.appendChild(row);
-    });
-  }
-
-  if (App.wizard.step === 1){
-    body.innerHTML = `
-      <div class="card" style="box-shadow:none; border-radius:18px; background:rgba(255,255,255,.65);">
-        <div class="hd"><div><h2>Brain dump</h2><p>Anything you want captured becomes tasks in the master list. One per line.</p></div></div>
-        <div class="bd">
-          <label>Brain dump (tasks)</label>
-          <textarea id="brainDump" placeholder="Example: Call pediatrician&#10;Example: Order diapers"></textarea>
-          <div class="row" style="margin-top:10px;">
-            <button class="primary" id="brainAdd">Add to master task list</button>
-            <button class="ghost" id="brainClear">Clear</button>
-          </div>
-          <p class="hint" style="margin-top:10px;">Tip: You can still assign tasks to Today/Tomorrow later.</p>
-        </div>
-      </div>
-    `;
-    $("#brainDump").value = draft.brainDump || "";
-    $("#brainDump").addEventListener("input", (e) => {
-      draft.brainDump = e.target.value;
-      saveWizardDraftLocalDebounced(isoDay, draft);
-    });
-    $("#brainAdd").addEventListener("click", async () => {
-      const lines = (draft.brainDump || "").split("\n").map(s=>s.trim()).filter(Boolean);
-      if (!lines.length) { toast("Nothing to add."); return; }
-      for (const line of lines){
-        await addTask(line);
-      }
-      draft.brainDump = "";
-      saveWizardDraftLocal(isoDay, draft);
-      toast("Added to tasks.");
-      renderWizard();
-    });
-    $("#brainClear").addEventListener("click", () => {
-      draft.brainDump = "";
-      saveWizardDraftLocal(isoDay, draft);
-      renderWizard();
-    });
-  }
-
-  if (App.wizard.step === 2){
-    const tomorrow = isoDay;
-    const uncompleted = App.tasks.filter(t => !t.completed);
-    body.innerHTML = `
-      <div class="card" style="box-shadow:none; border-radius:18px; background:rgba(255,255,255,.65);">
-        <div class="hd"><div><h2>Choose tasks to focus on tomorrow</h2><p>These will show on Tomorrow (and you can move them to Today in the morning).</p></div></div>
-        <div class="bd">
-          <div class="list" id="focusList"></div>
-          <div class="divider"></div>
-          <div class="row">
-            <button class="ghost" id="focusClear">Clear selection</button>
-          </div>
-        </div>
-      </div>
-    `;
-    const list = $("#focusList");
-    if (uncompleted.length === 0){
-      list.innerHTML = `<p class="hint">No open tasks. Add some in Tasks or Brain dump.</p>`;
-    } else {
-      uncompleted.slice(0, 60).forEach((t) => {
-        const chosen = draft.focusTaskIds.includes(t.id);
-        const row = document.createElement("div");
-        row.className = "item";
-        row.innerHTML = `
-          <input type="checkbox" ${chosen?"checked":""}>
-          <div class="txt">
-            <div>${escapeHtml(t.title)}</div>
-            <div class="sub">${t.assigned_date ? `Assigned ${formatDateShort(fromIsoDate(t.assigned_date))}` : "Not assigned yet"}</div>
-          </div>
-        `;
-        row.querySelector("input").addEventListener("change", (e) => {
-          const on = e.target.checked;
-          draft.focusTaskIds = draft.focusTaskIds || [];
-          if (on) draft.focusTaskIds.push(t.id);
-          else draft.focusTaskIds = draft.focusTaskIds.filter(x => x !== t.id);
-          draft.focusTaskIds = Array.from(new Set(draft.focusTaskIds));
-          saveWizardDraftLocalDebounced(tomorrow, draft);
-        });
-        list.appendChild(row);
-      });
-    }
-    $("#focusClear").addEventListener("click", () => {
-      draft.focusTaskIds = [];
-      saveWizardDraftLocal(tomorrow, draft);
-      renderWizard();
-    });
-  }
-
-  if (App.wizard.step === 3){
-    body.appendChild(renderConstraintsEditor(draft.constraints, (newConstraints) => {
-      draft.constraints = newConstraints;
-      saveWizardDraftLocalDebounced(isoDay, draft);
-    }));
-  }
-
-  if (App.wizard.step === 4){
-    const preview = generateScheduleForDay(isoDay);
-    const warnings = preview.warnings;
-    body.innerHTML = `
-      <div class="card" style="box-shadow:none; border-radius:18px; background:rgba(255,255,255,.65);">
-        <div class="hd"><div><h2>Preview</h2><p>Only scheduled blocks appear (open time remains blank).</p></div></div>
-        <div class="bd">
-          <div class="row" style="margin-bottom:10px; align-items:center;">
-            <span class="badge ${warnings.length? "warn":"ok"}">${warnings.length? "Needs attention":"Looks good"}</span>
-            ${CONFIG.appsScriptUrl && CONFIG.appsScriptApiKey ? `<button class="mini ghost" id="btnExportTomorrow">Export to Calendar</button>` : ``}
-          </div>
-          <div id="previewTimeline"></div>
-          ${warnings.length ? `<div class="divider"></div><div class="hint"><strong>Flags:</strong><br>${warnings.map(w => "• " + escapeHtml(w)).join("<br>")}</div>` : ""}
-          <div class="divider"></div>
-          <div class="row">
-            <button class="primary" id="btnSavePlan">Save tomorrow plan</button>
-            <button class="ghost" id="btnKeepEditing">Keep editing</button>
-          </div>
-        </div>
-      </div>
-    `;
-    $("#previewTimeline").appendChild(renderTimeline(preview.blocks));
-
-    $("#btnKeepEditing").addEventListener("click", () => {
-      App.wizard.step = 3;
-      renderWizard();
-    });
-
-    $("#btnSavePlan").addEventListener("click", async () => {
-      await saveWizardToDb();
-    });
-
-    const ex = $("#btnExportTomorrow");
-    if (ex){
-      ex.addEventListener("click", async () => {
-        await exportDayToCalendar(isoDay, preview.blocks);
-      });
-    }
-  }
-
-  // nav buttons
-  $("#wizBack").style.visibility = (App.wizard.step === 0) ? "hidden" : "visible";
-  $("#wizNext").textContent = (App.wizard.step === steps.length - 1) ? "Done" : "Next";
-}
-
-async function saveWizardToDb(){
-  const isoDay = App.wizard.isoDay;
-  const draft = App.wizard.draft;
-  if (!isoDay || !draft) return;
-  App.wizard.saving = true;
-  $("#wizStatus").textContent = "Saving…";
-
-  // Apply "focusTaskIds" -> assign those tasks to this day
-  const focusIds = new Set(draft.focusTaskIds || []);
-  for (const t of App.tasks){
-    if (!t.completed && focusIds.has(t.id)){
-      if (t.assigned_date !== isoDay){
-        await updateTask(t.id, { assigned_date: isoDay });
-      }
-    }
-  }
-
-  await upsertPlan(isoDay, draft);
-  localStorage.removeItem(draftKey(isoDay));
-
-  $("#wizStatus").textContent = "Saved.";
-  App.wizard.saving = false;
-  closeWizard();
-  render();
-}
-
-/* =========================
-   Quick edit modal (availability + appointments)
-   ========================= */
-function openQuickEdit(isoDay){
-  App.quickEdit.open = true;
-  App.quickEdit.isoDay = isoDay;
-  const plan = App.plansByDay.get(isoDay) || emptyPlanPayload(isoDay);
-  App.quickEdit.draft = deepCopy(plan);
-
-  $("#quickEditModal").classList.add("open");
-  $("#quickEditModal").setAttribute("aria-hidden","false");
-
-  const d = fromIsoDate(isoDay);
-  $("#qeSub").textContent = `For ${formatDateShort(d)}`;
-  renderQuickEdit();
-}
-
-function closeQuickEdit(){
-  App.quickEdit.open = false;
-  $("#quickEditModal").classList.remove("open");
-  $("#quickEditModal").setAttribute("aria-hidden","true");
-}
-
-function renderQuickEdit(){
-  const body = $("#qeBody");
-  body.innerHTML = "";
-  const draft = App.quickEdit.draft;
-  if (!draft) return;
-
-  body.appendChild(renderConstraintsEditor(draft.constraints, (newConstraints) => {
-    draft.constraints = newConstraints;
-  }, { compact: true }));
-
-  $("#qeSave").onclick = async () => {
-    await upsertPlan(App.quickEdit.isoDay, draft);
-    closeQuickEdit();
-    render();
-  };
-}
-
-/* =========================
-   Constraints editor (shared)
-   ========================= */
-function renderConstraintsEditor(constraints, onChange, opts = {}){
-  const c = deepCopy(constraints || {});
-  const wrap = document.createElement("div");
-  wrap.innerHTML = `
-    <div class="card" style="box-shadow:none; border-radius:18px; background:rgba(255,255,255,.65);">
-      <div class="hd">
-        <div>
-          <h2>Tomorrow’s constraints</h2>
-          <p>All times are 12-hour. Add as many blocks as you need.</p>
-        </div>
-      </div>
-      <div class="bd">
-        <div id="cx"></div>
-      </div>
-    </div>
-  `;
-  const root = wrap.querySelector("#cx");
-
-  const sections = [
-    { key:"julioUnavailable", title:"When will Julio be unavailable?", kind:"blocks" },
-    { key:"kristynUnavailable", title:"When will Kristyn be unavailable?", kind:"blocks" },
-    { key:"nannyWorking", title:"Will the nanny be working?", kind:"toggleBlocks" },
-    { key:"kaydenAvailable", title:"What hours will Kayden be working/available?", kind:"blocks", note:"Kayden may help with routines, but will never be assigned naps." },
-    { key:"bedtimeBy", title:"Who will be doing bedtime?", kind:"bedtime" },
-    { key:"appointments", title:"Any appointments tomorrow?", kind:"appointments" },
+  const STEP1 = [
+    { key:"bottles", text:"Bottles/pump parts ready", hint:"Wash, assemble, set out." },
+    { key:"bags", text:"Bags packed", hint:"Diaper bag, work bag, snacks." },
+    { key:"clothes", text:"Clothes set out", hint:"Baby + adult outfits." },
+    { key:"kitchen", text:"Kitchen reset", hint:"Quick reset for calm morning." }
   ];
 
-  for (const s of sections){
-    const sec = document.createElement("div");
-    sec.style.marginBottom = "14px";
-    sec.innerHTML = `
-      <div style="padding: 10px 10px 12px; border-radius: 16px; border: 1px solid rgba(0,0,0,.07); background: rgba(255,255,255,.62);">
-        <div style="font-size:13px; font-weight:650; margin-bottom:6px;">${s.title}</div>
-        ${s.note ? `<div class="hint" style="margin-bottom:10px;">${escapeHtml(s.note)}</div>` : ``}
-        <div class="cxBody"></div>
-      </div>
-    `;
-    const body = sec.querySelector(".cxBody");
-
-    if (s.kind === "blocks"){
-      body.appendChild(renderBlocksEditor(c[s.key] || [], (blocks) => {
-        c[s.key] = blocks;
-        onChange(deepCopy(c));
-      }, { prefix: s.key, compact: !!opts.compact }));
+  // ---------- State ----------
+  const App = {
+    supa: null,
+    state: {
+      user: null,
+      household: null,
+      settings: { ...DEFAULT_SETTINGS },
+      tasks: [],
+      plans: new Map(), // dateISO -> plan
+      logs: new Map(),  // dateISO -> log
+      wizard: { open:false, dateISO:null, step:1, maxStep:1, draft:null }
     }
-
-    if (s.kind === "toggleBlocks"){
-      const enabled = !!(c.nannyWorking?.enabled);
-      const id = "nannyToggle_" + Math.random().toString(16).slice(2);
-      body.innerHTML = `
-        <div class="row" style="align-items:center; gap:10px;">
-          <label style="margin:0; flex: 0 0 auto;">
-            <input id="${id}" type="checkbox" ${enabled ? "checked":""} style="width:18px; height:18px; vertical-align:middle; accent-color: var(--accent);" />
-            <span style="font-size:13px; color: var(--ink); margin-left:8px;">Yes, nanny is working</span>
-          </label>
-        </div>
-        <div id="nannyBlocks" style="margin-top:10px; ${enabled ? "" : "display:none;"}"></div>
-      `;
-      const toggle = body.querySelector(`#${id}`);
-      const blocksWrap = body.querySelector("#nannyBlocks");
-      blocksWrap.appendChild(renderBlocksEditor((c.nannyWorking?.blocks)||[], (blocks) => {
-        c.nannyWorking = c.nannyWorking || { enabled:false, blocks:[] };
-        c.nannyWorking.blocks = blocks;
-        onChange(deepCopy(c));
-      }, { prefix:"nannyWorking", compact: !!opts.compact }));
-      toggle.addEventListener("change", (e) => {
-        const on = e.target.checked;
-        c.nannyWorking = c.nannyWorking || { enabled:false, blocks:[] };
-        c.nannyWorking.enabled = on;
-        blocksWrap.style.display = on ? "" : "none";
-        onChange(deepCopy(c));
-      });
-    }
-
-    if (s.kind === "bedtime"){
-      const value = c.bedtimeBy || "Kristyn";
-      const a = "bedA_" + Math.random().toString(16).slice(2);
-      const b = "bedB_" + Math.random().toString(16).slice(2);
-      body.innerHTML = `
-        <div class="row" style="gap:10px;">
-          <label style="margin:0;">
-            <input type="radio" name="bedtimeBy" value="Kristyn" ${value==="Kristyn"?"checked":""} style="accent-color: var(--accent); width:18px; height:18px; vertical-align:middle;" />
-            <span style="margin-left:8px; font-size:13px; color: var(--ink);">Kristyn</span>
-          </label>
-          <label style="margin:0;">
-            <input type="radio" name="bedtimeBy" value="Julio" ${value==="Julio"?"checked":""} style="accent-color: var(--accent); width:18px; height:18px; vertical-align:middle;" />
-            <span style="margin-left:8px; font-size:13px; color: var(--ink);">Julio</span>
-          </label>
-        </div>
-      `;
-      $all('input[name="bedtimeBy"]', body).forEach(r => {
-        r.addEventListener("change", () => {
-          c.bedtimeBy = body.querySelector('input[name="bedtimeBy"]:checked')?.value || "Kristyn";
-          onChange(deepCopy(c));
-        });
-      });
-    }
-
-    if (s.kind === "appointments"){
-      body.appendChild(renderAppointmentsEditor(c.appointments || [], (appts) => {
-        c.appointments = appts;
-        onChange(deepCopy(c));
-      }, { compact: !!opts.compact }));
-    }
-
-    root.appendChild(sec);
-  }
-
-  return wrap;
-}
-
-function renderBlocksEditor(blocks, onBlocksChange, opts = {}){
-  const list = document.createElement("div");
-  list.className = "list";
-  const b = deepCopy(blocks || []);
-  const prefix = opts.prefix || "blk";
-
-  const render = () => {
-    list.innerHTML = "";
-    if (b.length === 0){
-      const empty = document.createElement("div");
-      empty.className = "hint";
-      empty.textContent = "No time blocks yet.";
-      list.appendChild(empty);
-    }
-    b.forEach((blk, idx) => {
-      const row = document.createElement("div");
-      row.className = "item";
-      const idp = `${prefix}_${idx}_${Math.random().toString(16).slice(2)}`;
-      row.innerHTML = `
-        <div style="flex:1;">
-          <div class="hint" style="margin-bottom:6px;">${formatTime12(blk.start)} – ${formatTime12(blk.end)}</div>
-          ${timePickerHTML(`${idp}_s`, blk.start)}
-          <div style="height:8px;"></div>
-          ${timePickerHTML(`${idp}_e`, blk.end)}
-          <div class="row" style="margin-top:10px;">
-            <button class="mini ghost" data-act="apply">Apply</button>
-            <button class="mini danger" data-act="remove">Remove</button>
-          </div>
-        </div>
-      `;
-      row.querySelector('[data-act="apply"]').addEventListener("click", () => {
-        const s = readTimePicker(`${idp}_s`);
-        const e = readTimePicker(`${idp}_e`);
-        b[idx].start = s;
-        b[idx].end = e;
-        normalizeBlocksInPlace(b);
-        onBlocksChange(deepCopy(b));
-        render();
-      });
-      row.querySelector('[data-act="remove"]').addEventListener("click", () => {
-        b.splice(idx, 1);
-        onBlocksChange(deepCopy(b));
-        render();
-      });
-      list.appendChild(row);
-    });
-
-    const add = document.createElement("button");
-    add.className = "ghost";
-    add.textContent = "Add time block";
-    add.addEventListener("click", () => {
-      const start = "09:00";
-      const end = "10:00";
-      b.push({ start, end });
-      normalizeBlocksInPlace(b);
-      onBlocksChange(deepCopy(b));
-      render();
-    });
-    list.appendChild(add);
   };
 
-  render();
-  return list;
-}
+  // ---------- DOM helpers ----------
+  const $ = (sel) => document.querySelector(sel);
+  const $$ = (sel) => Array.from(document.querySelectorAll(sel));
+  const pad2 = (n) => String(n).padStart(2,"0");
+  const clamp = (n,lo,hi) => Math.max(lo, Math.min(hi,n));
 
-function normalizeBlocksInPlace(blocks){
-  // Ensure start < end, clamp to day, sort, and de-overlap by keeping order (do not auto-merge).
-  blocks.forEach(b => {
-    let s = minutesFromHHMM(b.start);
-    let e = minutesFromHHMM(b.end);
-    if (s === null || e === null){ b.start = "09:00"; b.end="10:00"; return; }
-    s = clamp(s, 0, 24*60-1);
-    e = clamp(e, 1, 24*60);
-    if (e <= s) e = Math.min(24*60, s + 30);
-    b.start = hhmmFromMinutes(s);
-    b.end = hhmmFromMinutes(e);
-  });
-  blocks.sort((a,b) => minutesFromHHMM(a.start) - minutesFromHHMM(b.start));
-}
+  function toast(msg, ms=2600){
+    const el = $("#toast");
+    if (!el) return;
+    el.textContent = msg;
+    el.classList.remove("hidden");
+    clearTimeout(el._t);
+    el._t = setTimeout(() => el.classList.add("hidden"), ms);
+  }
 
-function renderAppointmentsEditor(appts, onApptsChange, opts = {}){
-  const list = document.createElement("div");
-  list.className = "list";
-  const a = deepCopy(appts || []);
+  function debounce(fn, wait=300){
+    let t=null;
+    return (...args) => { clearTimeout(t); t=setTimeout(()=>fn(...args), wait); };
+  }
 
-  const render = () => {
-    list.innerHTML = "";
-    if (a.length === 0){
-      const empty = document.createElement("div");
-      empty.className = "hint";
-      empty.textContent = "No appointments added.";
-      list.appendChild(empty);
-    }
-    a.forEach((appt, idx) => {
-      const row = document.createElement("div");
-      row.className = "item";
-      const idp = `appt_${idx}_${Math.random().toString(16).slice(2)}`;
-      row.innerHTML = `
-        <div style="flex:1;">
-          <label>Title</label>
-          <input id="${idp}_t" value="${escapeAttr(appt.title||"")}" placeholder="Example: Doctor appointment" />
-          <label>Start</label>
-          ${timePickerHTML(`${idp}_s`, appt.start)}
-          <label>End</label>
-          ${timePickerHTML(`${idp}_e`, appt.end)}
-          <div class="row" style="margin-top:10px;">
-            <button class="mini ghost" data-act="apply">Apply</button>
-            <button class="mini danger" data-act="remove">Remove</button>
-          </div>
-        </div>
-      `;
-      row.querySelector('[data-act="apply"]').addEventListener("click", () => {
-        const title = $(`#${idp}_t`)?.value?.trim() || "Appointment";
-        const s = readTimePicker(`${idp}_s`);
-        const e = readTimePicker(`${idp}_e`);
-        a[idx] = { ...a[idx], title, start: s, end: e };
-        normalizeAppointmentsInPlace(a);
-        onApptsChange(deepCopy(a));
-        render();
-      });
-      row.querySelector('[data-act="remove"]').addEventListener("click", () => {
-        a.splice(idx, 1);
-        onApptsChange(deepCopy(a));
-        render();
-      });
-      list.appendChild(row);
-    });
+  function dateToISO(d){
+    const x = new Date(d); x.setHours(0,0,0,0);
+    return `${x.getFullYear()}-${pad2(x.getMonth()+1)}-${pad2(x.getDate())}`;
+  }
+  function addDays(isoOrDate, days){
+    const d = (isoOrDate instanceof Date) ? new Date(isoOrDate) : new Date(isoOrDate+"T00:00:00");
+    d.setDate(d.getDate()+days);
+    return d;
+  }
+  function isoToShort(iso){
+    const [y,m,d] = iso.split("-"); return `${m}/${d}/${String(y).slice(-2)}`;
+  }
+  function timeToMin(t){
+    if (!t || !t.includes(":")) return null;
+    const [hh,mm] = t.split(":").map(n=>parseInt(n,10));
+    if (Number.isNaN(hh)||Number.isNaN(mm)) return null;
+    return hh*60+mm;
+  }
+  function minToTime(min){
+    min = clamp(Math.round(min), 0, 24*60-1);
+    return `${pad2(Math.floor(min/60))}:${pad2(min%60)}`;
+  }
+  function minTo12h(min){
+    min = clamp(Math.round(min), 0, 24*60);
+    let h = Math.floor(min/60), m=min%60;
+    const ampm = h>=12 ? "PM":"AM";
+    h = h%12; if (h===0) h=12;
+    return `${h}:${pad2(m)} ${ampm}`;
+  }
+  function overlaps(a1,a2,b1,b2){ return a1 < b2 && b1 < a2; }
+  function withinAny(blocks, s, e){ return blocks.some(b => overlaps(s,e,b.start,b.end)); }
+  function covers(blocks, s, e){ return blocks.some(b => b.start<=s && b.end>=e); }
+  function uid(prefix="id"){ return `${prefix}_${Math.random().toString(16).slice(2)}_${Date.now()}`; }
 
-    const add = document.createElement("button");
-    add.className = "ghost";
-    add.textContent = "Add appointment";
-    add.addEventListener("click", () => {
-      a.push({ id: cryptoRandomId(), title:"Appointment", start:"10:00", end:"10:30" });
-      normalizeAppointmentsInPlace(a);
-      onApptsChange(deepCopy(a));
-      render();
-    });
-    list.appendChild(add);
-  };
-
-  render();
-  return list;
-}
-
-function normalizeAppointmentsInPlace(appts){
-  appts.forEach(a => {
-    let s = minutesFromHHMM(a.start);
-    let e = minutesFromHHMM(a.end);
-    if (s === null || e === null){ a.start="10:00"; a.end="10:30"; return; }
-    s = clamp(s, 0, 24*60-1);
-    e = clamp(e, 1, 24*60);
-    if (e <= s) e = Math.min(24*60, s + 30);
-    a.start = hhmmFromMinutes(s);
-    a.end = hhmmFromMinutes(e);
-    if (!a.id) a.id = cryptoRandomId();
-  });
-  appts.sort((x,y) => minutesFromHHMM(x.start) - minutesFromHHMM(y.start));
-}
-
-function cryptoRandomId(){
-  if (crypto?.randomUUID) return crypto.randomUUID();
-  return Math.random().toString(16).slice(2) + Date.now().toString(16);
-}
-
-/* =========================
-   Scheduling engine
-   ========================= */
-function generateScheduleForDay(isoDay){
-  const settings = App.settings;
-  const plan = App.plansByDay.get(isoDay) || emptyPlanPayload(isoDay);
-  const log = App.logsByDay.get(isoDay) || emptyLogRecord(isoDay);
-  const warnings = [];
-
-  // Determine wake time
-  const wakeHHMM = log.wake_time || settings.defaultWakeTime;
-  const wakeMin = minutesFromHHMM(wakeHHMM);
-
-  // Determine nap times (actual overrides)
-  const ww1 = settings.ww1MidMin;
-  const ww2 = settings.ww2MidMin;
-  const ww3 = settings.ww3MidMin;
-
-  // Forecasted nap1 start/end
-  let nap1StartMin = wakeMin + ww1;
-  let nap1EndMin = nap1StartMin + settings.nap1ForecastMin;
-
-  // Actual nap1 overrides
-  if (log.nap1_start) nap1StartMin = minutesFromHHMM(log.nap1_start);
-  if (log.nap1_end) nap1EndMin = minutesFromHHMM(log.nap1_end);
-  else if (log.nap1_start && !log.nap1_end) nap1EndMin = nap1StartMin + settings.nap1ForecastMin;
-
-  // Forecast nap2 start/end based on nap1 end
-  let nap2StartMin = nap1EndMin + ww2;
-  let nap2EndMin = nap2StartMin + settings.nap2ForecastMin;
-
-  if (log.nap2_start) nap2StartMin = minutesFromHHMM(log.nap2_start);
-  if (log.nap2_end) nap2EndMin = minutesFromHHMM(log.nap2_end);
-  else if (log.nap2_start && !log.nap2_end) nap2EndMin = nap2StartMin + settings.nap2ForecastMin;
-
-  // Bedtime forecast
-  let bedtimeMin = nap2EndMin + ww3;
-  const latest = minutesFromHHMM(settings.latestBedtimeHHMM);
-  const earliest = minutesFromHHMM(settings.earliestBedtimeHHMM);
-  bedtimeMin = clamp(bedtimeMin, earliest, latest);
-  if (log.bedtime_time) bedtimeMin = minutesFromHHMM(log.bedtime_time);
-
-  // Build routine blocks (only real tasks)
-  const blocks = [];
-
-  function addBlock(title, startMin, endMin, kind="routine", meta={}){
-    if (endMin <= startMin) return;
-    blocks.push({
-      id: cryptoRandomId(),
-      title,
-      startMin,
-      endMin,
-      kind,
-      meta,
+  // ---------- Supabase ----------
+  function initSupabase(){
+    if (!window.supabase) throw new Error("Supabase library not loaded.");
+    App.supa = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
+      auth: { persistSession:true, autoRefreshToken:true }
     });
   }
 
-  // Morning: cuddle, get dressed, breakfast, brush teeth
-  let t = wakeMin;
-  addBlock("Family cuddle", t, t + settings.cuddleMin, "routine"); t += settings.cuddleMin;
-  addBlock("Get dressed", t, t + settings.getDressedMin, "routine"); t += settings.getDressedMin;
-  addBlock("Breakfast (prep + eat)", t, t + settings.breakfastDurationMin, "routine"); t += settings.breakfastDurationMin;
-  addBlock("Brush teeth", t, t + settings.brushTeethMin, "routine"); t += settings.brushTeethMin;
-
-  // Nap 1 routine + nap
-  const nap1RoutineStart = nap1StartMin - settings.napRoutineDurationMin;
-  addBlock("Nap routine (Nap 1)", nap1RoutineStart, nap1StartMin, "routine", { napIndex: 1 });
-  addBlock("Nap 1", nap1StartMin, nap1EndMin, "nap", { napIndex: 1 });
-
-  // Midday: lunch + snack+milk
-  // Lunch around 30 min after nap1 end; snack ~2 hours after nap1 end
-  let lunchStart = nap1EndMin + 30;
-  addBlock("Lunch (prep + eat)", lunchStart, lunchStart + settings.lunchDurationMin, "routine");
-
-  let snack1Start = nap1EndMin + 120;
-  addBlock("Snack + milk", snack1Start, snack1Start + settings.snackMilkDurationMin, "routine");
-
-  // Nap 2 routine + nap
-  const nap2RoutineStart = nap2StartMin - settings.napRoutineDurationMin;
-  addBlock("Nap routine (Nap 2)", nap2RoutineStart, nap2StartMin, "routine", { napIndex: 2 });
-  addBlock("Nap 2", nap2StartMin, nap2EndMin, "nap", { napIndex: 2 });
-
-  // Evening: dinner, (sometimes bath), snack+milk, brush, bedtime routine
-  let dinnerStart = nap2EndMin + 60;
-  addBlock("Dinner (prep + eat)", dinnerStart, dinnerStart + settings.dinnerDurationMin, "routine");
-
-  // Bath: at least every 3 days; not when Julio unavailable
-  const bathDue = isBathDue(isoDay);
-  if (bathDue){
-    const bathSlot = proposeBathSlot(isoDay, plan.constraints, dinnerStart + settings.dinnerDurationMin, bedtimeMin - (settings.bedtimeRoutineDurationMin + 50));
-    if (bathSlot){
-      addBlock("Bath", bathSlot.startMin, bathSlot.endMin, "routine", { bath: true });
-    } else {
-      warnings.push("Bath is overdue, but there was no safe slot when Julio is available.");
-    }
+  async function sbTry(fn, failMsg){
+    try { return await fn(); }
+    catch(err){ console.error(err); toast(failMsg || (err?.message || String(err))); return null; }
   }
 
-  let snack2Start = bedtimeMin - 45;
-  addBlock("Snack + milk", snack2Start, snack2Start + settings.snackMilkDurationMin, "routine");
-
-  let brush2Start = bedtimeMin - 20;
-  addBlock("Brush teeth", brush2Start, brush2Start + settings.brushTeethMin, "routine");
-
-  addBlock("Bedtime routine", bedtimeMin - settings.bedtimeRoutineDurationMin, bedtimeMin, "routine", { bedtimeBy: plan.constraints?.bedtimeBy || "Kristyn" });
-
-  // Appointments: only affect scheduling if overlap scheduled items
-  const appts = (plan.constraints?.appointments || []).map(a => ({
-    id: a.id || cryptoRandomId(),
-    title: a.title || "Appointment",
-    startMin: minutesFromHHMM(a.start),
-    endMin: minutesFromHHMM(a.end),
-  })).filter(a => a.startMin !== null && a.endMin !== null && a.endMin > a.startMin);
-
-  // Add appointment blocks separately
-  for (const a of appts){
-    addBlock(a.title, a.startMin, a.endMin, "appt", {});
+  async function refreshUser(){
+    const res = await sbTry(()=>App.supa.auth.getUser(), "Could not read auth state.");
+    App.state.user = res?.data?.user || null;
+    return App.state.user;
   }
 
-  // Adjust for overlapping appointments
-  adjustForAppointments(blocks, appts, warnings);
-
-  // Assign caregivers for naps (and flag uncovered)
-  applyCaregiverAssignments(blocks, plan.constraints, warnings);
-
-  // Clean: sort and return
-  const outBlocks = blocks
-    .filter(b => b.endMin > b.startMin)
-    .sort((a,b) => a.startMin - b.startMin)
-    .map(b => ({
-      ...b,
-      startHHMM: hhmmFromMinutes(b.startMin),
-      endHHMM: hhmmFromMinutes(b.endMin),
-    }));
-
-  return { blocks: outBlocks, warnings };
-}
-
-function isBathDue(isoDay){
-  // Bath must happen at least every 3 days.
-  // We consider "bath done" in logs. If none in past 2 days, due today.
-  const today = fromIsoDate(isoDay);
-  for (let back = 0; back <= 2; back++){
-    const d = new Date(today);
-    d.setDate(today.getDate() - back);
-    const iso = toIsoDate(d);
-    const log = App.logsByDay.get(iso);
-    if (log?.bath_done) return false;
-  }
-  // if we've never logged baths, we treat as due on day 3+ (still due)
-  return true;
-}
-
-function proposeBathSlot(isoDay, constraints, earliestMin, latestMin){
-  // Can't be when Julio is unavailable.
-  // We'll pick a 20-min slot (or 25?) that fits and doesn't overlap Julio unavailable blocks.
-  const dur = 20;
-  const julioUn = (constraints?.julioUnavailable || []).map(b => ({
-    s: minutesFromHHMM(b.start), e: minutesFromHHMM(b.end)
-  })).filter(x=>x.s!==null&&x.e!==null&&x.e>x.s);
-
-  const start = clamp(earliestMin, 0, 24*60);
-  const end = clamp(latestMin, 0, 24*60);
-  if (end - start < dur) return null;
-
-  for (let t = start; t <= end - dur; t += 15){
-    const ok = julioUn.every(u => !overlaps(t, t+dur, u.s, u.e));
-    if (ok) return { startMin: t, endMin: t+dur };
-  }
-  return null;
-}
-
-function adjustForAppointments(blocks, appts, warnings){
-  if (!appts.length) return;
-
-  // Appointment priority: keep as-is. For routine items that overlap, try to move if "movable".
-  const movableTitles = new Set(["Breakfast (prep + eat)", "Lunch (prep + eat)", "Dinner (prep + eat)", "Snack + milk", "Bath"]);
-  const fixedKinds = new Set(["nap"]); // nap is semi-movable, but only within limit
-
-  // Helper: check overlap with any appointment
-  const apptOverlap = (s,e) => appts.some(a => overlaps(s,e,a.startMin,a.endMin));
-
-  // Move routine blocks if possible
-  for (const b of blocks){
-    if (b.kind === "appt") continue;
-    if (!apptOverlap(b.startMin, b.endMin)) continue;
-
-    const dur = b.endMin - b.startMin;
-
-    // Nap: allow limited shift if overlap
-    if (b.kind === "nap"){
-      const nextStart = nextNonOverlappingTime(b.startMin, dur, appts, blocks, 90);
-      if (nextStart !== null){
-        const delta = nextStart - b.startMin;
-        b.startMin = nextStart;
-        b.endMin = nextStart + dur;
-        // also shift associated nap routine block (if present and same napIndex)
-        const idx = b.meta?.napIndex;
-        const routine = blocks.find(x => x.meta?.napIndex === idx && x.title.startsWith("Nap routine"));
-        if (routine){
-          routine.endMin = b.startMin;
-          routine.startMin = b.startMin - (routine.endMin - routine.startMin);
-        }
-        // shift downstream blocks (simple approach) for nap 1 affects nap 2 schedule
-        // We'll only do minimal: if nap1 changed, keep nap2 forecasted start anchored on nap1 end.
-        // (Instead of rebuilding everything, we flag.)
-        warnings.push(`Appointment overlaps ${b.title}. Nap shifted.`);
-      } else {
-        warnings.push(`Appointment overlaps ${b.title}. Please review.`);
-        b.kind = "warn";
-      }
-      continue;
-    }
-
-    // Movable routine blocks
-    if (movableTitles.has(b.title)){
-      const newStart = nextNonOverlappingTime(b.startMin, dur, appts, blocks, 240);
-      if (newStart !== null){
-        b.startMin = newStart;
-        b.endMin = newStart + dur;
-        b.meta.moved = true;
-      } else {
-        warnings.push(`Appointment overlaps "${b.title}". No open slot found.`);
-        b.kind = "warn";
-      }
-      continue;
-    }
-
-    // Non-movable routine
-    warnings.push(`Appointment overlaps "${b.title}".`);
-    b.kind = "warn";
-  }
-}
-
-function nextNonOverlappingTime(originalStart, dur, appts, blocks, maxShiftMin){
-  // Try forward then backward in 15-min increments, limited by maxShiftMin.
-  // Must not overlap any appointment, and must not overlap other non-appointment blocks.
-  const other = blocks.filter(b => b.kind !== "appt");
-  const step = 15;
-
-  const fits = (s) => {
-    const e = s + dur;
-    if (s < 0 || e > 24*60) return false;
-    if (appts.some(a => overlaps(s,e,a.startMin,a.endMin))) return false;
-    // Avoid overlap with other blocks except itself, and except open time.
-    for (const b of other){
-      if (b.startMin === originalStart && (b.endMin - b.startMin) === dur) continue;
-      if (overlaps(s,e,b.startMin,b.endMin)) return false;
-    }
+  async function signIn(email, pass){
+    const res = await sbTry(()=>App.supa.auth.signInWithPassword({ email, password:pass }), "Sign in failed.");
+    if (res?.error) { toast(res.error.message); return false; }
+    toast("Signed in.");
     return true;
-  };
-
-  if (fits(originalStart)) return originalStart;
-
-  for (let shift = step; shift <= maxShiftMin; shift += step){
-    if (fits(originalStart + shift)) return originalStart + shift;
-    if (fits(originalStart - shift)) return originalStart - shift;
   }
-  return null;
-}
+  async function signUp(email, pass){
+    const res = await sbTry(()=>App.supa.auth.signUp({ email, password:pass }), "Sign up failed.");
+    if (res?.error) { toast(res.error.message); return false; }
+    toast("Account created. Now sign in.");
+    return true;
+  }
+  async function signOut(){
+    await sbTry(()=>App.supa.auth.signOut(), "Sign out failed.");
+    App.state.user=null; App.state.household=null;
+    showAuth(true);
+  }
 
-function applyCaregiverAssignments(blocks, constraints, warnings){
-  const c = constraints || {};
-  const parentAvailable = (person, startMin, endMin) => {
-    const un = (person === "Kristyn" ? (c.kristynUnavailable||[]) : (c.julioUnavailable||[]))
-      .map(b => ({ s: minutesFromHHMM(b.start), e: minutesFromHHMM(b.end) }))
-      .filter(x=>x.s!==null&&x.e!==null&&x.e>x.s);
+  async function loadHousehold(){
+    const u = App.state.user;
+    if (!u) return null;
+    const mem = await sbTry(()=>App.supa.from("household_members").select("household_id").eq("user_id", u.id).limit(1), "Could not load household membership.");
+    const hhId = mem?.data?.[0]?.household_id;
+    if (!hhId){ App.state.household=null; return null; }
+    const hh = await sbTry(()=>App.supa.from("households").select("id,name,join_code").eq("id", hhId).single(), "Could not load household.");
+    App.state.household = hh?.data || null;
+    return App.state.household;
+  }
 
-    // Available if no unavailable overlap at all across entire window
-    return un.every(u => !overlaps(startMin, endMin, u.s, u.e));
-  };
+  function randomJoinCode(len=8){
+    const chars="ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+    let out=""; for(let i=0;i<len;i++) out+=chars[Math.floor(Math.random()*chars.length)];
+    return out;
+  }
 
-  const nannyCovers = (startMin, endMin) => {
-    if (!c.nannyWorking?.enabled) return false;
-    const blocks = (c.nannyWorking.blocks || []).map(b => ({ s: minutesFromHHMM(b.start), e: minutesFromHHMM(b.end) }))
-      .filter(x=>x.s!==null&&x.e!==null&&x.e>x.s);
-    // covers full window if there exists a block that fully contains it
-    return blocks.some(b => b.s <= startMin && b.e >= endMin);
-  };
+  async function createHousehold(name){
+    const u = App.state.user;
+    const code = randomJoinCode();
+    const hh = await sbTry(()=>App.supa.from("households").insert({ name:name||"Our household", join_code:code, created_by:u.id }).select("id,name,join_code").single(), "Create household failed.");
+    if (!hh?.data) return false;
+    const ins = await sbTry(()=>App.supa.from("household_members").insert({ household_id: hh.data.id, user_id:u.id, role:"owner" }), "Could not create membership.");
+    if (ins?.error) return false;
+    App.state.household = hh.data;
+    toast("Household created.");
+    return true;
+  }
 
-  // Kayden is never assigned naps.
+  async function joinHousehold(code){
+    const res = await sbTry(()=>App.supa.rpc("join_household", { p_join_code: String(code||"").trim().toUpperCase() }), "Join failed.");
+    if (res?.error) { toast(res.error.message); return false; }
+    toast("Joined household.");
+    return true;
+  }
 
-  for (const b of blocks){
-    if (b.kind !== "nap") continue;
+  async function loadSettings(){
+    const hh = App.state.household;
+    if (!hh) return App.state.settings;
+    const res = await sbTry(()=>App.supa.from("settings").select("data").eq("household_id", hh.id).maybeSingle(), "Could not load settings.");
+    const data = res?.data?.data || {};
+    const merged = { ...DEFAULT_SETTINGS, ...data, gcal: { ...DEFAULT_SETTINGS.gcal, ...(data.gcal||{}) } };
+    App.state.settings = merged;
+    return merged;
+  }
 
-    const napIndex = b.meta?.napIndex;
-    const routine = blocks.find(x => x.meta?.napIndex === napIndex && x.title.startsWith("Nap routine"));
-    const start = routine ? routine.startMin : b.startMin;
-    const end = b.endMin;
+  async function saveSettings(s){
+    const hh = App.state.household;
+    if (!hh) { toast("No household."); return false; }
+    const res = await sbTry(()=>App.supa.from("settings").upsert({ household_id: hh.id, data: s }), "Settings save failed.");
+    if (res?.error) return false;
+    App.state.settings = s;
+    toast("Settings saved.");
+    return true;
+  }
 
-    const kristynOk = parentAvailable("Kristyn", start, end);
-    const julioOk = parentAvailable("Julio", start, end);
+  // ---------- Data: tasks/plans/logs ----------
+  async function loadTasks(){
+    const hh = App.state.household; if (!hh) return [];
+    const res = await sbTry(()=>App.supa.from("tasks").select("id,title,status,assigned_date,created_at,completed_at").eq("household_id", hh.id).order("created_at",{ascending:false}), "Could not load tasks.");
+    App.state.tasks = res?.data || [];
+    return App.state.tasks;
+  }
 
-    let assigned = null;
+  async function addTask(title, assignedDate=null){
+    const hh = App.state.household; const u=App.state.user;
+    const t = String(title||"").trim(); if (!hh || !u || !t) return false;
+    const res = await sbTry(()=>App.supa.from("tasks").insert({ household_id:hh.id, title:t, status:"open", assigned_date:assignedDate, created_by:u.id }), "Task add failed.");
+    if (res?.error) return false;
+    await loadTasks(); renderTasks();
+    return true;
+  }
 
-    if (kristynOk || julioOk){
-      // at least one parent available -> assign a parent (prefer the parent who is available)
-      assigned = kristynOk ? "Kristyn" : "Julio";
-    } else if (nannyCovers(start, end)){
-      assigned = "Nanny";
-    } else {
-      assigned = "Uncovered";
-      warnings.push(`${b.title} is uncovered (no parent available; nanny does not cover full window).`);
+  async function updateTask(id, patch){
+    const hh = App.state.household; if (!hh) return false;
+    const res = await sbTry(()=>App.supa.from("tasks").update(patch).eq("household_id", hh.id).eq("id", id), "Task update failed.");
+    if (res?.error) return false;
+    await loadTasks(); renderTasks();
+    return true;
+  }
+
+  function blankPlan(dateISO){
+    return {
+      date: dateISO,
+      step1: Object.fromEntries(STEP1.map(x=>[x.key,false])),
+      brainDump: "",
+      focusTaskIds: [],
+      constraints: {
+        blocks: { julio:[], kristyn:[], nanny:[], kayden:[] },
+        nannyWorking:false,
+        bedtimeCaregiver:"Kristyn",
+        appointments:[]
+      },
+      bath: { lastBathISO: null }
+    };
+  }
+  function normPlan(plan, dateISO){
+    const b = blankPlan(dateISO);
+    const p = { ...b, ...(plan||{}) };
+    p.step1 = { ...b.step1, ...(p.step1||{}) };
+    p.constraints = { ...b.constraints, ...(p.constraints||{}) };
+    p.constraints.blocks = { ...b.constraints.blocks, ...(p.constraints.blocks||{}) };
+    p.constraints.appointments = Array.isArray(p.constraints.appointments) ? p.constraints.appointments : [];
+    p.focusTaskIds = Array.isArray(p.focusTaskIds) ? p.focusTaskIds : [];
+    p.bath = { ...b.bath, ...(p.bath||{}) };
+    return p;
+  }
+  function blankLog(dateISO){
+    return { date:dateISO, wakeTime:null, nap1:{enabled:false,start:null,end:null}, nap2:{enabled:false,start:null,end:null}, bedtime:null, overnightNotes:"" };
+  }
+  function normLog(log, dateISO){
+    const b = blankLog(dateISO);
+    const l = { ...b, ...(log||{}) };
+    l.nap1 = { ...b.nap1, ...(l.nap1||{}) };
+    l.nap2 = { ...b.nap2, ...(l.nap2||{}) };
+    return l;
+  }
+
+  async function loadPlan(dateISO){
+    const hh = App.state.household; if (!hh) return null;
+    const res = await sbTry(()=>App.supa.from("day_plans").select("data").eq("household_id", hh.id).eq("date", dateISO).maybeSingle(), "Could not load plan.");
+    const plan = res?.data?.data || null;
+    App.state.plans.set(dateISO, plan);
+    return plan;
+  }
+  async function savePlan(dateISO, planData){
+    const hh = App.state.household; if (!hh) return false;
+    const res = await sbTry(()=>App.supa.from("day_plans").upsert({ household_id:hh.id, date:dateISO, data:planData }), "Plan save failed.");
+    if (res?.error) return false;
+    App.state.plans.set(dateISO, planData);
+    return true;
+  }
+
+  async function loadLog(dateISO){
+    const hh = App.state.household; if (!hh) return null;
+    const res = await sbTry(()=>App.supa.from("day_logs").select("data,updated_at").eq("household_id", hh.id).eq("date", dateISO).maybeSingle(), "Could not load log.");
+    const log = res?.data?.data || null;
+    App.state.logs.set(dateISO, log);
+    return log;
+  }
+  async function saveLog(dateISO, logData){
+    const hh = App.state.household; if (!hh) return false;
+    const res = await sbTry(()=>App.supa.from("day_logs").upsert({ household_id:hh.id, date:dateISO, data:logData }), "Log save failed.");
+    if (res?.error) return false;
+    App.state.logs.set(dateISO, logData);
+    return true;
+  }
+
+  async function loadHistory(limit=60){
+    const hh = App.state.household; if (!hh) return [];
+    const res = await sbTry(()=>App.supa.from("day_logs").select("date,data,updated_at").eq("household_id", hh.id).order("date",{ascending:false}).limit(limit), "Could not load history.");
+    return res?.data || [];
+  }
+
+  // ---------- Scheduling ----------
+  function parseBlocks(list){
+    return (Array.isArray(list)?list:[])
+      .map(b => ({ start: timeToMin(b.start), end: timeToMin(b.end) }))
+      .filter(b => b.start!=null && b.end!=null && b.end>b.start);
+  }
+  function buildAvail(constraints){
+    const c = constraints || {};
+    const blocks = c.blocks || {};
+    return {
+      julioUnavail: parseBlocks(blocks.julio),
+      kristynUnavail: parseBlocks(blocks.kristyn),
+      nannyWorking: c.nannyWorking ? parseBlocks(blocks.nanny) : [],
+      kaydenAvail: parseBlocks(blocks.kayden),
+      appts: (c.appointments||[])
+        .map(a=>({ title:a.title||"Appointment", start: timeToMin(a.start), end: timeToMin(a.end) }))
+        .filter(a=>a.start!=null && a.end!=null && a.end>a.start)
+    };
+  }
+
+  function pickNapCaregiver(avail, s, e){
+    // HARD RULE: Kayden never naps.
+    const kAvail = !withinAny(avail.kristynUnavail, s, e);
+    const jAvail = !withinAny(avail.julioUnavail, s, e);
+    if (kAvail) return { who:"Kristyn", status:"covered" };
+    if (jAvail) return { who:"Julio", status:"covered" };
+    if (covers(avail.nannyWorking, s, e)) return { who:"Nanny", status:"covered" };
+    return { who:"Uncovered", status:"uncovered" };
+  }
+
+  function pickRoutineAssignee(avail, s, e){
+    const kAvail = !withinAny(avail.kristynUnavail, s, e);
+    const jAvail = !withinAny(avail.julioUnavail, s, e);
+    if (kAvail) return "Kristyn";
+    if (jAvail) return "Julio";
+    if (covers(avail.nannyWorking, s, e)) return "Nanny";
+    if (covers(avail.kaydenAvail, s, e)) return "Kayden";
+    return "Uncovered";
+  }
+
+  function splitAround(block, cutS, cutE){
+    const out=[];
+    if (block.start < cutS) out.push({ ...block, end: Math.min(cutS, block.end), key: uid(block.key+"_a") });
+    if (block.end > cutE) out.push({ ...block, start: Math.max(cutE, block.start), key: uid(block.key+"_b") });
+    return out.filter(x => x.end > x.start + 2);
+  }
+
+  function applyAppointments(blocks, appts){
+    const out = [...blocks];
+    const sorted = [...appts].sort((a,b)=>a.start-b.start);
+    for (const appt of sorted){
+      out.push({ key: uid("appt"), title: appt.title, type:"appt", start: appt.start, end: appt.end, assignee:"—" });
+      // If overlaps routine block, push or split
+      for (let i=0;i<out.length;i++){
+        const b = out[i];
+        if (b.type !== "routine") continue;
+        if (!overlaps(b.start,b.end, appt.start, appt.end)) continue;
+
+        const dur = b.end-b.start;
+        const pushed = { ...b, start: appt.end, end: appt.end + dur };
+        const conflict = out.some(o => o!==b && o.type!=="appt" && overlaps(pushed.start,pushed.end,o.start,o.end));
+        if (!conflict) out[i]=pushed;
+        else out.splice(i,1,...splitAround(b, appt.start, appt.end));
+      }
     }
+    return out;
+  }
 
-    b.meta.assignedTo = assigned;
-    if (routine) routine.meta.assignedTo = assigned;
-    if (assigned === "Uncovered"){
-      b.kind = "warn";
-      if (routine) routine.kind = "warn";
+  function maybeBath(blocks, avail, plan){
+    const dateISO = plan?.date;
+    const last = plan?.bath?.lastBathISO;
+    let overdue = !last;
+    if (last){
+      const a = new Date(last+"T00:00:00");
+      const b = new Date(dateISO+"T00:00:00");
+      overdue = Math.floor((b-a)/(24*3600*1000)) >= 3;
     }
-  }
-}
+    if (!overdue) return { blocks, warn:null };
 
-/* =========================
-   Timeline rendering (2-hour grid + overlap lanes)
-   ========================= */
-function renderTimeline(blocks){
-  const wrap = document.createElement("div");
-  wrap.className = "timeline";
-
-  const grid = document.createElement("div");
-  grid.className = "tlGrid";
-  wrap.appendChild(grid);
-
-  // Hour lines + labels
-  for (let h=0; h<=24; h++){
-    const top = h * hourPx();
-    const line = document.createElement("div");
-    line.className = "hourLine";
-    line.style.top = `${top}px`;
-    grid.appendChild(line);
-
-    if (h < 24 && h % 2 === 0){
-      const label = document.createElement("div");
-      label.className = "hourLabel";
-      label.style.top = `${top}px`;
-      label.textContent = formatTime12FromMinutes(h*60);
-      grid.appendChild(label);
+    const dinner = blocks.find(b => b.key==="dinner");
+    const bathLen=15;
+    if (dinner){
+      const s = dinner.end, e=s+bathLen;
+      const julioUnavailable = withinAny(avail.julioUnavail, s, e);
+      const conflict = blocks.some(b => overlaps(s,e,b.start,b.end));
+      if (!julioUnavailable && !conflict){
+        blocks.push({ key:"bath", title:"Bath", type:"routine", start:s, end:e, assignee: pickRoutineAssignee(avail,s,e) });
+        return { blocks, warn:"Bath was overdue — scheduled Bath after dinner." };
+      }
     }
+    return { blocks, warn:"Bath is overdue — no obvious slot found (and it cannot be scheduled while Julio is unavailable)." };
   }
 
-  const laneWrap = document.createElement("div");
-  laneWrap.className = "laneWrap";
-  grid.appendChild(laneWrap);
-
-  const rendered = blocks.map(b => ({
-    ...b,
-    startMin: minutesFromHHMM(b.startHHMM),
-    endMin: minutesFromHHMM(b.endHHMM),
-  })).filter(b => b.endMin > b.startMin);
-
-  // Assign lanes for overlapping blocks
-  const laneInfo = assignLanes(rendered);
-
-  const totalWidth = () => laneWrap.getBoundingClientRect().width || 1;
-
-  for (const b of rendered){
-    const lane = laneInfo.laneById.get(b.id) || 0;
-    const lanes = laneInfo.lanesInGroupById.get(b.id) || 1;
-    const gap = 8;
-    const laneW = (100 / lanes);
-    const leftPct = laneW * lane;
-    const widthPct = laneW;
-
-    const el = document.createElement("div");
-    el.className = "block";
-    if (b.kind === "appt") el.classList.add("appt");
-    if (b.kind === "nap") el.classList.add("nap");
-    if (b.kind === "warn") el.classList.add("warn");
-
-    const top = (b.startMin * hourPx())/60;
-    const height = ((b.endMin - b.startMin) * hourPx())/60;
-    el.style.top = `${top}px`;
-    el.style.height = `${Math.max(38, height)}px`;
-    el.style.left = `calc(${leftPct}% + ${gap/2}px)`;
-    el.style.width = `calc(${widthPct}% - ${gap}px)`;
-
-    const timeLine = `${formatTime12(b.startHHMM)} – ${formatTime12(b.endHHMM)}`;
-    const metaLine = metaLineText(b);
-    el.innerHTML = `
-      <p class="t">${escapeHtml(b.title)}</p>
-      <p class="m">${escapeHtml(timeLine)}${metaLine ? ` · ${escapeHtml(metaLine)}` : ""}</p>
-    `;
-    laneWrap.appendChild(el);
-  }
-
-  // Scroll roughly to morning
-  setTimeout(() => { wrap.scrollTop = Math.max(0, (7 * hourPx()) - 60); }, 0);
-
-  return wrap;
-}
-
-function hourPx(){
-  const root = document.documentElement;
-  const v = getComputedStyle(root).getPropertyValue("--hourPx").trim();
-  const n = Number(v.replace("px",""));
-  return Number.isFinite(n) ? n : 78;
-}
-
-function assignLanes(blocks){
-  // blocks: [{id,startMin,endMin}] -> lane index and lanes per overlap group
-  const items = blocks.slice().sort((a,b)=>a.startMin-b.startMin);
-
-  // Build overlap groups by sweep line
-  const groups = [];
-  let current = [];
-  let currentEnd = -1;
-  for (const b of items){
-    if (current.length === 0){
-      current = [b];
-      currentEnd = b.endMin;
-    } else if (b.startMin < currentEnd){
-      current.push(b);
-      currentEnd = Math.max(currentEnd, b.endMin);
-    } else {
-      groups.push(current);
-      current = [b];
-      currentEnd = b.endMin;
-    }
-  }
-  if (current.length) groups.push(current);
-
-  const laneById = new Map();
-  const lanesInGroupById = new Map();
-
-  for (const group of groups){
-    // Greedy interval graph coloring
-    const lanes = [];
-    for (const b of group.sort((a,b)=>a.startMin-b.startMin)){
-      let placed = false;
-      for (let i=0; i<lanes.length; i++){
-        const last = lanes[i][lanes[i].length-1];
-        if (last.endMin <= b.startMin){
-          lanes[i].push(b);
-          laneById.set(b.id, i);
-          placed = true;
-          break;
+  function assignLanes(blocks){
+    const sorted = [...blocks].sort((a,b)=>a.start-b.start || (a.end-a.start)-(b.end-b.start));
+    const lanes=[];
+    const out = sorted.map(b=>({ ...b, lane:0, laneCount:1 }));
+    for (const b of out){
+      let placed=false;
+      for (let i=0;i<lanes.length;i++){
+        const lane = lanes[i];
+        const last = lane[lane.length-1];
+        if (!last || !overlaps(last.start,last.end,b.start,b.end)){
+          b.lane=i; lane.push(b); placed=true; break;
         }
       }
-      if (!placed){
-        lanes.push([b]);
-        laneById.set(b.id, lanes.length-1);
+      if (!placed){ b.lane=lanes.length; lanes.push([b]); }
+    }
+    for (const b of out){
+      const group = out.filter(o => overlaps(b.start,b.end,o.start,o.end));
+      const minLane = Math.min(...group.map(o=>o.lane));
+      const maxLane = Math.max(...group.map(o=>o.lane));
+      b.laneCount = (maxLane-minLane)+1;
+    }
+    return out;
+  }
+
+  function resolveNap(nap, defaultStart, defaultDur, earliest){
+    const enabled = !!nap?.enabled;
+    const s = enabled ? timeToMin(nap.start) : null;
+    const e = enabled ? timeToMin(nap.end) : null;
+    if (enabled && s!=null && e!=null && e>s) return { start:s, end:e, source:"actual" };
+    const st = (defaultStart!=null) ? defaultStart : (earliest!=null ? earliest : null);
+    if (st==null) return { start:null, end:null, source:"none" };
+    return { start: st, end: st + defaultDur, source:"forecast" };
+  }
+
+  function generateSchedule(dateISO, plan, log, settings){
+    const p = normPlan(plan, dateISO);
+    const l = normLog(log, dateISO);
+    const s = settings || DEFAULT_SETTINGS;
+    const avail = buildAvail(p.constraints);
+    const warns = [];
+
+    const wakeMinRaw = timeToMin(l.wakeTime || s.defaultWake) ?? timeToMin(DEFAULT_SETTINGS.defaultWake);
+    const wake = clamp(wakeMinRaw, 240, 720);
+
+    const blocks = [];
+    const addRoutine = (key,title,start,end) => {
+      if (start==null||end==null||end<=start) return;
+      blocks.push({ key, title, type:"routine", start, end });
+    };
+
+    // Morning (no filler)
+    addRoutine("cuddle","Family cuddle", wake, wake+20);
+    addRoutine("dress","Get dressed", wake+20, wake+35);
+    addRoutine("breakfast","Breakfast (prep + eat)", wake+35, wake+35+s.breakfastMin);
+    addRoutine("teethAM","Brush teeth", wake+35+s.breakfastMin, wake+35+s.breakfastMin+5);
+
+    // WW1 nap forecast
+    const ww1Start = wake + Math.round(s.ww1Min*60);
+    const ww1End = wake + Math.round(s.ww1Max*60);
+    const nap1 = resolveNap(l.nap1, ww1End, s.nap1ForecastMin, ww1Start);
+
+    if (nap1.start!=null){
+      const routineS = clamp(nap1.start - s.napRoutineMin, wake+60, nap1.start);
+      addRoutine("nap1Routine","Nap routine", routineS, nap1.start);
+
+      const care = pickNapCaregiver(avail, nap1.start, nap1.end);
+      blocks.push({ key:"nap1", title:"Nap 1", type:"nap", start:nap1.start, end:nap1.end, assignee: care.who, status: care.status });
+      if (care.status==="uncovered") warns.push("Nap 1 is uncovered.");
+    }
+
+    let afterNap1 = nap1.end!=null ? nap1.end : (ww1End + s.nap1ForecastMin);
+    afterNap1 = clamp(afterNap1, wake+120, wake+600);
+
+    // WW2 + lunch + snack
+    const ww2MinEnd = afterNap1 + Math.round(s.ww2Min*60);
+    const ww2MaxEnd = afterNap1 + Math.round(s.ww2Max*60);
+    const lunchStart = clamp(afterNap1+50, afterNap1+20, ww2MinEnd - s.lunchMin - 10);
+    addRoutine("lunch","Lunch (prep + eat)", lunchStart, lunchStart+s.lunchMin);
+    addRoutine("snack1","Snack + milk", lunchStart+s.lunchMin+90, lunchStart+s.lunchMin+105);
+
+    // Nap 2
+    const nap2 = resolveNap(l.nap2, ww2MaxEnd, s.nap2ForecastMin, null);
+    if (nap2.start!=null){
+      const routineS = clamp(nap2.start - s.napRoutineMin, afterNap1+60, nap2.start);
+      addRoutine("nap2Routine","Nap routine", routineS, nap2.start);
+
+      const care = pickNapCaregiver(avail, nap2.start, nap2.end);
+      blocks.push({ key:"nap2", title:"Nap 2", type:"nap", start:nap2.start, end:nap2.end, assignee: care.who, status: care.status });
+      if (care.status==="uncovered") warns.push("Nap 2 is uncovered.");
+    }
+
+    let afterNap2 = nap2.end!=null ? nap2.end : (ww2MaxEnd + s.nap2ForecastMin);
+    afterNap2 = clamp(afterNap2, afterNap1+180, wake+1000);
+
+    // WW3 + dinner + bedtime
+    const ww3MinEnd = afterNap2 + Math.round(s.ww3Min*60);
+    const ww3MaxEnd = afterNap2 + Math.round(s.ww3Max*60);
+
+    const dinnerStart = clamp(afterNap2+80, afterNap2+40, ww3MinEnd - s.dinnerMin - 10);
+    addRoutine("dinner","Dinner (prep + eat)", dinnerStart, dinnerStart+s.dinnerMin);
+    addRoutine("snack2","Snack + milk", dinnerStart+s.dinnerMin+45, dinnerStart+s.dinnerMin+60);
+    addRoutine("teethPM","Brush teeth", dinnerStart+s.dinnerMin+60, dinnerStart+s.dinnerMin+65);
+    addRoutine("prepNursery","Prep nursery for bed", ww3MaxEnd-20, ww3MaxEnd-5);
+
+    const bedCare = (p.constraints?.bedtimeCaregiver==="Julio") ? "Julio":"Kristyn";
+    blocks.push({ key:"bedtimeRoutine", title:"Bedtime routine", type:"routine", start: ww3MaxEnd - s.bedRoutineMin, end: ww3MaxEnd, assignee: bedCare });
+
+    // Bath rule
+    const bathRes = maybeBath(blocks, avail, p);
+    if (bathRes.warn) warns.push(bathRes.warn);
+
+    // Assign assignees for routine blocks (except bedtime already set)
+    for (const b of blocks){
+      if (b.type==="routine" && !b.assignee){
+        b.assignee = pickRoutineAssignee(avail, b.start, b.end);
+      }
+      if (b.type==="nap" && !b.assignee){
+        const care = pickNapCaregiver(avail, b.start, b.end);
+        b.assignee = care.who; b.status = care.status;
+      }
+      if (b.assignee==="Uncovered" || b.status==="uncovered") b.status="uncovered";
+    }
+
+    // Appointments
+    let finalBlocks = applyAppointments(blocks, avail.appts);
+
+    // Appointment overlaps nap warning
+    for (const a of avail.appts){
+      if (finalBlocks.some(b => b.type==="nap" && overlaps(b.start,b.end,a.start,a.end))){
+        warns.push(`Appointment overlaps a nap window: “${a.title}”.`);
       }
     }
-    const laneCount = lanes.length;
-    for (const b of group){
-      lanesInGroupById.set(b.id, laneCount);
-    }
+
+    finalBlocks = finalBlocks
+      .filter(b => b.start!=null && b.end!=null && b.end>b.start)
+      .sort((a,b)=>a.start-b.start);
+
+    return { blocks: assignLanes(finalBlocks), warnings: warns };
   }
 
-  return { laneById, lanesInGroupById };
-}
+  // ---------- Timeline rendering ----------
+  function buildTimeline(el, blocks){
+    if (!el) return;
+    el.innerHTML = "";
 
-function metaLineText(block){
-  const m = block.meta || {};
-  if (block.kind === "nap") {
-    const who = m.assignedTo ? m.assignedTo : "";
-    return who && who !== "Uncovered" ? `Caregiver: ${who}` : (who==="Uncovered" ? "Uncovered" : "");
-  }
-  if (block.title.startsWith("Nap routine")){
-    const who = m.assignedTo ? m.assignedTo : "";
-    return who && who !== "Uncovered" ? `Caregiver: ${who}` : (who==="Uncovered" ? "Uncovered" : "");
-  }
-  if (block.title === "Bedtime routine"){
-    return m.bedtimeBy ? `Bedtime by ${m.bedtimeBy}` : "";
-  }
-  if (m.moved) return "Moved for appointment";
-  return "";
-}
+    const minStart = blocks.length ? Math.min(...blocks.map(b=>b.start)) : 7*60;
+    const maxEnd = blocks.length ? Math.max(...blocks.map(b=>b.end)) : 20*60;
+    const startHour = clamp(Math.floor((minStart-60)/60), 0, 23);
+    const endHour = clamp(Math.ceil((maxEnd+60)/60), startHour+1, 24);
 
-/* =========================
-   Today view: logging controls
-   ========================= */
-function renderToday(){
-  const iso = App.todayIso;
-  const d = fromIsoDate(iso);
-  setSubhead(`Today · ${formatDateShort(d)}`);
+    const pxPerMin = 40/60; // 40px per hour
+    const dayOffset = startHour*60;
+    const totalMin = (endHour*60) - dayOffset;
 
-  const plan = App.plansByDay.get(iso) || emptyPlanPayload(iso);
-  const log = App.logsByDay.get(iso) || emptyLogRecord(iso);
-  const schedule = generateScheduleForDay(iso);
-
-  const todayTasks = App.tasks
-    .filter(t => !t.completed && t.assigned_date === iso)
-    .slice(0, 100);
-
-  const root = document.createElement("div");
-  root.className = "grid";
-
-  // Top card: logging controls
-  const c1 = document.createElement("div");
-  c1.className = "card";
-  c1.innerHTML = `
-    <div class="hd">
-      <div>
-        <h2>Today</h2>
-        <p>Wake time updates the schedule instantly. Nap buttons are fast, with optional manual edits.</p>
-      </div>
-      <div class="row" style="justify-content:flex-end; flex:0 0 auto;">
-        <button class="mini ghost" id="btnEditTodayPlan">Edit plan</button>
-        ${CONFIG.appsScriptUrl && CONFIG.appsScriptApiKey ? `<button class="mini ghost" id="btnExportToday">Export</button>` : ``}
-      </div>
-    </div>
-    <div class="bd">
-      <div class="row">
-        <div>
-          <label>Actual wake time</label>
-          <div class="row">
-            <button class="ghost" id="wakeNow">Set now (${formatTime12(nowHHMM())})</button>
-            <div id="wakePick"></div>
-          </div>
-        </div>
-        <div>
-          <label>Bedtime + overnight notes (tracking only)</label>
-          <div class="row">
-            <div id="bedPick"></div>
-            <button class="ghost" id="bedNow">Set bedtime now</button>
-          </div>
-        </div>
-      </div>
-
-      <div class="divider"></div>
-
-      <div class="row">
-        <div>
-          <label>Nap 1</label>
-          <div class="row">
-            <button class="primary" id="nap1Toggle"></button>
-            <div id="nap1StartPick"></div>
-            <div id="nap1EndPick"></div>
-          </div>
-        </div>
-        <div>
-          <label>Nap 2</label>
-          <div class="row">
-            <button class="primary" id="nap2Toggle"></button>
-            <div id="nap2StartPick"></div>
-            <div id="nap2EndPick"></div>
-          </div>
-        </div>
-      </div>
-
-      <div class="divider"></div>
-
-      <div class="row">
-        <div>
-          <label>Overnight notes</label>
-          <textarea id="overnightNotes" placeholder="Example: rough night around 2:00 AM, teething"></textarea>
-        </div>
-        <div>
-          <label>Bath done today</label>
-          <div class="item">
-            <input type="checkbox" id="bathDone" ${log.bath_done ? "checked":""}>
-            <div class="txt">
-              <div>Bath completed</div>
-              <div class="sub">Used to keep the “every 3 days” rule on track.</div>
-            </div>
-          </div>
-          ${schedule.warnings.length ? `<div class="divider"></div>
-            <div class="badge warn">Flags</div>
-            <div class="hint" style="margin-top:8px;">${schedule.warnings.map(w=>"• "+escapeHtml(w)).join("<br>")}</div>` : ``}
-        </div>
-      </div>
-    </div>
-  `;
-  root.appendChild(c1);
-
-  // Fill time pickers
-  $("#wakePick", c1).innerHTML = timePickerHTML("wake", log.wake_time || App.settings.defaultWakeTime);
-  $("#bedPick", c1).innerHTML = timePickerHTML("bed", log.bedtime_time || App.settings.latestBedtimeHHMM);
-  $("#nap1StartPick", c1).innerHTML = timePickerHTML("n1s", log.nap1_start || "");
-  $("#nap1EndPick", c1).innerHTML = timePickerHTML("n1e", log.nap1_end || "");
-  $("#nap2StartPick", c1).innerHTML = timePickerHTML("n2s", log.nap2_start || "");
-  $("#nap2EndPick", c1).innerHTML = timePickerHTML("n2e", log.nap2_end || "");
-
-  $("#overnightNotes", c1).value = log.overnight_notes || "";
-
-  // Toggle labels
-  updateNapToggleLabels(c1, log);
-
-  // Handlers
-  $("#btnEditTodayPlan", c1).onclick = () => openQuickEdit(iso);
-  const exp = $("#btnExportToday", c1);
-  if (exp){
-    exp.onclick = async () => exportDayToCalendar(iso, schedule.blocks);
-  }
-
-  $("#wakeNow", c1).onclick = async () => {
-    const record = { ...(App.logsByDay.get(iso) || emptyLogRecord(iso)), day: iso, wake_time: nowHHMM() };
-    await upsertLog(iso, record);
-    render();
-  };
-  $("#bedNow", c1).onclick = async () => {
-    const record = { ...(App.logsByDay.get(iso) || emptyLogRecord(iso)), day: iso, bedtime_time: nowHHMM() };
-    await upsertLog(iso, record);
-    render();
-  };
-
-  // Manual wake/bed apply on change
-  $all("#wake_h, #wake_m, #wake_ap", c1).forEach(el => el.addEventListener("change", async () => {
-    const record = { ...(App.logsByDay.get(iso) || emptyLogRecord(iso)), day: iso, wake_time: readTimePicker("wake") };
-    await upsertLog(iso, record);
-    render();
-  }));
-  $all("#bed_h, #bed_m, #bed_ap", c1).forEach(el => el.addEventListener("change", async () => {
-    const record = { ...(App.logsByDay.get(iso) || emptyLogRecord(iso)), day: iso, bedtime_time: readTimePicker("bed") };
-    await upsertLog(iso, record);
-    render();
-  }));
-
-  // Nap toggles
-  $("#nap1Toggle", c1).onclick = async () => {
-    const record = { ...(App.logsByDay.get(iso) || emptyLogRecord(iso)), day: iso };
-    if (!record.nap1_start){
-      record.nap1_start = nowHHMM();
-    } else if (record.nap1_start && !record.nap1_end){
-      record.nap1_end = nowHHMM();
-    } else {
-      // reset
-      record.nap1_start = null; record.nap1_end = null;
-    }
-    await upsertLog(iso, record);
-    render();
-  };
-  $("#nap2Toggle", c1).onclick = async () => {
-    const record = { ...(App.logsByDay.get(iso) || emptyLogRecord(iso)), day: iso };
-    if (!record.nap2_start){
-      record.nap2_start = nowHHMM();
-    } else if (record.nap2_start && !record.nap2_end){
-      record.nap2_end = nowHHMM();
-    } else {
-      record.nap2_start = null; record.nap2_end = null;
-    }
-    await upsertLog(iso, record);
-    render();
-  };
-
-  // Manual nap apply on change
-  const manualNapChange = async () => {
-    const record = { ...(App.logsByDay.get(iso) || emptyLogRecord(iso)), day: iso };
-    record.nap1_start = readTimePicker("n1s");
-    record.nap1_end = readTimePicker("n1e");
-    record.nap2_start = readTimePicker("n2s");
-    record.nap2_end = readTimePicker("n2e");
-    await upsertLog(iso, record);
-    render();
-  };
-  ["n1s","n1e","n2s","n2e"].forEach(p => {
-    $all(`#${p}_h, #${p}_m, #${p}_ap`, c1).forEach(el => el.addEventListener("change", manualNapChange));
-  });
-
-  $("#overnightNotes", c1).addEventListener("input", debounce(async (e) => {
-    const record = { ...(App.logsByDay.get(iso) || emptyLogRecord(iso)), day: iso, overnight_notes: e.target.value };
-    await upsertLog(iso, record);
-  }, 400));
-
-  $("#bathDone", c1).addEventListener("change", async (e) => {
-    const record = { ...(App.logsByDay.get(iso) || emptyLogRecord(iso)), day: iso, bath_done: e.target.checked };
-    await upsertLog(iso, record);
-    render();
-  });
-
-  // Two-column layout: timeline + tasks
-  const c2 = document.createElement("div");
-  c2.className = "card";
-  c2.innerHTML = `
-    <div class="hd">
-      <div>
-        <h2>Schedule + tasks</h2>
-        <p>Open gaps remain blank.</p>
-      </div>
-    </div>
-    <div class="bd">
-      <div class="twoCol" id="todayTwo"></div>
-    </div>
-  `;
-  const two = $("#todayTwo", c2);
-  const left = document.createElement("div");
-  left.appendChild(renderTimeline(schedule.blocks));
-  const right = document.createElement("div");
-  right.innerHTML = `
-    <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:10px;">
-      <div class="badge">Tasks for Today</div>
-      <button class="mini ghost" id="btnGoTasks">Manage</button>
-    </div>
-    <div class="list" id="todayTaskList"></div>
-  `;
-  const tl = $("#todayTaskList", right);
-  if (todayTasks.length === 0){
-    tl.innerHTML = `<div class="hint">No tasks assigned to today.</div>`;
-  } else {
-    todayTasks.forEach(t => {
+    for (let h=startHour; h<endHour; h+=2){
       const row = document.createElement("div");
-      row.className = "item";
-      row.innerHTML = `
-        <input type="checkbox">
-        <div class="txt">
-          <div>${escapeHtml(t.title)}</div>
-        </div>
-      `;
-      row.querySelector("input").addEventListener("change", async (e) => {
-        await updateTask(t.id, { completed: true, completed_at: new Date().toISOString() });
-        render();
-      });
-      tl.appendChild(row);
+      row.className = "timeRow";
+      const label = document.createElement("div");
+      label.className = "timeLabel";
+      label.textContent = minTo12h(h*60).replace(":00","");
+      row.appendChild(label);
+      el.appendChild(row);
+    }
+
+    const layer = document.createElement("div");
+    layer.className = "layer";
+    layer.style.height = `${totalMin*pxPerMin}px`;
+    el.style.height = `${totalMin*pxPerMin}px`;
+
+    for (const b of blocks){
+      const div = document.createElement("div");
+      div.className = "event";
+      if (b.type==="nap") div.classList.add("nap");
+      if (b.type==="appt") div.classList.add("appt");
+      if (b.status==="uncovered") div.classList.add("warn");
+
+      const top = (b.start - dayOffset) * pxPerMin;
+      const height = Math.max(18, (b.end-b.start)*pxPerMin);
+
+      const leftPct = (b.lane / b.laneCount) * 100;
+      const widthPct = (1 / b.laneCount) * 100;
+
+      div.style.top = `${top}px`;
+      div.style.height = `${height}px`;
+      div.style.left = `calc(${leftPct}% + 6px)`;
+      div.style.width = `calc(${widthPct}% - 10px)`;
+
+      const t = document.createElement("div");
+      t.className = "eventTitle";
+      t.textContent = b.title;
+
+      const meta = document.createElement("div");
+      meta.className = "eventMeta";
+      const range = `${minTo12h(b.start)}–${minTo12h(b.end)}`;
+      const who = b.assignee && b.assignee!=="—" ? ` • ${b.assignee}` : "";
+      meta.textContent = `${range}${who}`;
+
+      div.appendChild(t); div.appendChild(meta);
+      layer.appendChild(div);
+    }
+
+    el.appendChild(layer);
+  }
+
+  // ---------- Rendering: tasks / history / settings ----------
+  function renderTasks(){
+    const tasks = App.state.tasks || [];
+    const todayISO = dateToISO(new Date());
+
+    const open = tasks.filter(t=>t.status!=="done");
+    const done = tasks.filter(t=>t.status==="done");
+
+    const openWrap = $("#tasksOpen"); const doneWrap = $("#tasksDone"); const todayWrap = $("#todayTasks");
+    if (openWrap) openWrap.innerHTML="";
+    if (doneWrap) doneWrap.innerHTML="";
+    if (todayWrap) todayWrap.innerHTML="";
+
+    const makeRow = (t, showAssign) => {
+      const row = document.createElement("div");
+      row.className = "task" + (t.status==="done" ? " taskDone" : "");
+      const cb = document.createElement("input");
+      cb.type="checkbox"; cb.checked = t.status==="done";
+      cb.onchange = async () => {
+        await updateTask(t.id, { status: cb.checked ? "done" : "open", completed_at: cb.checked ? new Date().toISOString() : null });
+      };
+
+      const title = document.createElement("div");
+      title.className="taskTitle"; title.textContent=t.title;
+
+      const meta = document.createElement("div");
+      meta.className="taskMeta"; meta.textContent = t.assigned_date ? `Assigned: ${isoToShort(t.assigned_date)}` : "Unassigned";
+
+      row.appendChild(cb); row.appendChild(title); row.appendChild(meta);
+
+      if (showAssign){
+        const btnToday = document.createElement("button");
+        btnToday.className="btn btnTiny"; btnToday.textContent="Today";
+        btnToday.onclick = async ()=>{ await updateTask(t.id, { assigned_date: todayISO }); };
+
+        const btnClear = document.createElement("button");
+        btnClear.className="btn btnTiny"; btnClear.textContent="Clear";
+        btnClear.onclick = async ()=>{ await updateTask(t.id, { assigned_date: null }); };
+
+        row.appendChild(btnToday); row.appendChild(btnClear);
+      }
+      return row;
+    };
+
+    if (openWrap) open.slice(0,120).forEach(t=>openWrap.appendChild(makeRow(t,true)));
+    if (doneWrap) done.slice(0,60).forEach(t=>doneWrap.appendChild(makeRow(t,false)));
+
+    const todays = open.filter(t=>t.assigned_date===todayISO);
+    if (todayWrap){
+      if (!todays.length) todayWrap.innerHTML = '<div class="empty">No tasks assigned to Today.</div>';
+      else todays.forEach(t=>todayWrap.appendChild(makeRow(t,false)));
+    }
+  }
+
+  async function renderHistory(){
+    const list = $("#historyList");
+    const detail = $("#historyDetail");
+    if (!list) return;
+    list.innerHTML = '<div class="empty">Loading…</div>';
+    const rows = await loadHistory(60);
+    if (!rows.length){ list.innerHTML = '<div class="empty">No history yet.</div>'; return; }
+    list.innerHTML="";
+    rows.forEach(r=>{
+      const item = document.createElement("div");
+      item.className="histRow";
+      item.innerHTML = `<div><div style="font-weight:900">${isoToShort(r.date)}</div>
+        <div class="muted small">Wake: ${r.data?.wakeTime || "—"} • Bedtime: ${r.data?.bedtime || "—"}</div></div>
+        <div class="muted small">View</div>`;
+      item.onclick = () => {
+        $("#histTitle").textContent = `Day log: ${isoToShort(r.date)}`;
+        $("#histMeta").textContent = `Updated: ${new Date(r.updated_at).toLocaleString()}`;
+        $("#histBody").textContent = JSON.stringify(r.data||{}, null, 2);
+        detail.classList.remove("hidden");
+        detail.scrollIntoView({ behavior:"smooth", block:"start" });
+      };
+      list.appendChild(item);
     });
   }
-  $("#btnGoTasks", right).onclick = () => {
-    App.activeTab = "tasks";
-    renderTabs();
-    render();
-  };
 
-  two.appendChild(left);
-  two.appendChild(right);
-  root.appendChild(c2);
+  function renderSettings(){
+    const s = App.state.settings || DEFAULT_SETTINGS;
+    $("#setWake").value = s.defaultWake || DEFAULT_SETTINGS.defaultWake;
+    $("#setBreakfast").value = s.breakfastMin;
+    $("#setLunch").value = s.lunchMin;
+    $("#setDinner").value = s.dinnerMin;
+    $("#setNapRoutine").value = s.napRoutineMin;
+    $("#setBedRoutine").value = s.bedRoutineMin;
+    $("#setNap1").value = s.nap1ForecastMin;
+    $("#setNap2").value = s.nap2ForecastMin;
 
-  return root;
-}
+    $("#ww1Min").value = s.ww1Min; $("#ww1Max").value = s.ww1Max;
+    $("#ww2Min").value = s.ww2Min; $("#ww2Max").value = s.ww2Max;
+    $("#ww3Min").value = s.ww3Min; $("#ww3Max").value = s.ww3Max;
 
-function updateNapToggleLabels(card, log){
-  const n1 = $("#nap1Toggle", card);
-  const n2 = $("#nap2Toggle", card);
-  n1.textContent = !log.nap1_start ? "Start Nap 1 (set now)" : (!log.nap1_end ? "End Nap 1 (set now)" : "Reset Nap 1");
-  n2.textContent = !log.nap2_start ? "Start Nap 2 (set now)" : (!log.nap2_end ? "End Nap 2 (set now)" : "Reset Nap 2");
-}
+    $("#gcalUrl").value = s.gcal?.scriptUrl || "";
+    $("#gcalCalId").value = s.gcal?.calendarId || "";
+    $("#gcalKey").value = s.gcal?.apiKey || "";
 
-/* =========================
-   Evening view
-   ========================= */
-function renderEvening(){
-  const iso = App.tomorrowIso;
-  const d = fromIsoDate(iso);
-  setSubhead(`Evening · Tomorrow ${formatDateShort(d)}`);
+    $("#hhName").textContent = App.state.household?.name ? `Household: ${App.state.household.name}` : "Household: —";
+    $("#hhCode").textContent = App.state.household?.join_code ? `Join code: ${App.state.household.join_code}` : "Join code: —";
+  }
 
-  const plan = App.plansByDay.get(iso);
-  const root = document.createElement("div");
-  root.className = "grid";
+  // ---------- Views ----------
+  function showTab(name){
+    const map = { Evening:"#viewEvening", Today:"#viewToday", Tasks:"#viewTasks", History:"#viewHistory", Settings:"#viewSettings" };
+    for (const [k,sel] of Object.entries(map)){
+      const v = $(sel); if (!v) continue;
+      v.classList.toggle("hidden", k!==name);
+    }
+    $$(".tab").forEach(b=>b.classList.toggle("active", b.dataset.tab===name));
+  }
 
-  const c1 = document.createElement("div");
-  c1.className = "card";
-  c1.innerHTML = `
-    <div class="hd">
-      <div>
-        <h2>Tomorrow plan</h2>
-        <p>${plan ? "Saved plan is ready. You can edit quickly in the morning." : "No plan saved yet. Use the quick evening flow."}</p>
-      </div>
-      <div class="row" style="justify-content:flex-end; flex:0 0 auto;">
-        <button class="mini primary" id="btnOpenWizard">${plan ? "Edit plan" : "Prepare for the Day Ahead"}</button>
-        ${plan ? `<button class="mini ghost" id="btnQuickEdit">Quick edit</button>` : ``}
-      </div>
-    </div>
-    <div class="bd" id="eveningBody"></div>
-  `;
-  root.appendChild(c1);
+  // ---------- Auth modal ----------
+  function showAuth(open){
+    const m = $("#authModal");
+    m.classList.toggle("hidden", !open);
+    m.setAttribute("aria-hidden", String(!open));
+  }
 
-  const body = $("#eveningBody", c1);
+  async function updateGate(){
+    const gate = $("#hhGate");
+    const hh = await loadHousehold();
+    gate.classList.toggle("hidden", !!hh);
+  }
 
-  if (!plan){
-    body.innerHTML = `
-      <div class="hint">The wizard never skips steps, and autosaves so edits aren’t lost.</div>
-      <div class="divider"></div>
-      <div class="hint"><strong>What it captures:</strong><br>
-        • Unavailability blocks (Kristyn/Julio)<br>
-        • Nanny working blocks (optional)<br>
-        • Kayden availability blocks (naps excluded)<br>
-        • Bedtime person (Kristyn or Julio)<br>
-        • Appointments (only influence schedule if they overlap a scheduled block)
-      </div>
-    `;
-  } else {
-    const preview = generateScheduleForDay(iso);
-    body.innerHTML = `
-      <div class="row" style="margin-bottom:10px; align-items:center;">
-        <span class="badge ${preview.warnings.length? "warn":"ok"}">${preview.warnings.length? "Needs attention":"Looks good"}</span>
-        ${CONFIG.appsScriptUrl && CONFIG.appsScriptApiKey ? `<button class="mini ghost" id="btnExportTomorrow2">Export to Calendar</button>` : ``}
-      </div>
-      <div id="tomorrowTl"></div>
-      ${preview.warnings.length ? `<div class="divider"></div>
-        <div class="hint"><strong>Flags:</strong><br>${preview.warnings.map(w => "• " + escapeHtml(w)).join("<br>")}</div>` : ``}
-    `;
-    $("#tomorrowTl", c1).appendChild(renderTimeline(preview.blocks));
-    const exp = $("#btnExportTomorrow2", c1);
-    if (exp){
-      exp.onclick = async () => exportDayToCalendar(iso, preview.blocks);
+  // ---------- Wizard ----------
+  function showWizard(open){
+    const m = $("#wizardModal");
+    m.classList.toggle("hidden", !open);
+    m.setAttribute("aria-hidden", String(!open));
+    App.state.wizard.open=open;
+  }
+
+  function buildStepper(){
+    const st = $("#stepper"); st.innerHTML="";
+    for (let i=1;i<=5;i++){
+      const b = document.createElement("button");
+      b.className="stepDot" + (i===App.state.wizard.step ? " active":"") + (i>App.state.wizard.maxStep ? " disabled":"");
+      b.textContent = `Step ${i}`;
+      b.onclick = () => { if (i<=App.state.wizard.maxStep) goStep(i); };
+      st.appendChild(b);
     }
   }
 
-  $("#btnOpenWizard", c1).onclick = () => openWizard(iso);
-  const qe = $("#btnQuickEdit", c1);
-  if (qe) qe.onclick = () => openQuickEdit(iso);
-
-  // Focus tasks summary
-  const c2 = document.createElement("div");
-  c2.className = "card";
-  const focusIds = (plan?.focusTaskIds || []);
-  const focusTasks = App.tasks.filter(t => focusIds.includes(t.id) && !t.completed).slice(0, 50);
-  c2.innerHTML = `
-    <div class="hd">
-      <div>
-        <h2>Tomorrow focus</h2>
-        <p>Tasks selected in the wizard (you can move them to Today in the morning).</p>
-      </div>
-    </div>
-    <div class="bd">
-      <div class="list" id="focusSum"></div>
-    </div>
-  `;
-  const fs = $("#focusSum", c2);
-  if (!plan || focusTasks.length === 0){
-    fs.innerHTML = `<div class="hint">No focus tasks selected yet.</div>`;
-  } else {
-    focusTasks.forEach(t => {
-      const row = document.createElement("div");
-      row.className = "item";
-      row.innerHTML = `
-        <input type="checkbox">
-        <div class="txt">
-          <div>${escapeHtml(t.title)}</div>
-          <div class="sub">Assigned to ${formatDateShort(fromIsoDate(iso))}</div>
-        </div>
-      `;
-      row.querySelector("input").addEventListener("change", async () => {
-        await updateTask(t.id, { completed: true, completed_at: new Date().toISOString() });
-        render();
-      });
-      fs.appendChild(row);
-    });
+  function goStep(step){
+    App.state.wizard.step = step;
+    App.state.wizard.maxStep = Math.max(App.state.wizard.maxStep, step);
+    $$(".step").forEach(s=>s.classList.toggle("hidden", Number(s.dataset.step)!==step));
+    $("#btnPrev").disabled = step===1;
+    $("#btnNext").disabled = step===5;
+    buildStepper();
+    if (step===3) renderFocusPicker();
+    if (step===4) renderConstraints();
+    if (step===5) renderPreview();
   }
-  root.appendChild(c2);
 
-  return root;
-}
+  async function openWizardFor(dateISO){
+    const existing = await loadPlan(dateISO);
+    const draft = normPlan(existing, dateISO);
+    App.state.wizard = { open:true, dateISO, step:1, maxStep:1, draft };
+    $("#wizardMeta").textContent = `Planning for ${isoToShort(dateISO)} • Autosaves as you go.`;
+    renderWizard();
+    showWizard(true);
+  }
 
-/* =========================
-   Tasks view
-   ========================= */
-function renderTasks(){
-  setSubhead("Tasks");
+  function renderWizard(){
+    const d = App.state.wizard.draft;
+    if (!d) return;
 
-  const isoToday = App.todayIso;
-  const isoTomorrow = App.tomorrowIso;
-
-  const root = document.createElement("div");
-  root.className = "grid";
-
-  const c1 = document.createElement("div");
-  c1.className = "card";
-  c1.innerHTML = `
-    <div class="hd">
-      <div>
-        <h2>Master task list</h2>
-        <p>Add tasks anytime. Assign to Today with one tap.</p>
-      </div>
-    </div>
-    <div class="bd">
-      <label>Add a task</label>
-      <div class="row">
-        <input id="newTask" placeholder="Example: Wash bottles" />
-        <button class="primary" id="addTaskBtn">Add</button>
-      </div>
-      <div class="divider"></div>
-      <div class="list" id="taskList"></div>
-    </div>
-  `;
-  root.appendChild(c1);
-
-  $("#addTaskBtn", c1).onclick = async () => {
-    const v = $("#newTask", c1).value;
-    await addTask(v);
-    $("#newTask", c1).value = "";
-    render();
-  };
-  $("#newTask", c1).addEventListener("keydown", async (e) => {
-    if (e.key === "Enter"){
-      e.preventDefault();
-      await addTask($("#newTask", c1).value);
-      $("#newTask", c1).value = "";
-      render();
-    }
-  });
-
-  const list = $("#taskList", c1);
-  const tasks = App.tasks.slice(0, 200);
-
-  if (tasks.length === 0){
-    list.innerHTML = `<div class="hint">No tasks yet.</div>`;
-  } else {
-    tasks.forEach(t => {
-      const row = document.createElement("div");
-      row.className = "item";
-      const assigned = t.assigned_date ? formatDateShort(fromIsoDate(t.assigned_date)) : "Not assigned";
-      row.innerHTML = `
-        <input type="checkbox" ${t.completed ? "checked":""}>
-        <div class="txt">
-          <div style="${t.completed ? "text-decoration:line-through; color: var(--muted);" : ""}">${escapeHtml(t.title)}</div>
-          <div class="sub">${assigned}</div>
-          <div class="row" style="margin-top:8px;">
-            <button class="mini ghost" data-act="today">Assign to Today (${formatDateShort(fromIsoDate(isoToday))})</button>
-            <button class="mini ghost" data-act="tom">Assign to Tomorrow (${formatDateShort(fromIsoDate(isoTomorrow))})</button>
-            <button class="mini danger" data-act="clear">Clear date</button>
-          </div>
-        </div>
-      `;
-      row.querySelector("input").addEventListener("change", async (e) => {
-        await updateTask(t.id, { completed: e.target.checked, completed_at: e.target.checked ? new Date().toISOString() : null });
-        render();
-      });
-      row.querySelector('[data-act="today"]').onclick = async () => { await updateTask(t.id, { assigned_date: isoToday }); render(); };
-      row.querySelector('[data-act="tom"]').onclick = async () => { await updateTask(t.id, { assigned_date: isoTomorrow }); render(); };
-      row.querySelector('[data-act="clear"]').onclick = async () => { await updateTask(t.id, { assigned_date: null }); render(); };
+    // Step 1 checklist
+    const list = $("#checklist"); list.innerHTML="";
+    STEP1.forEach(item=>{
+      const row = document.createElement("label");
+      row.className="checkItem";
+      row.innerHTML = `<input type="checkbox" ${d.step1[item.key] ? "checked":""}>
+        <div><div style="font-weight:900">${item.text}</div><div class="muted small">${item.hint}</div></div>`;
+      const cb = row.querySelector("input");
+      cb.onchange = () => { d.step1[item.key]=cb.checked; autosavePlan(); };
       list.appendChild(row);
     });
-  }
 
-  return root;
-}
+    // Step 2 brain dump
+    $("#brainDump").value = d.brainDump || "";
+    $("#brainDump").oninput = debounce(() => { d.brainDump=$("#brainDump").value; autosavePlan(); }, 250);
 
-/* =========================
-   History view
-   ========================= */
-function renderHistory(){
-  setSubhead("History");
-
-  const root = document.createElement("div");
-  root.className = "grid";
-
-  const c1 = document.createElement("div");
-  c1.className = "card";
-  c1.innerHTML = `
-    <div class="hd">
-      <div>
-        <h2>Past days</h2>
-        <p>Tap a date to view details.</p>
-      </div>
-    </div>
-    <div class="bd">
-      <div class="list" id="histList"></div>
-    </div>
-  `;
-  root.appendChild(c1);
-
-  const list = $("#histList", c1);
-
-  const rows = Array.from(App.logsByDay.values())
-    .slice()
-    .sort((a,b) => (a.day < b.day ? 1 : -1));
-
-  if (rows.length === 0){
-    list.innerHTML = `<div class="hint">No saved logs yet. Today will appear here once you log something.</div>`;
-    return root;
-  }
-
-  rows.slice(0, 60).forEach(r => {
-    const date = formatDateShort(fromIsoDate(r.day));
-    const line = [
-      r.wake_time ? `Wake ${formatTime12(r.wake_time)}` : null,
-      (r.nap1_start && r.nap1_end) ? `Nap 1 ${formatTime12(r.nap1_start)}–${formatTime12(r.nap1_end)}` : null,
-      (r.nap2_start && r.nap2_end) ? `Nap 2 ${formatTime12(r.nap2_start)}–${formatTime12(r.nap2_end)}` : null,
-    ].filter(Boolean).join(" · ") || "No details yet";
-
-    const row = document.createElement("div");
-    row.className = "item";
-    row.style.cursor = "pointer";
-    row.innerHTML = `
-      <div class="txt">
-        <div style="font-weight:650;">${date}</div>
-        <div class="sub">${escapeHtml(line)}</div>
-      </div>
-      <div style="color:var(--muted); font-size:12px; align-self:center;">›</div>
-    `;
-    row.addEventListener("click", () => openHistoryDetail(r.day));
-    list.appendChild(row);
-  });
-
-  return root;
-}
-
-function openHistoryDetail(isoDay){
-  const rec = App.logsByDay.get(isoDay);
-  if (!rec) return;
-
-  const d = fromIsoDate(isoDay);
-  const modal = $("#quickEditModal");
-  $("#qeTitle").textContent = "Day details";
-  $("#qeSub").textContent = formatDateShort(d);
-
-  const b = $("#qeBody");
-  b.innerHTML = `
-    <div class="card" style="box-shadow:none; border-radius:18px; background:rgba(255,255,255,.65);">
-      <div class="hd"><div><h2>Actuals</h2><p>Logged times and notes.</p></div></div>
-      <div class="bd">
-        <div class="hint">
-          <strong>Wake:</strong> ${rec.wake_time ? formatTime12(rec.wake_time) : "—"}<br>
-          <strong>Nap 1:</strong> ${(rec.nap1_start && rec.nap1_end) ? `${formatTime12(rec.nap1_start)}–${formatTime12(rec.nap1_end)}` : "—"}<br>
-          <strong>Nap 2:</strong> ${(rec.nap2_start && rec.nap2_end) ? `${formatTime12(rec.nap2_start)}–${formatTime12(rec.nap2_end)}` : "—"}<br>
-          <strong>Bedtime:</strong> ${rec.bedtime_time ? formatTime12(rec.bedtime_time) : "—"}<br>
-          <strong>Bath done:</strong> ${rec.bath_done ? "Yes" : "No"}<br>
-        </div>
-        <div class="divider"></div>
-        <div class="hint"><strong>Notes:</strong><br>${escapeHtml(rec.overnight_notes || "—")}</div>
-      </div>
-    </div>
-  `;
-  $("#qeSave").style.display = "none";
-  $("#qeClose").textContent = "Close";
-  $("#quickEditModal").classList.add("open");
-  $("#quickEditModal").setAttribute("aria-hidden","false");
-
-  $("#qeClose").onclick = () => {
-    $("#qeSave").style.display = "";
-    $("#qeTitle").textContent = "Quick edit";
-    $("#qeClose").textContent = "Close";
-    closeQuickEdit();
-    // closeQuickEdit resets flags; but here we didn't set state. Just hide.
-    $("#quickEditModal").classList.remove("open");
-    $("#quickEditModal").setAttribute("aria-hidden","true");
-  };
-}
-
-/* =========================
-   Settings view
-   ========================= */
-function renderSettings(){
-  setSubhead("Settings");
-
-  const s = App.settings;
-  const root = document.createElement("div");
-  root.className = "grid";
-
-  const c1 = document.createElement("div");
-  c1.className = "card";
-  c1.innerHTML = `
-    <div class="hd">
-      <div>
-        <h2>Routine defaults</h2>
-        <p>These settings drive tomorrow forecasting and today regeneration.</p>
-      </div>
-    </div>
-    <div class="bd">
-      <div class="row">
-        <div>
-          <label>Default wake time</label>
-          <div id="setWakePick"></div>
-        </div>
-        <div>
-          <label>Latest bedtime cap</label>
-          <div id="setLatestBedPick"></div>
-        </div>
-      </div>
-
-      <div class="divider"></div>
-
-      <div class="row">
-        <div>
-          <label>Breakfast duration (minutes)</label>
-          <input id="breakfastDur" type="number" min="10" max="90" value="${s.breakfastDurationMin}">
-        </div>
-        <div>
-          <label>Lunch duration (minutes)</label>
-          <input id="lunchDur" type="number" min="10" max="90" value="${s.lunchDurationMin}">
-        </div>
-      </div>
-
-      <div class="row">
-        <div>
-          <label>Dinner duration (minutes)</label>
-          <input id="dinnerDur" type="number" min="10" max="120" value="${s.dinnerDurationMin}">
-        </div>
-        <div>
-          <label>Snack + milk duration (minutes)</label>
-          <input id="snackDur" type="number" min="5" max="60" value="${s.snackMilkDurationMin}">
-        </div>
-      </div>
-
-      <div class="divider"></div>
-
-      <div class="row">
-        <div>
-          <label>Nap routine duration (minutes)</label>
-          <input id="napRoutineDur" type="number" min="5" max="45" value="${s.napRoutineDurationMin}">
-        </div>
-        <div>
-          <label>Bedtime routine duration (minutes)</label>
-          <input id="bedRoutineDur" type="number" min="10" max="60" value="${s.bedtimeRoutineDurationMin}">
-        </div>
-      </div>
-
-      <div class="row">
-        <div>
-          <label>Nap 1 forecast duration (minutes)</label>
-          <input id="nap1F" type="number" min="40" max="120" value="${s.nap1ForecastMin}">
-        </div>
-        <div>
-          <label>Nap 2 forecast duration (minutes)</label>
-          <input id="nap2F" type="number" min="40" max="120" value="${s.nap2ForecastMin}">
-        </div>
-      </div>
-
-      <div class="divider"></div>
-
-      <div class="row">
-        <div>
-          <label>Wake window midpoint WW1 (minutes)</label>
-          <input id="ww1" type="number" min="150" max="240" value="${s.ww1MidMin}">
-          <div class="hint">Range is 3–3.5 hours; midpoint default is 195 minutes.</div>
-        </div>
-        <div>
-          <label>Wake window midpoint WW2 (minutes)</label>
-          <input id="ww2" type="number" min="180" max="270" value="${s.ww2MidMin}">
-          <div class="hint">Range is 3.5–4 hours; midpoint default is 225 minutes.</div>
-        </div>
-      </div>
-
-      <div class="row">
-        <div>
-          <label>Wake window midpoint WW3 (minutes)</label>
-          <input id="ww3" type="number" min="210" max="270" value="${s.ww3MidMin}">
-          <div class="hint">Range is 4–4.25 hours; midpoint default is 247 minutes.</div>
-        </div>
-        <div>
-          <label>Morning mini-items</label>
-          <div class="row">
-            <input id="cuddle" type="number" min="5" max="45" value="${s.cuddleMin}" title="Family cuddle minutes">
-            <input id="dress" type="number" min="5" max="45" value="${s.getDressedMin}" title="Get dressed minutes">
-            <input id="brush" type="number" min="2" max="15" value="${s.brushTeethMin}" title="Brush teeth minutes">
-          </div>
-          <div class="hint">Minutes: cuddle / get dressed / brush.</div>
-        </div>
-      </div>
-
-      <div class="divider"></div>
-
-      <div class="row">
-        <button class="primary" id="saveSettings">Save settings</button>
-        <button class="ghost" id="resetSettings">Reset to defaults</button>
-      </div>
-    </div>
-  `;
-  root.appendChild(c1);
-
-  $("#setWakePick", c1).innerHTML = timePickerHTML("setWake", s.defaultWakeTime);
-  $("#setLatestBedPick", c1).innerHTML = timePickerHTML("setLatestBed", s.latestBedtimeHHMM);
-
-  $("#saveSettings", c1).onclick = async () => {
-    const newS = {
-      ...deepCopy(s),
-      defaultWakeTime: readTimePicker("setWake"),
-      latestBedtimeHHMM: readTimePicker("setLatestBed"),
-      breakfastDurationMin: num("#breakfastDur", c1, 35),
-      lunchDurationMin: num("#lunchDur", c1, 35),
-      dinnerDurationMin: num("#dinnerDur", c1, 40),
-      snackMilkDurationMin: num("#snackDur", c1, 15),
-      napRoutineDurationMin: num("#napRoutineDur", c1, 15),
-      bedtimeRoutineDurationMin: num("#bedRoutineDur", c1, 25),
-      nap1ForecastMin: num("#nap1F", c1, 75),
-      nap2ForecastMin: num("#nap2F", c1, 75),
-      ww1MidMin: num("#ww1", c1, 195),
-      ww2MidMin: num("#ww2", c1, 225),
-      ww3MidMin: num("#ww3", c1, 247),
-      cuddleMin: num("#cuddle", c1, 15),
-      getDressedMin: num("#dress", c1, 15),
-      brushTeethMin: num("#brush", c1, 5),
-    };
-    await saveSettings(newS);
-    render();
-  };
-
-  $("#resetSettings", c1).onclick = async () => {
-    await saveSettings(deepCopy(DEFAULT_SETTINGS));
-    render();
-  };
-
-  // Household status card
-  const c2 = document.createElement("div");
-  c2.className = "card";
-  c2.innerHTML = `
-    <div class="hd">
-      <div>
-        <h2>Household</h2>
-        <p>All data is shared within the household via Supabase (with RLS).</p>
-      </div>
-    </div>
-    <div class="bd">
-      <div class="hint"><strong>Signed in as:</strong> ${escapeHtml(App.user?.email || "—")}</div>
-      <div class="hint" style="margin-top:6px;"><strong>Household ID:</strong> ${escapeHtml(App.householdId || "Not linked")}</div>
-      <div class="divider"></div>
-      <div class="hint">If someone can sign in but sees “Not linked”, add them to <code>household_members</code> in Supabase.</div>
-    </div>
-  `;
-  root.appendChild(c2);
-
-  return root;
-  try { renderDiagnosticsCard(container); } catch(e) {}
-
-}
-
-function num(sel, root, fallback){
-  const v = Number($(sel, root).value);
-  return Number.isFinite(v) ? v : fallback;
-}
-
-/* =========================
-   Calendar export (Apps Script)
-   ========================= */
-async function exportDayToCalendar(isoDay, blocks){
-  if (!CONFIG.appsScriptUrl || !CONFIG.appsScriptApiKey){
-    toast("Calendar export not configured.");
-    return;
-  }
-  try{
-    const date = fromIsoDate(isoDay);
-    const base = new Date(date.getFullYear(), date.getMonth(), date.getDate(), 0, 0, 0);
-    const toISO = (mins) => {
-      const d = new Date(base.getTime() + mins * 60 * 1000);
-      return d.toISOString();
-    };
-
-    const payload = {
-      apiKey: CONFIG.appsScriptApiKey,
-      day: isoDay,
-      timezone: CONFIG.timezone,
-      blocks: blocks
-        .filter(b => b.kind !== "open")
-        .map(b => ({
-          title: b.title,
-          start: toISO(minutesFromHHMM(b.startHHMM)),
-          end: toISO(minutesFromHHMM(b.endHHMM)),
-          description: metaLineText(b),
-        })),
-    };
-
-    const res = await fetch(CONFIG.appsScriptUrl, {
-      method: "POST",
-      headers: { "Content-Type":"application/json" },
-      body: JSON.stringify(payload),
+    // Bedtime radios
+    $$('input[name="bedCare"]').forEach(r=>{
+      r.checked = r.value === (d.constraints?.bedtimeCaregiver || "Kristyn");
+      r.onchange = () => { if (r.checked){ d.constraints.bedtimeCaregiver=r.value; autosavePlan(); } };
     });
 
-    if (!res.ok){
-      const txt = await res.text();
-      console.warn(txt);
-      toast("Export failed.");
+    // Nanny working
+    $("#nannyOn").checked = !!d.constraints.nannyWorking;
+    $("#nannyOn").onchange = () => { d.constraints.nannyWorking=$("#nannyOn").checked; autosavePlan(); renderConstraints(); };
+
+    goStep(1);
+  }
+
+  const autosavePlan = debounce(async () => {
+    const d = App.state.wizard.draft;
+    if (!d) return;
+    $("#saveStatus").textContent = "Autosaving…";
+    const ok = await savePlan(d.date, d);
+    $("#saveStatus").textContent = ok ? "Autosaved." : "Autosave failed.";
+  }, 450);
+
+  async function convertBrainDump(){
+    const d = App.state.wizard.draft;
+    const lines = (d.brainDump||"").split("\n").map(s=>s.trim()).filter(Boolean);
+    if (!lines.length){ toast("Nothing to convert."); return; }
+    $("#bdStatus").textContent = "Converting…";
+    for (const line of lines.slice(0,50)) await addTask(line, null);
+    d.brainDump=""; $("#brainDump").value="";
+    await savePlan(d.date, d);
+    $("#bdStatus").textContent = `Added ${Math.min(lines.length,50)} tasks.`;
+    await loadTasks(); renderFocusPicker();
+  }
+
+  function renderFocusPicker(){
+    const d = App.state.wizard.draft;
+    const wrap = $("#focusPicker"); wrap.innerHTML="";
+    const open = (App.state.tasks||[]).filter(t=>t.status!=="done");
+    if (!open.length){ wrap.innerHTML = '<div class="empty">No open tasks yet. Add some in Tasks or use Brain Dump.</div>'; return; }
+    open.slice(0,80).forEach(t=>{
+      const row = document.createElement("div");
+      row.className="task";
+      row.innerHTML = `<input type="checkbox" ${d.focusTaskIds.includes(t.id)?"checked":""}>
+        <div class="taskTitle">${escapeHtml(t.title)}</div>
+        <div class="taskMeta">Focus ${isoToShort(d.date)}</div>`;
+      const cb = row.querySelector("input");
+      cb.onchange = () => {
+        if (cb.checked){ if (!d.focusTaskIds.includes(t.id)) d.focusTaskIds.push(t.id); }
+        else d.focusTaskIds = d.focusTaskIds.filter(x=>x!==t.id);
+        autosavePlan();
+      };
+      wrap.appendChild(row);
+    });
+  }
+
+  function renderConstraints(){
+    const d = App.state.wizard.draft;
+    const mount = (key, elId) => {
+      const el = $(elId); el.innerHTML="";
+      const list = d.constraints.blocks[key] || [];
+      list.forEach((b, idx)=>{
+        const row = document.createElement("div");
+        row.className="blkRow";
+        row.innerHTML = `<input class="input inputTime" type="time" value="${b.start||""}">
+          <span>→</span>
+          <input class="input inputTime" type="time" value="${b.end||""}">
+          <button class="btn btnTiny">Remove</button>`;
+        const [s,e] = row.querySelectorAll("input");
+        const del = row.querySelector("button");
+        s.onchange=()=>{ b.start=s.value; autosavePlan(); };
+        e.onchange=()=>{ b.end=e.value; autosavePlan(); };
+        del.onclick=()=>{ d.constraints.blocks[key]=list.filter((_,i)=>i!==idx); autosavePlan(); renderConstraints(); };
+        el.appendChild(row);
+      });
+    };
+    mount("julio","#blkJulio"); mount("kristyn","#blkKristyn"); mount("nanny","#blkNanny"); mount("kayden","#blkKayden");
+
+    // Appointments
+    const ap = $("#apptList"); ap.innerHTML="";
+    (d.constraints.appointments||[]).forEach((a, idx)=>{
+      const card = document.createElement("div");
+      card.className="apptCard";
+      card.innerHTML = `<input class="input" placeholder="Appointment title" value="${escapeHtml(a.title||"")}">
+        <input class="input inputTime" type="time" value="${a.start||""}">
+        <input class="input inputTime" type="time" value="${a.end||""}">
+        <button class="btn btnTiny">Remove</button>`;
+      const [t,s,e] = card.querySelectorAll("input");
+      const del = card.querySelector("button");
+      t.oninput = debounce(()=>{ a.title=t.value; autosavePlan(); }, 200);
+      s.onchange=()=>{ a.start=s.value; autosavePlan(); };
+      e.onchange=()=>{ a.end=e.value; autosavePlan(); };
+      del.onclick=()=>{ d.constraints.appointments = d.constraints.appointments.filter((_,i)=>i!==idx); autosavePlan(); renderConstraints(); };
+      ap.appendChild(card);
+    });
+  }
+
+  function renderPreview(){
+    const d = App.state.wizard.draft;
+    const sched = generateSchedule(d.date, d, blankLog(d.date), App.state.settings);
+    const warn = $("#warnings");
+    if (sched.warnings.length){
+      warn.classList.remove("hidden");
+      warn.innerHTML = `<div class="noticeTitle">Notes</div><div class="noticeBody">${sched.warnings.map(w=>"• "+escapeHtml(w)).join("<br>")}</div>`;
+    } else {
+      warn.classList.add("hidden"); warn.innerHTML="";
+    }
+    buildTimeline($("#wizardPreview"), sched.blocks);
+  }
+
+  async function saveWizard(){
+    const d = App.state.wizard.draft;
+    const dateISO = d.date;
+
+    // assign focus tasks to plan date
+    for (const id of (d.focusTaskIds||[])){
+      const t = (App.state.tasks||[]).find(x=>x.id===id);
+      if (t && t.status!=="done") await updateTask(id, { assigned_date: dateISO });
+    }
+
+    const ok = await savePlan(dateISO, d);
+    $("#saveStatus").textContent = ok ? "Saved." : "Save failed.";
+    toast(ok ? "Plan saved." : "Save failed.");
+  }
+
+  // ---------- Quick edit ----------
+  function showQuick(open){
+    const m = $("#quickModal");
+    m.classList.toggle("hidden", !open);
+    m.setAttribute("aria-hidden", String(!open));
+  }
+
+  function renderQuick(dateISO, title){
+    $("#quickTitle").textContent = title || "Quick edit";
+    const plan = normPlan(App.state.plans.get(dateISO), dateISO);
+    const body = $("#quickBody");
+    body.innerHTML = `
+      <div class="sectionTitle">Availability blocks</div>
+      <div class="availGrid">
+        <div class="availCol"><div class="availTitle">Julio unavailable</div><div id="qJulio" class="blkList"></div><button class="btn btnTiny" data-qadd="julio">+ Add block</button></div>
+        <div class="availCol"><div class="availTitle">Kristyn unavailable</div><div id="qKristyn" class="blkList"></div><button class="btn btnTiny" data-qadd="kristyn">+ Add block</button></div>
+        <div class="availCol"><div class="availTitle">Nanny working?</div><label class="toggle"><input type="checkbox" id="qNannyOn"> <span>Yes</span></label><div id="qNanny" class="blkList"></div><button class="btn btnTiny" data-qadd="nanny">+ Add block</button></div>
+        <div class="availCol"><div class="availTitle">Kayden available</div><div class="muted small">Kayden can help with routines, but <b>never naps</b>.</div><div id="qKayden" class="blkList"></div><button class="btn btnTiny" data-qadd="kayden">+ Add block</button></div>
+      </div>
+
+      <div class="divider"></div>
+      <div class="sectionTitle">Bedtime caregiver (Kristyn or Julio only)</div>
+      <div class="row wrap">
+        <label class="pillRadio"><input type="radio" name="qBed" value="Kristyn"> Kristyn</label>
+        <label class="pillRadio"><input type="radio" name="qBed" value="Julio"> Julio</label>
+      </div>
+
+      <div class="divider"></div>
+      <div class="sectionTitle">Appointments</div>
+      <div id="qAppts" class="apptList"></div>
+      <button class="btn btnTiny" id="qAddAppt">+ Add appointment</button>
+    `;
+
+    const mount = (key, elId) => {
+      const el = $(elId); el.innerHTML="";
+      const list = plan.constraints.blocks[key] || [];
+      list.forEach((b, idx)=>{
+        const row = document.createElement("div");
+        row.className="blkRow";
+        row.innerHTML = `<input class="input inputTime" type="time" value="${b.start||""}">
+          <span>→</span>
+          <input class="input inputTime" type="time" value="${b.end||""}">
+          <button class="btn btnTiny">Remove</button>`;
+        const [s,e] = row.querySelectorAll("input");
+        const del = row.querySelector("button");
+        s.onchange=()=>{ b.start=s.value; };
+        e.onchange=()=>{ b.end=e.value; };
+        del.onclick=()=>{ plan.constraints.blocks[key]=list.filter((_,i)=>i!==idx); renderQuick(dateISO, title); };
+        el.appendChild(row);
+      });
+    };
+    mount("julio","#qJulio"); mount("kristyn","#qKristyn"); mount("nanny","#qNanny"); mount("kayden","#qKayden");
+
+    $("#qNannyOn").checked = !!plan.constraints.nannyWorking;
+    $("#qNannyOn").onchange = ()=>{ plan.constraints.nannyWorking=$("#qNannyOn").checked; };
+
+    $$('input[name="qBed"]').forEach(r=>{
+      r.checked = r.value === (plan.constraints.bedtimeCaregiver || "Kristyn");
+      r.onchange = ()=>{ if (r.checked) plan.constraints.bedtimeCaregiver=r.value; };
+    });
+
+    const ap = $("#qAppts"); ap.innerHTML="";
+    (plan.constraints.appointments||[]).forEach((a, idx)=>{
+      const card = document.createElement("div");
+      card.className="apptCard";
+      card.innerHTML = `<input class="input" placeholder="Appointment title" value="${escapeHtml(a.title||"")}">
+        <input class="input inputTime" type="time" value="${a.start||""}">
+        <input class="input inputTime" type="time" value="${a.end||""}">
+        <button class="btn btnTiny">Remove</button>`;
+      const [t,s,e] = card.querySelectorAll("input");
+      const del = card.querySelector("button");
+      t.oninput = ()=>{ a.title=t.value; };
+      s.onchange=()=>{ a.start=s.value; };
+      e.onchange=()=>{ a.end=e.value; };
+      del.onclick=()=>{ plan.constraints.appointments = plan.constraints.appointments.filter((_,i)=>i!==idx); renderQuick(dateISO, title); };
+      ap.appendChild(card);
+    });
+
+    $$("[data-qadd]").forEach(btn=>{
+      btn.onclick = ()=>{
+        const who = btn.dataset.qadd;
+        plan.constraints.blocks[who] = plan.constraints.blocks[who] || [];
+        plan.constraints.blocks[who].push({ start:"", end:"" });
+        renderQuick(dateISO, title);
+      };
+    });
+    $("#qAddAppt").onclick = ()=>{
+      plan.constraints.appointments = plan.constraints.appointments || [];
+      plan.constraints.appointments.push({ title:"", start:"", end:"" });
+      renderQuick(dateISO, title);
+    };
+
+    $("#quickModal").dataset.dateIso = dateISO;
+    $("#quickModal")._plan = plan;
+  }
+
+  async function saveQuick(){
+    const modal = $("#quickModal");
+    const dateISO = modal.dataset.dateIso;
+    const plan = modal._plan;
+    $("#quickStatus").textContent = "Saving…";
+    const ok = await savePlan(dateISO, plan);
+    $("#quickStatus").textContent = ok ? "Saved." : "Save failed.";
+    if (ok){
+      await loadPlan(dateISO);
+      await refreshViewsFor(dateISO);
+    }
+  }
+
+  async function refreshViewsFor(dateISO){
+    const todayISO = dateToISO(new Date());
+    const tomorrowISO = dateToISO(addDays(new Date(),1));
+    if (dateISO===todayISO) await loadAndRenderToday();
+    if (dateISO===tomorrowISO) await loadAndRenderTomorrow();
+  }
+
+  // ---------- Today ----------
+  async function loadAndRenderToday(){
+    const iso = dateToISO(new Date());
+    const planRaw = await loadPlan(iso);
+    const logRaw = await loadLog(iso);
+    const plan = normPlan(planRaw, iso);
+    const log = normLog(logRaw, iso);
+    App.state.logs.set(iso, log);
+
+    // bind UI (overwrite handlers each time safely)
+    $("#wakeTime").value = log.wakeTime || "";
+    $("#nap1On").checked = !!log.nap1.enabled;
+    $("#nap2On").checked = !!log.nap2.enabled;
+    $("#nap1Start").value = log.nap1.start || "";
+    $("#nap1End").value = log.nap1.end || "";
+    $("#nap2Start").value = log.nap2.start || "";
+    $("#nap2End").value = log.nap2.end || "";
+    $("#bedtime").value = log.bedtime || "";
+    $("#overnightNotes").value = log.overnightNotes || "";
+
+    const setNapEnabled = (n,on)=>{
+      $(`#nap${n}Start`).disabled=!on;
+      $(`#nap${n}End`).disabled=!on;
+    };
+    setNapEnabled(1, log.nap1.enabled);
+    setNapEnabled(2, log.nap2.enabled);
+
+    const regen = () => {
+      const current = normLog(App.state.logs.get(iso), iso);
+      const sched = generateSchedule(iso, normPlan(App.state.plans.get(iso), iso), current, App.state.settings);
+      $("#todayMeta").textContent = `Date: ${isoToShort(iso)} • Blocks: ${sched.blocks.length}`;
+      buildTimeline($("#todayTimeline"), sched.blocks);
+    };
+
+    const persist = debounce(async () => {
+      const current = normLog(App.state.logs.get(iso), iso);
+      await saveLog(iso, current);
+      regen();
+    }, 250);
+
+    $("#btnWakeNow").onclick = async () => {
+      const now = new Date();
+      const t = `${pad2(now.getHours())}:${pad2(now.getMinutes())}`;
+      $("#wakeTime").value = t;
+      log.wakeTime=t;
+      App.state.logs.set(iso, log);
+      await persist();
+    };
+
+    $("#wakeTime").onchange = async () => { log.wakeTime = $("#wakeTime").value || null; App.state.logs.set(iso, log); await persist(); };
+
+    $("#nap1On").onchange = async () => { log.nap1.enabled=$("#nap1On").checked; setNapEnabled(1, log.nap1.enabled); App.state.logs.set(iso, log); await persist(); };
+    $("#nap2On").onchange = async () => { log.nap2.enabled=$("#nap2On").checked; setNapEnabled(2, log.nap2.enabled); App.state.logs.set(iso, log); await persist(); };
+
+    $("#nap1Start").onchange = async () => { log.nap1.start=$("#nap1Start").value||null; App.state.logs.set(iso, log); await persist(); };
+    $("#nap1End").onchange   = async () => { log.nap1.end=$("#nap1End").value||null; App.state.logs.set(iso, log); await persist(); };
+    $("#nap2Start").onchange = async () => { log.nap2.start=$("#nap2Start").value||null; App.state.logs.set(iso, log); await persist(); };
+    $("#nap2End").onchange   = async () => { log.nap2.end=$("#nap2End").value||null; App.state.logs.set(iso, log); await persist(); };
+
+    $("#bedtime").onchange = async () => { log.bedtime=$("#bedtime").value||null; App.state.logs.set(iso, log); await persist(); };
+    $("#overnightNotes").oninput = debounce(async () => { log.overnightNotes=$("#overnightNotes").value||""; App.state.logs.set(iso, log); await persist(); }, 400);
+
+    // initial render
+    const sched = generateSchedule(iso, plan, log, App.state.settings);
+    $("#todayMeta").textContent = `Date: ${isoToShort(iso)} • Blocks: ${sched.blocks.length}`;
+    buildTimeline($("#todayTimeline"), sched.blocks);
+    renderTasks();
+  }
+
+  // ---------- Tomorrow ----------
+  async function loadAndRenderTomorrow(){
+    const tomorrowISO = dateToISO(addDays(new Date(),1));
+    const planRaw = await loadPlan(tomorrowISO);
+    if (!planRaw){
+      $("#tomorrowEmpty").classList.remove("hidden");
+      $("#tomorrowWrap").classList.add("hidden");
+      $("#btnQuickEditTomorrow").disabled = true;
       return;
     }
-    toast("Exported.");
-  } catch (e){
-    console.error(e);
-    toast("Export failed.");
-  }
-}
-
-/* =========================
-   Rendering shell
-   ========================= */
-function render(){
-  const view = $("#view");
-  view.innerHTML = "";
-
-  if (!App.user){
-    // Should be blocked by auth overlay, but keep safe.
-    view.innerHTML = `<div class="card"><div class="hd"><div><h2>Sign in required</h2><p>Please sign in.</p></div></div></div>`;
-    return;
+    const plan = normPlan(planRaw, tomorrowISO);
+    const sched = generateSchedule(tomorrowISO, plan, blankLog(tomorrowISO), App.state.settings);
+    $("#tomorrowMeta").textContent = `Date: ${isoToShort(tomorrowISO)} • Blocks: ${sched.blocks.length}`;
+    buildTimeline($("#tomorrowTimeline"), sched.blocks);
+    $("#tomorrowEmpty").classList.add("hidden");
+    $("#tomorrowWrap").classList.remove("hidden");
+    $("#btnQuickEditTomorrow").disabled = false;
   }
 
-  if (!App.householdId){
-    // Allow diagnostics + hard refresh even before household link succeeds
-    view.innerHTML = `
-      <div class="card">
-        <div class="hd"><div><h2>Account not linked to household</h2>
-          <p>Ask the household admin to add your user to <code>household_members</code> in Supabase.</p></div></div>
-        <div class="bd">
-          <div class="hint"><strong>Your email:</strong> ${escapeHtml(App.user.email)}</div>
-          <div class="hint" style="margin-top:6px;">If you believe you are linked already, run diagnostics below.</div>
-
-          <div class="row" style="margin-top:12px; gap:10px; flex-wrap:wrap;">
-            <button class="btn" id="btnDiag">Run diagnostics</button>
-            <button class="btn btn-secondary" id="btnHard">Hard refresh app</button>
-            <button class="btn btn-secondary" id="btnSignOut">Sign out</button>
-          </div>
-
-          <pre class="diag-pre" id="diagOut">Tap "Run diagnostics" to see what the app can read from Supabase.</pre>
-        </div>
-      </div>
-    `;
-    const btnDiag = $("#btnDiag");
-    const btnHard = $("#btnHard");
-    const btnSignOut = $("#btnSignOut");
-    const diagOut = $("#diagOut");
-
-    btnHard?.addEventListener("click", async () => { await hardRefreshApp(); });
-    btnSignOut?.addEventListener("click", async () => {
-      try { await App.sb.auth.signOut(); } catch(e){}
-      toast("Signed out");
-      location.reload();
-    });
-
-    btnDiag?.addEventListener("click", async () => {
-      btnDiag.disabled = true;
-      btnDiag.textContent = "Running…";
-      const dbg = await getHouseholdMembershipDebug();
-      const safe = {
-        build: (typeof BUILD_VERSION !== "undefined" ? BUILD_VERSION : "unknown"),
-        supabaseUrl: CONFIG?.supabaseUrl || null,
-        userEmail: App.user?.email || null,
-        userId: App.user?.id || null,
-        membership: dbg.membership,
-        error: dbg.error,
-        ok: dbg.ok
-      };
-      diagOut.textContent = JSON.stringify(safe, null, 2);
-      btnDiag.disabled = false;
-      btnDiag.textContent = "Run diagnostics";
-      if (!dbg.ok && dbg.error?.message) toast("Diagnostics: " + dbg.error.message, "warn");
-      if (dbg.ok && dbg.membership?.household_id) toast("Membership found. Try reopening the app.", "success");
-    });
-
-    // Still allow Settings tab even when not linked
-    if (App.activeTab === "settings") {
-      view.appendChild(renderSettings());
+  // ---------- Export ----------
+  async function exportToday(){
+    const s = App.state.settings;
+    const url = s.gcal?.scriptUrl;
+    const calendarId = s.gcal?.calendarId;
+    const apiKey = s.gcal?.apiKey;
+    if (!url || !calendarId || !apiKey){
+      toast("Set Apps Script URL, Calendar ID, and API key in Settings.");
+      return;
     }
-    return;
+    const iso = dateToISO(new Date());
+    const plan = normPlan(App.state.plans.get(iso), iso);
+    const log = normLog(App.state.logs.get(iso), iso);
+    const sched = generateSchedule(iso, plan, log, s);
+
+    // scheduled blocks only (no open time)
+    const blocks = sched.blocks
+      .filter(b => b.type !== "appt")
+      .map(b => ({ title:b.title, start:minToTime(b.start), end:minToTime(b.end), assignee:b.assignee||"", type:b.type||"" }));
+
+    const payload = { apiKey, calendarId, date: iso, blocks };
+
+    const res = await fetch(url, { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify(payload) });
+    const txt = await res.text();
+    if (!res.ok){ toast(`Export failed: ${txt || res.status}`); return; }
+    toast("Exported to Google Calendar.");
   }
 
-  if (App.activeTab === "today") view.appendChild(renderToday());
-  if (App.activeTab === "evening") view.appendChild(renderEvening());
-  if (App.activeTab === "tasks") view.appendChild(renderTasks());
-  if (App.activeTab === "history") view.appendChild(renderHistory());
-  if (App.activeTab === "settings") view.appendChild(renderSettings());
-}
+  // ---------- Wire events ----------
+  function wire(){
+    // Tabs
+    $$(".tab").forEach(btn=>{
+      btn.onclick = async () => {
+        const tab = btn.dataset.tab;
+        showTab(tab);
+        if (tab==="Evening") await loadAndRenderTomorrow();
+        if (tab==="Today") await loadAndRenderToday();
+        if (tab==="Tasks") { await loadTasks(); renderTasks(); }
+        if (tab==="History") await renderHistory();
+        if (tab==="Settings") renderSettings();
+      };
+    });
 
-/* =========================
-   Auth UI
-   ========================= */
-function showAuth(show){
-  const auth = $("#auth");
-  if (show) auth.classList.add("open");
-  else auth.classList.remove("open");
-}
+    // Auth buttons
+    $("#btnSignIn").onclick = async () => {
+      const ok = await signIn($("#authEmail").value, $("#authPass").value);
+      if (ok){ showAuth(false); await postLoginBoot(); }
+    };
+    $("#btnSignUp").onclick = async () => { await signUp($("#authEmail").value, $("#authPass").value); };
+    $("#btnCreateHh").onclick = async () => {
+      const ok = await createHousehold($("#newHhName").value);
+      if (ok){ showAuth(false); await postLoginBoot(); }
+    };
+    $("#btnJoinHh").onclick = async () => {
+      const ok = await joinHousehold($("#joinCode").value);
+      if (ok){ showAuth(false); await postLoginBoot(); }
+    };
 
-function wireAuthUI(){
-  $("#btnSignIn").addEventListener("click", async () => {
-    const email = $("#authEmail").value.trim();
-    const password = $("#authPass").value;
-    $("#authMsg").textContent = "";
-    if (!supabaseClient) { toast("Supabase not initialized."); return; }
-    const { error } = await supabaseClient.auth.signInWithPassword({ email, password });
-    if (error) $("#authMsg").textContent = error.message;
-    else toast("Signed in");
-  });
+    // Sign out
+    $("#btnSignOut").onclick = signOut;
 
-  $("#btnSignUp").addEventListener("click", async () => {
-    const email = $("#authEmail").value.trim();
-    const password = $("#authPass").value;
-    $("#authMsg").textContent = "";
-    if (!supabaseClient) { toast("Supabase not initialized."); return; }
-    const { error } = await supabaseClient.auth.signUp({ email, password });
-    if (error) $("#authMsg").textContent = error.message;
-    else { $("#authMsg").textContent = "Account created. Now sign in."; toast("Account created"); }
-  });
+    // Wizard open/close
+    $("#btnOpenWizard").onclick = async () => {
+      const iso = dateToISO(addDays(new Date(),1));
+      await openWizardFor(iso);
+    };
+    $("#btnCloseWizard").onclick = () => showWizard(false);
+    $("#wizardScrim").onclick = () => showWizard(false);
 
-  $("#btnSignOut").addEventListener("click", async () => {
-    await supabaseClient.auth.signOut();
-  });
-}
+    // Wizard nav
+    $("#btnPrev").onclick = () => goStep(Math.max(1, App.state.wizard.step-1));
+    $("#btnNext").onclick = () => goStep(Math.min(5, App.state.wizard.step+1));
+    $("#btnBackTo4").onclick = () => goStep(4);
 
-/* =========================
-   Modal wiring
-   ========================= */
-function wireModals(){
-  $("#wizClose").addEventListener("click", closeWizard);
-  $("#wizardModal").addEventListener("click", (e) => {
-    if (e.target.id === "wizardModal") closeWizard();
-  });
-  $("#wizBack").addEventListener("click", () => {
-    App.wizard.step = Math.max(0, App.wizard.step - 1);
-    renderWizard();
-  });
-  $("#wizNext").addEventListener("click", () => {
-    const max = wizardSteps().length - 1;
-    if (App.wizard.step < max) App.wizard.step += 1;
-    else closeWizard();
-    renderWizard();
-  });
+    // Wizard actions
+    $("#btnConvert").onclick = convertBrainDump;
+    $("#btnAddAppt").onclick = () => { const d=App.state.wizard.draft; d.constraints.appointments.push({title:"",start:"",end:""}); autosavePlan(); renderConstraints(); };
+    $("#btnSavePlan").onclick = saveWizard;
 
-  $("#qeClose").addEventListener("click", () => {
-    closeQuickEdit();
-    // restore default close handler in case history detail changed it
-    $("#qeClose").onclick = null;
-    $("#qeSave").style.display = "";
-    $("#qeTitle").textContent = "Quick edit";
-    $("#qeClose").textContent = "Close";
-  });
-  $("#quickEditModal").addEventListener("click", (e) => {
-    if (e.target.id === "quickEditModal") closeQuickEdit();
-  });
-}
+    // Add blocks in step 4
+    $$("[data-add]").forEach(btn=>{
+      btn.onclick = () => {
+        const who = btn.dataset.add;
+        const d = App.state.wizard.draft;
+        d.constraints.blocks[who].push({start:"",end:""});
+        autosavePlan(); renderConstraints();
+      };
+    });
 
-/* =========================
-   Boot
-   ========================= */
-function escapeHtml(s){
-  return String(s).replace(/[&<>"']/g, ch => ({
-    "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;"
-  }[ch]));
-}
-function escapeAttr(s){
-  return escapeHtml(s).replace(/"/g, "&quot;");
-}
+    // Quick edit open
+    $("#btnQuickEditTomorrow").onclick = async () => {
+      const iso = dateToISO(addDays(new Date(),1));
+      await loadPlan(iso);
+      renderQuick(iso, `Quick edit: ${isoToShort(iso)}`);
+      showQuick(true);
+    };
+    $("#btnEditToday").onclick = async () => {
+      const iso = dateToISO(new Date());
+      await loadPlan(iso);
+      renderQuick(iso, `Quick edit: Today (${isoToShort(iso)})`);
+      showQuick(true);
+    };
+    $("#btnCloseQuick").onclick = () => showQuick(false);
+    $("#quickScrim").onclick = () => showQuick(false);
+    $("#btnSaveQuick").onclick = saveQuick;
 
-async function refreshAll(){
-  await loadHouseholdContext();
-  if (!App.householdId){
-    await loadPlans([App.todayIso, App.tomorrowIso]); // harmless; for local/draft use
-    await loadLogs();
-    renderTabs();
-    render();
-    return;
+    // Tasks
+    $("#btnAddTask").onclick = async () => {
+      const v = $("#taskInput").value; $("#taskInput").value="";
+      await addTask(v, null);
+    };
+    $("#taskInput").onkeydown = (e) => { if (e.key==="Enter"){ e.preventDefault(); $("#btnAddTask").click(); } };
+
+    // History
+    $("#btnCloseHist").onclick = () => $("#historyDetail").classList.add("hidden");
+
+    // Settings save
+    $("#btnSaveSettings").onclick = async () => {
+      const s = { ...DEFAULT_SETTINGS, ...(App.state.settings||{}) };
+      s.defaultWake = $("#setWake").value || DEFAULT_SETTINGS.defaultWake;
+      s.breakfastMin = Number($("#setBreakfast").value) || DEFAULT_SETTINGS.breakfastMin;
+      s.lunchMin = Number($("#setLunch").value) || DEFAULT_SETTINGS.lunchMin;
+      s.dinnerMin = Number($("#setDinner").value) || DEFAULT_SETTINGS.dinnerMin;
+      s.napRoutineMin = Number($("#setNapRoutine").value) || DEFAULT_SETTINGS.napRoutineMin;
+      s.bedRoutineMin = Number($("#setBedRoutine").value) || DEFAULT_SETTINGS.bedRoutineMin;
+      s.nap1ForecastMin = Number($("#setNap1").value) || DEFAULT_SETTINGS.nap1ForecastMin;
+      s.nap2ForecastMin = Number($("#setNap2").value) || DEFAULT_SETTINGS.nap2ForecastMin;
+
+      s.ww1Min = Number($("#ww1Min").value) || DEFAULT_SETTINGS.ww1Min;
+      s.ww1Max = Number($("#ww1Max").value) || DEFAULT_SETTINGS.ww1Max;
+      s.ww2Min = Number($("#ww2Min").value) || DEFAULT_SETTINGS.ww2Min;
+      s.ww2Max = Number($("#ww2Max").value) || DEFAULT_SETTINGS.ww2Max;
+      s.ww3Min = Number($("#ww3Min").value) || DEFAULT_SETTINGS.ww3Min;
+      s.ww3Max = Number($("#ww3Max").value) || DEFAULT_SETTINGS.ww3Max;
+
+      s.gcal = { scriptUrl: $("#gcalUrl").value.trim(), calendarId: $("#gcalCalId").value.trim(), apiKey: $("#gcalKey").value.trim() };
+
+      await saveSettings(s);
+      renderSettings();
+    };
+
+    $("#btnCopyCode").onclick = async () => {
+      const code = App.state.household?.join_code || "";
+      if (!code) return;
+      try{ await navigator.clipboard.writeText(code); toast("Join code copied."); }
+      catch{ toast(`Join code: ${code}`); }
+    };
+
+    // Export
+    $("#btnExport").onclick = exportToday;
   }
-  await Promise.all([
-    loadSettings(),
-    loadTasks(),
-    loadPlans([App.todayIso, App.tomorrowIso]),
-    loadLogs(),
-  ]);
-  setupRealtime();
-  renderTabs();
-  render();
-}
 
-async function boot(){
-  try{
-    initSupabase();
-    // Wire auth buttons immediately (Sign in / Create account)
-    try { wireAuthUI(); } catch (e) { console.error(e); }
-  } catch (e){
-    console.error(e);
-    setSubhead("Config needed");
-    $("#view").innerHTML = `<div class="card"><div class="h3">Config needed</div><p class="muted">Please verify CONFIG.supabaseUrl and CONFIG.supabaseKey in app.js, and that the Supabase script loaded (window.supabase).</p></div>`;
-    return;
+  // ---------- Boot ----------
+  function setHeader(){
+    const todayISO = dateToISO(new Date());
+    $("#headerSub").textContent = `Today: ${isoToShort(todayISO)}`;
   }
 
-  // Global error surface to avoid silent “Loading…”
-  window.addEventListener("error", (ev) => {
-    console.error(ev.error || ev.message);
-    toast("Error: " + (ev.error?.message || ev.message || "Unknown"));
-  });
-  window.addEventListener("unhandledrejection", (ev) => {
-    console.error(ev.reason);
-    toast("Error: " + (ev.reason?.message || String(ev.reason)));
-  });
+  async function postLoginBoot(){
+    await loadHousehold();
+    if (!App.state.household){
+      showAuth(true);
+      $("#hhGate").classList.remove("hidden");
+      return;
+    }
 
-  // Realtime refresh on auth change
-  supabaseClient.auth.onAuthStateChange(async (_event, session) => {
-    App.user = session?.user || null;
-    $("#pillUser").textContent = App.user?.email || "Signed out";
-    showAuth(!App.user);
-    await refreshAll();
-  });
+    await loadSettings();
+    await loadTasks();
+    renderTasks();
+    renderSettings();
 
-  // Initial session (instant)
-  const { data: { session } } = await supabaseClient.auth.getSession();
-  App.user = session?.user || null;
-  $("#pillUser").textContent = App.user?.email || "Signed out";
-  showAuth(!App.user);
+    // preload today/tomorrow
+    await Promise.all([
+      loadPlan(dateToISO(new Date())),
+      loadLog(dateToISO(new Date())),
+      loadPlan(dateToISO(addDays(new Date(),1)))
+    ]);
 
-  // Don't let refreshAll hang forever
-  try{
-    await withTimeout(refreshAll(), 8000, "Initial load");
-  } catch (e){
-    console.warn(e);
-    toast("Still loading… (network slow?)");
-    // Render anyway with whatever we have
-    renderTabs();
-    render();
+    await loadAndRenderTomorrow();
+    await loadAndRenderToday();
+    showTab("Evening");
+    showAuth(false);
   }
-}
 
-// Start
-boot();
+  async function boot(){
+    try{
+      initSupabase();
+      wire();
+      setHeader();
+
+      if ("serviceWorker" in navigator){
+        navigator.serviceWorker.register("./service-worker.js").catch(()=>{});
+      }
+
+      await refreshUser();
+      if (!App.state.user){ showAuth(true); return; }
+
+      await postLoginBoot();
+
+      App.supa.auth.onAuthStateChange(async (_event, session) => {
+        App.state.user = session?.user || null;
+        if (!App.state.user) showAuth(true);
+        else await postLoginBoot();
+      });
+    }catch(err){
+      console.error(err);
+      toast("App failed to start. Check console.");
+    }
+  }
+
+  function escapeHtml(str){
+    return String(str).replace(/[&<>"']/g, s => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[s]));
+  }
+
+  document.addEventListener("DOMContentLoaded", boot);
+})();

@@ -1,11 +1,11 @@
 {
   "name": "Family Day Planner",
   "short_name": "Day Planner",
-  "start_url": "./",
+  "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",
-  "background_color": "#F3F1EA",
-  "theme_color": "#F3F1EA",
+  "background_color": "#f4f1ea",
+  "theme_color": "#f4f1ea",
   "icons": [
     {
       "src": "./icons/icon-192.png",

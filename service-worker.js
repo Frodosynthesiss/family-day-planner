@@ -1,43 +1,47 @@
-// Bump CACHE when you deploy updates.
-const CACHE = 'family-day-planner-v1.0.0';
+/* Static-site PWA service worker (relative paths). Bump version to refresh. */
+const CACHE_NAME = "family-day-planner-v1.0.1";
 const ASSETS = [
-  './',
-  './index.html',
-  './app.js',
-  './manifest.json',
-  './icons/icon-192.png',
-  './icons/icon-512.png',
+  "./",
+  "./index.html",
+  "./styles.css",
+  "./app.js",
+  "./manifest.json",
+  "./icons/icon-192.png",
+  "./icons/icon-512.png"
 ];
 
-self.addEventListener('install', (event) => {
-  event.waitUntil(
-    caches.open(CACHE).then((cache) => cache.addAll(ASSETS))
-  );
-  self.skipWaiting();
+self.addEventListener("install", (e) => {
+  e.waitUntil((async () => {
+    const c = await caches.open(CACHE_NAME);
+    await c.addAll(ASSETS);
+    self.skipWaiting();
+  })());
 });
 
-self.addEventListener('activate', (event) => {
-  event.waitUntil(
-    caches.keys().then(keys => Promise.all(keys.map(k => (k === CACHE ? null : caches.delete(k)))))
-  );
-  self.clients.claim();
+self.addEventListener("activate", (e) => {
+  e.waitUntil((async () => {
+    const keys = await caches.keys();
+    await Promise.all(keys.map(k => (k === CACHE_NAME ? null : caches.delete(k))));
+    self.clients.claim();
+  })());
 });
 
-self.addEventListener('fetch', (event) => {
-  const req = event.request;
-  // Always go network-first for Supabase/API calls; cache-first for local assets.
-  const url = new URL(req.url);
-  const isSameOrigin = url.origin === self.location.origin;
-  if (!isSameOrigin) return;
+self.addEventListener("fetch", (e) => {
+  if (e.request.method !== "GET") return;
+  e.respondWith((async () => {
+    const url = new URL(e.request.url);
+    if (url.origin !== self.location.origin) return fetch(e.request);
 
-  event.respondWith(
-    caches.match(req).then((cached) => {
-      if (cached) return cached;
-      return fetch(req).then((res) => {
-        const copy = res.clone();
-        caches.open(CACHE).then((cache) => cache.put(req, copy));
-        return res;
-      }).catch(() => cached);
-    })
-  );
+    const c = await caches.open(CACHE_NAME);
+    const cached = await c.match(e.request, { ignoreSearch: true });
+    if (cached) return cached;
+
+    try{
+      const res = await fetch(e.request);
+      if (res && res.ok) c.put(e.request, res.clone());
+      return res;
+    }catch{
+      return (await c.match("./index.html")) || new Response("Offline", {status:200});
+    }
+  })());
 });
