@@ -9,6 +9,8 @@
 /* =========================
    CONFIG (edit these)
    ========================= */
+const BUILD_VERSION = "1.0.5";
+
 const CONFIG = {
   // Supabase
   supabaseUrl: "https://qsnmuojajbtyxdvijwon.supabase.co",                       // e.g. https://xxxx.supabase.co
@@ -19,6 +21,101 @@ const CONFIG = {
   // Display / scheduling
   timezone: "America/Los_Angeles",
 };
+
+
+
+// ---------- Diagnostics ----------
+async function getHouseholdMembershipDebug() {
+  const out = { ok: false, membership: null, error: null };
+  try {
+    if (!state.sb || !state.sb.auth) {
+      out.error = { message: "Supabase client not initialized (state.sb missing)." };
+      return out;
+    }
+    const { data: sessionData, error: sessionErr } = await state.sb.auth.getSession();
+    if (sessionErr) {
+      out.error = { message: sessionErr.message || "Session error", details: sessionErr };
+      return out;
+    }
+    const user = sessionData?.session?.user || null;
+    if (!user) {
+      out.error = { message: "No active session user (not signed in)." };
+      return out;
+    }
+    const { data, error } = await state.sb
+      .from("household_members")
+      .select("household_id, role, created_at")
+      .eq("user_id", user.id)
+      .maybeSingle();
+
+    if (error) {
+      out.error = { message: error.message || "Query error", details: error };
+      return out;
+    }
+    out.ok = true;
+    out.membership = data || null;
+    return out;
+  } catch (e) {
+    out.error = { message: String(e) };
+    return out;
+  }
+}
+
+function renderDiagnosticsCard(containerEl) {
+  const card = el("div", { className: "card" });
+  card.appendChild(el("div", { className: "card-title", textContent: "Diagnostics" }));
+  card.appendChild(el("div", { className: "muted", style: "margin-top:4px" , textContent:
+    "Use this if the app says you are not linked to a household. It will show exactly what the app can see from Supabase."
+  }));
+  const pre = el("pre", { className: "diag-pre", textContent: "Tap 'Run diagnostics'…" });
+  const btnRow = el("div", { className: "row", style: "margin-top:10px; gap:10px; flex-wrap:wrap" });
+
+  const runBtn = el("button", { className: "btn", textContent: "Run diagnostics" });
+  runBtn.addEventListener("click", async () => {
+    runBtn.disabled = true;
+    runBtn.textContent = "Running…";
+    const dbg = await getHouseholdMembershipDebug();
+    const safe = {
+      build: (typeof BUILD_VERSION !== "undefined" ? BUILD_VERSION : "unknown"),
+      supabaseUrl: CONFIG?.supabaseUrl || null,
+      userEmail: state.user?.email || null,
+      userId: state.user?.id || null,
+      membership: dbg.membership,
+      error: dbg.error,
+      ok: dbg.ok
+    };
+    pre.textContent = JSON.stringify(safe, null, 2);
+    runBtn.disabled = false;
+    runBtn.textContent = "Run diagnostics";
+    if (!dbg.ok && dbg.error?.message) toast("Diagnostics: " + dbg.error.message, "warn");
+  });
+
+  const hardReloadBtn = el("button", { className: "btn btn-secondary", textContent: "Hard refresh app" });
+  hardReloadBtn.addEventListener("click", async () => {
+    try {
+      // Unregister SW + clear caches
+      if (navigator.serviceWorker?.getRegistrations) {
+        const regs = await navigator.serviceWorker.getRegistrations();
+        await Promise.all(regs.map(r => r.unregister()));
+      }
+      if (window.caches?.keys) {
+        const keys = await caches.keys();
+        await Promise.all(keys.map(k => caches.delete(k)));
+      }
+      toast("Cleared app cache. Reloading…");
+      setTimeout(() => location.reload(true), 300);
+    } catch (e) {
+      toast("Could not clear cache: " + String(e), "warn");
+    }
+  });
+
+  btnRow.appendChild(runBtn);
+  btnRow.appendChild(hardReloadBtn);
+  card.appendChild(btnRow);
+  card.appendChild(pre);
+  containerEl.appendChild(card);
+}
+// ---------- /Diagnostics ----------
 
 /* =========================
    Safe helpers
@@ -2360,6 +2457,8 @@ function renderSettings(){
   root.appendChild(c2);
 
   return root;
+  try { renderDiagnosticsCard(container); } catch(e) {}
+
 }
 
 function num(sel, root, fallback){
