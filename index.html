@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="theme-color" content="#f4f1ea" />
   <title>Family Day Planner</title>
+  <link rel="icon" href="data:,">
   <link rel="manifest" href="./manifest.json" />
   <link rel="stylesheet" href="./styles.css" />
 </head>
@@ -289,8 +290,12 @@
 
       <div class="panelBody">
         <section class="step" data-step="1">
-          <h4>1) Before we plan tomorrow…</h4>
-          <div id="checklist" class="checklist"></div>
+          <h4>1) Today’s focus tasks</h4>
+          <div class="muted">These are the tasks you previously chose from your brain dump for this day. Edit them in Step 3.</div>
+          <div id="focusSummary" class="tasks"></div>
+          <div class="row">
+            <button class="btn btnSecondary" id="btnJumpFocus">Edit focus tasks (Step 3)</button>
+          </div>
         </section>
 
         <section class="step hidden" data-step="2">

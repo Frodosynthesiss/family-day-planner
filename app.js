@@ -116,13 +116,12 @@
       if (res && typeof res === "object" && "error" in res && res.error){
         console.error(res.error);
         toast(failMsg || res.error.message || "Supabase error");
-        return null;
       }
       return res;
     } catch (e){
       console.error(e);
       toast(failMsg || (e && e.message) || "Supabase error");
-      return null;
+      return { error: e };
     }
   }
 
@@ -574,7 +573,7 @@
       if (b.status==="uncovered") div.classList.add("warn");
 
       const top = (b.start - dayOffset) * pxPerMin;
-      const height = Math.max(18, (b.end-b.start)*pxPerMin);
+      const height = Math.max(4, (b.end-b.start)*pxPerMin);
 
       const leftPct = (b.lane / b.laneCount) * 100;
       const widthPct = (1 / b.laneCount) * 100;
@@ -773,6 +772,7 @@
     $("#btnPrev").disabled = step===1;
     $("#btnNext").disabled = step===5;
     buildStepper();
+    if (step===1) renderFocusSummary();
     if (step===3) renderFocusPicker();
     if (step===4) renderConstraints();
     if (step===5) renderPreview();
@@ -788,21 +788,40 @@
     showWizard(true);
   }
 
-  function renderWizard(){
+  
+  function renderFocusSummary(){
+    const d = App.state.wizard?.draft;
+    const wrap = $("#focusSummary");
+    if (!wrap || !d) return;
+    wrap.innerHTML = "";
+
+    const ids = Array.isArray(d.focusTaskIds) ? d.focusTaskIds : [];
+    const tasks = App.state.tasks || [];
+    const byId = new Map(tasks.map(t=>[t.id, t]));
+    const picked = ids.map(id=>byId.get(id)).filter(Boolean);
+
+    if (!picked.length){
+      wrap.innerHTML = `<div class="empty">No focus tasks selected yet. Add tasks in Step 2 and pick your focus list in Step 3.</div>`;
+      return;
+    }
+
+    for (const t of picked){
+      const row = document.createElement("div");
+      row.className = "task";
+      row.innerHTML = `<div class="check" style="opacity:.55">•</div>
+        <div class="tBody">
+          <div class="tTitle">${escapeHtml(t.title)}</div>
+          <div class="muted small">Planned for ${isoToShort(d.date)}</div>
+        </div>`;
+      wrap.appendChild(row);
+    }
+  }
+function renderWizard(){
     const d = App.state.wizard.draft;
     if (!d) return;
 
-    // Step 1 checklist
-    const list = $("#checklist"); list.innerHTML="";
-    STEP1.forEach(item=>{
-      const row = document.createElement("label");
-      row.className="checkItem";
-      row.innerHTML = `<input type="checkbox" ${d.step1[item.key] ? "checked":""}>
-        <div><div style="font-weight:900">${item.text}</div><div class="muted small">${item.hint}</div></div>`;
-      const cb = row.querySelector("input");
-      cb.onchange = () => { d.step1[item.key]=cb.checked; autosavePlan(); };
-      list.appendChild(row);
-    });
+    // Step 1 focus summary (no checklist)
+    renderFocusSummary();
 
     // Step 2 brain dump
     $("#brainDump").value = d.brainDump || "";
@@ -817,6 +836,8 @@
     // Nanny working
     $("#nannyOn").checked = !!d.constraints.nannyWorking;
     $("#nannyOn").onchange = () => { d.constraints.nannyWorking=$("#nannyOn").checked; autosavePlan(); renderConstraints(); };
+
+    $("#btnJumpFocus").onclick = ()=>{ goStep(3); };
 
     goStep(1);
   }
