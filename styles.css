@@ -216,13 +216,3 @@ h2,h3,h4{margin:0}
 .event.tiny .eventMeta{display:none}
 
 #btnSignOut.hidden{display:none}
-
-.buildBadge{
-  font-size:12px;
-  color:rgba(60,60,60,.65);
-  margin-top:6px;
-}
-.headerActions{
-  position: relative;
-  z-index: 50;
-}

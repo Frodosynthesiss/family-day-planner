@@ -48,15 +48,6 @@
     }
   };
 
-// --- Single-household mode (simplify auth + onboarding) ---
-const SINGLE_HOUSEHOLD = {
-  id: "c69f39a8-aeee-428f-a26d-18a3ac28f97b",
-  name: "VegaPayne Household",
-};
-// When true, we skip create/join UI and auto-enroll signed-in users into the household above.
-const SINGLE_HOUSEHOLD_MODE = true;
-
-
   // ---------- DOM helpers ----------
   const $ = (sel) => document.querySelector(sel);
   const $$ = (sel) => Array.from(document.querySelectorAll(sel));
@@ -155,23 +146,8 @@ const SINGLE_HOUSEHOLD_MODE = true;
     return true;
   }
   async function signOut(){
-    try{
-      await App.supa.auth.signOut();
-    }catch(e){
-      console.error(e);
-      toast("Sign out failed.");
-    }
-    App.state.user = null;
-    App.state.household = null;
-    setAuthButtons();
-    setHeader();
-    updateDebugPanel();
-    showAuth(true);
-  }
-    App.state.user=null;
-    App.state.household=null;
-    setAuthButtons();
-    setHeader();
+    await sbTry(()=>App.supa.auth.signOut(), "Sign out failed.");
+    App.state.user=null; App.state.household=null;
     showAuth(true);
   }
 
@@ -777,10 +753,7 @@ const SINGLE_HOUSEHOLD_MODE = true;
 
   // ---------- Auth modal ----------
   function showAuth(open){
-    updateAuthHouseholdUI();
-    hardWireCritical();
-    updateDebugPanel();
-const m = $("#authModal");
+    const m = $("#authModal");
     if (!m) return;
     if (open){
       m.classList.remove("hidden");
@@ -1194,14 +1167,14 @@ function renderWizard(){
       debouncedSave();
     };
 
-    setOnclick("btnWakeNow", () => {
+    $("#btnWakeNow").onclick = () => {
       const now = new Date();
       const hh24 = String(now.getHours()).padStart(2,"0");
       const mm = String(now.getMinutes()).padStart(2,"0");
       const val = `${hh24}:${mm}`;
       if (wakeEl) wakeEl.value = val; else { const tmp = $("#wakeTime"); if (tmp) tmp.value = val; }
       setLog(l => { l.wakeTime = val; });
-    });
+    };
 
     const el_wakeTime = $("#wakeTime"); if (el_wakeTime) el_wakeTime.onchange = () => setLog(l => { l.wakeTime = el_wakeTime.value || null; });
 
@@ -1218,35 +1191,6 @@ function renderWizard(){
 
     // Initial render
     rerender();
-}
-
-function hardWireCritical(){
-  const so = document.getElementById("btnSignOut");
-  if (so && !so.__bound){
-    so.__bound = true;
-    so.addEventListener("click", (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      signOut();
-    });
-  }
-  const attach = document.getElementById("btnForceAttach");
-  if (attach && !attach.__bound){
-    attach.__bound = true;
-    attach.addEventListener("click", async (e) => {
-      e.preventDefault();
-      await ensureSingleHousehold();
-      await refreshAll();
-    });
-  }
-  const hr = document.getElementById("btnHardReload");
-  if (hr && !hr.__bound){
-    hr.__bound = true;
-    hr.addEventListener("click", (e) => {
-      e.preventDefault();
-      location.href = location.pathname + "?v=patch6-20251230052853";
-    });
-  }
 }
 
   // ---------- Tomorrow ----------
@@ -1312,7 +1256,7 @@ function hardWireCritical(){
     });
 
     // Auth buttons
-    setOnclick("btnSignIn", async () => {
+    $("#btnSignIn").onclick = async () => {
       const ok = await signIn($("#authEmail").value, $("#authPass").value);
       if (ok){
         await refreshUser();
@@ -1320,34 +1264,34 @@ function hardWireCritical(){
         showAuth(false);
         await postLoginBoot();
       }
-    });
-    setOnclick("btnSignUp", async () => { await signUp($("#authEmail").value, $("#authPass").value); });
-    setOnclick("btnCreateHh", async () => {
+    };
+    $("#btnSignUp").onclick = async () => { await signUp($("#authEmail").value, $("#authPass").value); };
+    $("#btnCreateHh").onclick = async () => {
       const ok = await createHousehold($("#newHhName").value);
       if (ok){ showAuth(false); await postLoginBoot(); }
-    });
-    setOnclick("btnJoinHh", async () => {
+    };
+    $("#btnJoinHh").onclick = async () => {
       const ok = await joinHousehold($("#joinCode").value);
       if (ok){ showAuth(false); await postLoginBoot(); }
-    });
+    };
 
     // Sign out
-    setOnclick("btnSignOut", async () => { if (!App.state.user){ showAuth(true); return; } await signOut(); });
+    $("#btnSignOut").onclick = async () => { if (!App.state.user){ showAuth(true); return; } await signOut(); };
 
     // Wizard open/close
-    setOnclick("btnOpenWizard", async () => { try { const iso = dateToISO(addDays(new Date(),1)); await openWizardFor(iso); } catch(e){ console.error(e); toast("Couldn\u2019t open the planner."); } });
-    setOnclick("btnCloseWizard", () => showWizard(false);
-    setOnclick("wizardScrim", () => showWizard(false);
+    $("#btnOpenWizard").onclick = async () => { try { const iso = dateToISO(addDays(new Date(),1)); await openWizardFor(iso); } catch(e){ console.error(e); toast("Couldn\u2019t open the planner."); } };
+    $("#btnCloseWizard").onclick = () => showWizard(false);
+    $("#wizardScrim").onclick = () => showWizard(false);
 
     // Wizard nav
-    setOnclick("btnPrev", () => goStep(Math.max(1, App.state.wizard.step-1));
-    setOnclick("btnNext", () => goStep(Math.min(5, App.state.wizard.step+1));
-    setOnclick("btnBackTo4", () => goStep(4);
+    $("#btnPrev").onclick = () => goStep(Math.max(1, App.state.wizard.step-1));
+    $("#btnNext").onclick = () => goStep(Math.min(5, App.state.wizard.step+1));
+    $("#btnBackTo4").onclick = () => goStep(4);
 
     // Wizard actions
-    setOnclick("btnConvert", convertBrainDump;
-    setOnclick("btnAddAppt", () => { const d=App.state.wizard.draft; d.constraints.appointments.push({title:"",start:"",end:""}); autosavePlan(); renderConstraints(); });
-    setOnclick("btnSavePlan", saveWizard;
+    $("#btnConvert").onclick = convertBrainDump;
+    $("#btnAddAppt").onclick = () => { const d=App.state.wizard.draft; d.constraints.appointments.push({title:"",start:"",end:""}); autosavePlan(); renderConstraints(); };
+    $("#btnSavePlan").onclick = saveWizard;
 
     // Add blocks in step 4
     $$("[data-add]").forEach(btn=>{
@@ -1360,35 +1304,35 @@ function hardWireCritical(){
     });
 
     // Quick edit open
-    setOnclick("btnQuickEditTomorrow", async () => {
+    $("#btnQuickEditTomorrow").onclick = async () => {
       const iso = dateToISO(addDays(new Date(),1));
       await loadPlan(iso);
       renderQuick(iso, `Quick edit: ${isoToShort(iso)}`);
       showQuick(true);
-    });
-    setOnclick("btnEditToday", async () => {
+    };
+    $("#btnEditToday").onclick = async () => {
       const iso = dateToISO(new Date());
       await loadPlan(iso);
       renderQuick(iso, `Quick edit: Today (${isoToShort(iso)})`);
       showQuick(true);
-    });
-    setOnclick("btnCloseQuick", () => showQuick(false);
+    };
+    $("#btnCloseQuick").onclick = () => showQuick(false);
     $("#quickScrim").onclick = () => showQuick(false);
-    setOnclick("btnSaveQuick", saveQuick;
+    $("#btnSaveQuick").onclick = saveQuick;
 
     // Tasks
-    setOnclick("btnAddTask", async () => {
+    $("#btnAddTask").onclick = async () => {
       const v = $("#taskInput").value; $("#taskInput").value="";
       await addTask(v, null);
-    });
+    };
     $("#taskInput").onkeydown = (e) => { if (e.key==="Enter"){ e.preventDefault(); $("#btnAddTask").click(); } };
 
     // History
-    setOnclick("btnCloseHist", () => $("#historyDetail").classList.add("hidden");
+    $("#btnCloseHist").onclick = () => $("#historyDetail").classList.add("hidden");
 
     // Settings save
-    setOnclick("btnSaveSettings", async () => {
-      const s = { ...DEFAULT_SETTINGS, ...(App.state.settings||{}) });
+    $("#btnSaveSettings").onclick = async () => {
+      const s = { ...DEFAULT_SETTINGS, ...(App.state.settings||{}) };
       s.defaultWake = $("#setWake").value || DEFAULT_SETTINGS.defaultWake;
       s.breakfastMin = Number($("#setBreakfast").value) || DEFAULT_SETTINGS.breakfastMin;
       s.lunchMin = Number($("#setLunch").value) || DEFAULT_SETTINGS.lunchMin;
@@ -1411,15 +1355,15 @@ function hardWireCritical(){
       renderSettings();
     };
 
-    setOnclick("btnCopyCode", async () => {
+    $("#btnCopyCode").onclick = async () => {
       const code = App.state.household?.join_code || "";
       if (!code) return;
       try{ await navigator.clipboard.writeText(code); toast("Join code copied."); }
       catch{ toast(`Join code: ${code}`); }
-    });
+    };
 
     // Export
-    setOnclick("btnExport", exportToday;
+    $("#btnExport").onclick = exportToday;
   }
 
   // ---------- Boot ----------
@@ -1430,53 +1374,12 @@ function setAuthButtons(){
   so.classList.toggle("hidden", !App.state.user);
 }
 
-
-function updateAuthHouseholdUI(){
-  if (!SINGLE_HOUSEHOLD_MODE) return;
-  const sec = document.getElementById("hhJoinSection");
-  if (sec) sec.style.display = "none";
-  const note = document.getElementById("hhFixedNote");
-  if (note) note.textContent = `This app is locked to: ${SINGLE_HOUSEHOLD.name}`;
-}
-
-
 function setHeader(){
     const todayISO = dateToISO(new Date());
     $("#headerSub").textContent = `Today: ${isoToShort(todayISO)}`;
   }
 
-  
-async function ensureSingleHousehold(){
-  if (!SINGLE_HOUSEHOLD_MODE) return;
-  const u = App.state.user;
-  if (!u) return;
-
-  // Ensure membership exists for this signed-in user.
-  // This requires an INSERT policy allowing users to insert their own membership row.
-  await sbTry(() => App.supa
-    .from("household_members")
-    .upsert(
-      { household_id: SINGLE_HOUSEHOLD.id, user_id: u.id, role: "member" },
-      { onConflict: "household_id,user_id" }
-    ),
-    "Could not attach your account to the household."
-  );
-
-  // Load the household record (creator can read via created_by policy; members via membership policy).
-  const hh = await sbTry(() => App.supa
-    .from("households")
-    .select("id,name,join_code")
-    .eq("id", SINGLE_HOUSEHOLD.id)
-    .single(),
-    "Could not load household."
-  );
-
-  if (hh?.data){
-    App.state.household = hh.data;
-  }
-}
-
-async function postLoginBoot(){
+  async function postLoginBoot(){
     if (!App.state.user) await refreshUser();
     setAuthButtons();
     await loadHousehold();
@@ -1506,18 +1409,12 @@ async function postLoginBoot(){
   }
 
   async function boot(){
-    try {
-      const bb = document.getElementById("buildBadge");
-      if (bb) bb.textContent = "Build patch6-20251230052853";
-    } catch {}
-    hardWireCritical();
-
     try{
       initSupabase();
       wire();
-      updateAuthHouseholdUI();
       setHeader();
-// Register auth listener early so sign-in works even if we show the modal and return.
+
+      // Register auth listener early so sign-in works even if we show the modal and return.
       App.supa.auth.onAuthStateChange(async (_event, session) => {
         App.state.user = session?.user || null;
         setAuthButtons();
@@ -1550,32 +1447,3 @@ async function postLoginBoot(){
 
   document.addEventListener("DOMContentLoaded", boot);
 })();
-
-
-async function refreshAll(){
-  try {
-    const { data } = await App.supa.auth.getUser();
-    App.state.user = data?.user ?? null;
-  } catch {}
-  await ensureSingleHousehold();
-  setAuthButtons();
-  setHeader();
-  updateDebugPanel();
-  try { await loadAndRenderToday(); } catch(e){ console.error(e); }
-  try { await loadAndRenderTasks(); } catch(e){ console.error(e); }
-}
-
-function updateDebugPanel(){
-  const el = document.getElementById("debugPanel");
-  if (!el) return;
-  const u = App.state.user;
-  const hh = App.state.household;
-  const parts = [];
-  parts.push("Build: patch6-20251230052853");
-  parts.push("Signed in: " + (u ? "Yes" : "No"));
-  if (u) parts.push("User: " + u.id);
-  parts.push("Household loaded: " + (hh ? "Yes" : "No"));
-  if (hh) parts.push("Household: " + hh.name);
-  parts.push("SW controlled: " + (navigator.serviceWorker?.controller ? "Yes" : "No"));
-  el.textContent = parts.join(" • ");
-}
