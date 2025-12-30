@@ -7,13 +7,11 @@
 (() => {
   "use strict";
 
-const SUPABASE_URL = "https://onphitewfrmawyixzufc.supabase.co";
-const SUPABASE_KEY = "sb_publishable_YjTPPg2V2O6W7MV7rPSK5w_TBJPohp7";
-
-  // Shared access gate (no individual sign-ins)
   const ACCESS_PASSWORD = "JuneR0cks!";
-  // All shared data in Supabase is namespaced under this space id.
-  const SPACE_ID = "family_shared_v1";
+  const SPACE_ID = "default";
+
+  const SUPABASE_URL = "https://onphitewfrmawyixzufc.supabase.co";
+  const SUPABASE_KEY = "sb_publishable_YjTPPg2V2O6W7MV7rPSK5w_TBJPohp7";
 
   const PARENTS = ["Kristyn","Julio"];
 
@@ -43,7 +41,6 @@ const SUPABASE_KEY = "sb_publishable_YjTPPg2V2O6W7MV7rPSK5w_TBJPohp7";
   const App = {
     supa: null,
     state: {
-      gate: { unlocked:false },
       settings: { ...DEFAULT_SETTINGS },
       tasks: [],
       plans: new Map(), // dateISO -> plan
@@ -109,6 +106,7 @@ const SUPABASE_KEY = "sb_publishable_YjTPPg2V2O6W7MV7rPSK5w_TBJPohp7";
   // ---------- Supabase ----------
   function initSupabase(){
     if (!window.supabase) throw new Error("Supabase library not loaded.");
+    // No individual accounts. We do not use Supabase Auth at all.
     App.supa = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
       auth: { persistSession:false, autoRefreshToken:false, detectSessionInUrl:false }
     });
@@ -128,82 +126,39 @@ const SUPABASE_KEY = "sb_publishable_YjTPPg2V2O6W7MV7rPSK5w_TBJPohp7";
       return { error: e };
     }
   }
-  // ---------- Access Gate ----------
-  function gateStorageKey(){ return `fdp_gate_${SPACE_ID}`; }
 
-  function isGateUnlocked(){
-    try{
-      const raw = localStorage.getItem(gateStorageKey());
-      if (!raw) return false;
-      const data = JSON.parse(raw);
-      if (!data || data.ok !== true) return false;
-      // optional expiry (30 days)
-      const ageMs = Date.now() - (Number(data.ts)||0);
-      if (ageMs > 30*24*60*60*1000) return false;
-      return true;
-    }catch(_e){ return false; }
-  }
+  // ---------- Data (shared space) ----------
+  // Everything is shared across devices via a single shared SPACE_ID.
+  function space(){ return SPACE_ID; }
 
-  function setGateUnlocked(ok){
-    App.state.gate.unlocked = !!ok;
-    try{
-      if (ok) localStorage.setItem(gateStorageKey(), JSON.stringify({ ok:true, ts: Date.now() }));
-      else localStorage.removeItem(gateStorageKey());
-    }catch(_e){}
-  }
-
-  function showGate(open){
-    const m = $("#gateModal");
-    if (!m) return;
-    if (open){
-      m.classList.remove("hidden");
-      m.removeAttribute("inert");
-      m.setAttribute("aria-hidden","false");
-      setTimeout(()=>{ try{ $("#gatePass")?.focus(); }catch(_e){} }, 0);
-    } else {
-      const fallback = document.querySelector(".tabbar .tab.active") || document.querySelector(".tabbar .tab");
-      try{ fallback?.focus(); }catch(_e){}
-      m.setAttribute("aria-hidden","true");
-      m.setAttribute("inert","");
-      m.classList.add("hidden");
-    }
-  }
-
-  function lockApp(){
-    setGateUnlocked(false);
-    showGate(true);
-    toast("Locked.");
-  }
-
-
-    async function loadSettings(){
+  async function loadSettings(){
     const res = await sbTry(
-      ()=>App.supa.from("settings").select("data").eq("space", SPACE_ID).maybeSingle(),
+      () => App.supa.from("settings").select("data").eq("space_id", space()).maybeSingle(),
       "Could not load settings."
     );
     const data = res?.data?.data || {};
     const merged = { ...DEFAULT_SETTINGS, ...data, gcal: { ...DEFAULT_SETTINGS.gcal, ...(data.gcal||{}) } };
     App.state.settings = merged;
-
-    // Ensure a shared row exists (so new devices instantly see defaults)
-    if (!res?.data){
-      await sbTry(()=>App.supa.from("settings").upsert({ space: SPACE_ID, data: merged }), "Could not initialize settings.");
-    }
     return merged;
   }
 
   async function saveSettings(s){
-    const res = await sbTry(()=>App.supa.from("settings").upsert({ space: SPACE_ID, data: s }), "Settings save failed.");
+    const res = await sbTry(
+      () => App.supa.from("settings").upsert({ space_id: space(), data: s }),
+      "Settings save failed."
+    );
     if (res?.error) return false;
     App.state.settings = s;
     toast("Settings saved.");
     return true;
   }
 
-    // ---------- Data: tasks/plans/logs ----------
   async function loadTasks(){
     const res = await sbTry(
-      ()=>App.supa.from("tasks").select("id,title,status,assigned_date,created_at,completed_at").eq("space", SPACE_ID).order("created_at",{ascending:false}),
+      () => App.supa.from("tasks")
+        .select("id,title,status,assigned_date,created_at,completed_at")
+        .eq("space_id", space())
+        .order("created_at",{ascending:false}),
       "Could not load tasks."
     );
     App.state.tasks = res?.data || [];
@@ -211,102 +166,88 @@ const SUPABASE_KEY = "sb_publishable_YjTPPg2V2O6W7MV7rPSK5w_TBJPohp7";
   }
 
   async function addTask(title, assignedDate=null){
-    const t = String(title||"").trim();
-    if (!t) return false;
+    const res = await sbTry(
+      () => App.supa.from("tasks").insert({
+        space_id: space(),
+        title: String(title||"").trim(),
+        status: "open",
+        assigned_date: assignedDate
+      }).select("id,title,status,assigned_date,created_at,completed_at").single(),
+      "Add task failed."
+    );
+    if (res?.error || !res?.data) return null;
+    App.state.tasks.unshift(res.data);
+    return res.data;
+  }
 
-    const res = await sbTry(()=>App.supa.from("tasks").insert({
-      space: SPACE_ID,
-      title: t,
-      status: "open",
-      assigned_date: assignedDate
-    }), "Task add failed.");
-    if (res?.error) return false;
+  async function setTaskStatus(id, status){
+    const patch = status==="done" ? { status:"done", completed_at: new Date().toISOString() } : { status:"open", completed_at: null };
+    const res = await sbTry(
+      () => App.supa.from("tasks").update(patch).eq("id", id).eq("space_id", space()),
+      "Task update failed."
+    );
+    return !res?.error;
+  }
 
-    await loadTasks();
-    renderTasks();
-    toast("Task added.");
-    return true;
+  async function setTaskAssignedDate(id, dateISOOrNull){
+    const res = await sbTry(
+      () => App.supa.from("tasks").update({ assigned_date: dateISOOrNull }).eq("id", id).eq("space_id", space()),
+      "Task update failed."
+    );
+    return !res?.error;
   }
 
   async function updateTask(id, patch){
-    const res = await sbTry(()=>App.supa.from("tasks").update(patch).eq("space", SPACE_ID).eq("id", id), "Task update failed.");
-    if (res?.error) return false;
-    await loadTasks(); renderTasks();
-    return true;
-  }
-
-  function blankPlan(dateISO){
-    return {
-      date: dateISO,
-      step1: Object.fromEntries(STEP1.map(x=>[x.key,false])),
-      brainDump: "",
-      focusTaskIds: [],
-      constraints: {
-        blocks: { julio:[], kristyn:[], nanny:[], kayden:[] },
-        nannyWorking:false,
-        bedtimeCaregiver:"Kristyn",
-        appointments:[]
-      },
-      bath: { lastBathISO: null }
-    };
-  }
-  function normPlan(plan, dateISO){
-    const b = blankPlan(dateISO);
-    const p = { ...b, ...(plan||{}) };
-    p.step1 = { ...b.step1, ...(p.step1||{}) };
-    p.constraints = { ...b.constraints, ...(p.constraints||{}) };
-    p.constraints.blocks = { ...b.constraints.blocks, ...(p.constraints.blocks||{}) };
-    p.constraints.appointments = Array.isArray(p.constraints.appointments) ? p.constraints.appointments : [];
-    p.focusTaskIds = Array.isArray(p.focusTaskIds) ? p.focusTaskIds : [];
-    p.bath = { ...b.bath, ...(p.bath||{}) };
-    return p;
-  }
-  function blankLog(dateISO){
-    return { date:dateISO, wakeTime:null, nap1:{enabled:false,start:null,end:null,running:false}, nap2:{enabled:false,start:null,end:null,running:false}, bedtime:null };
-  }
-  function normLog(log, dateISO){
-    const b = blankLog(dateISO);
-    const l = { ...b, ...(log||{}) };
-    l.nap1 = { ...b.nap1, ...(l.nap1||{}) };
-    l.nap2 = { ...b.nap2, ...(l.nap2||{}) };
-    return l;
-  }
-
-    async function loadPlan(dateISO){
     const res = await sbTry(
-      ()=>App.supa.from("day_plans").select("data").eq("space", SPACE_ID).eq("date", dateISO).maybeSingle(),
+      () => App.supa.from("tasks").update(patch).eq("id", id).eq("space_id", space()),
+      "Task update failed."
+    );
+    return !res?.error;
+  }
+
+
+
+  async function loadPlan(dateISO){
+    const res = await sbTry(
+      () => App.supa.from("day_plans").select("data").eq("space_id", space()).eq("date", dateISO).maybeSingle(),
       "Could not load plan."
     );
     const plan = res?.data?.data || null;
-    App.state.plans.set(dateISO, plan);
+    if (plan) App.state.plans.set(dateISO, plan);
     return plan;
   }
-  async function savePlan(dateISO, planData){
-    const res = await sbTry(()=>App.supa.from("day_plans").upsert({ space:SPACE_ID, date:dateISO, data:planData }), "Plan save failed.");
-    if (res?.error) return false;
-    App.state.plans.set(dateISO, planData);
-    return true;
+
+  async function savePlan(dateISO, plan){
+    const res = await sbTry(
+      () => App.supa.from("day_plans").upsert({ space_id: space(), date: dateISO, data: plan }),
+      "Save plan failed."
+    );
+    if (!res?.error) App.state.plans.set(dateISO, plan);
+    return !res?.error;
   }
 
   async function loadLog(dateISO){
     const res = await sbTry(
-      ()=>App.supa.from("day_logs").select("data,updated_at").eq("space", SPACE_ID).eq("date", dateISO).maybeSingle(),
-      "Could not load log."
+      () => App.supa.from("day_logs").select("data").eq("space_id", space()).eq("date", dateISO).maybeSingle(),
+      "Could not load day log."
     );
     const log = res?.data?.data || null;
-    App.state.logs.set(dateISO, log);
+    if (log) App.state.logs.set(dateISO, log);
     return log;
   }
-  async function saveLog(dateISO, logData){
-    const res = await sbTry(()=>App.supa.from("day_logs").upsert({ space:SPACE_ID, date:dateISO, data:logData }), "Log save failed.");
-    if (res?.error) return false;
-    App.state.logs.set(dateISO, logData);
-    return true;
+
+  async function saveLog(dateISO, log){
+    const res = await sbTry(
+      () => App.supa.from("day_logs").upsert({ space_id: space(), date: dateISO, data: log }),
+      "Save day log failed."
+    );
+    if (!res?.error) App.state.logs.set(dateISO, log);
+    return !res?.error;
   }
 
   async function loadHistory(limit=60){
     const res = await sbTry(
-      ()=>App.supa.from("day_logs").select("date,data,updated_at").eq("space", SPACE_ID).order("date",{ascending:false}).limit(limit),
+      () => App.supa.from("day_logs").select("date,data,updated_at").eq("space_id", space()).order("date",{ascending:false}).limit(limit),
       "Could not load history."
     );
     return res?.data || [];
@@ -429,18 +370,11 @@ const SUPABASE_KEY = "sb_publishable_YjTPPg2V2O6W7MV7rPSK5w_TBJPohp7";
     return out;
   }
 
-    function resolveNap(nap, defaultStart, defaultDur, earliest){
+  function resolveNap(nap, defaultStart, defaultDur, earliest){
     const enabled = !!nap?.enabled;
     const s = enabled ? timeToMin(nap.start) : null;
     const e = enabled ? timeToMin(nap.end) : null;
-
-    // If we have a real start but no end yet (or end invalid), treat as "in progress / start-only"
-    // and forecast the end from the actual start so the schedule shifts immediately.
-    if (enabled && s!=null){
-      if (e!=null && e>s) return { start:s, end:e, source:"actual" };
-      return { start:s, end:s + defaultDur, source:"start_only" };
-    }
-
+    if (enabled && s!=null && e!=null && e>s) return { start:s, end:e, source:"actual" };
     const st = (defaultStart!=null) ? defaultStart : (earliest!=null ? earliest : null);
     if (st==null) return { start:null, end:null, source:"none" };
     return { start: st, end: st + defaultDur, source:"forecast" };
@@ -729,6 +663,8 @@ const SUPABASE_KEY = "sb_publishable_YjTPPg2V2O6W7MV7rPSK5w_TBJPohp7";
     $("#gcalUrl").value = s.gcal?.scriptUrl || "";
     $("#gcalCalId").value = s.gcal?.calendarId || "";
     $("#gcalKey").value = s.gcal?.apiKey || "";
+
+    // Household UI removed (single shared password gate).
   }
 
   // ---------- Views ----------
@@ -741,7 +677,29 @@ const SUPABASE_KEY = "sb_publishable_YjTPPg2V2O6W7MV7rPSK5w_TBJPohp7";
     $$(".tab").forEach(b=>b.classList.toggle("active", b.dataset.tab===name));
   }
 
-  // ---------- Wizard ----------
+  // ---------- Password gate ----------
+  function isUnlocked(){
+    try{ return localStorage.getItem("fdp_unlocked")==="1"; }catch(_e){ return false; }
+  }
+
+  function showGate(open){
+    const m = $("#gateModal");
+    if (!m) return;
+    if (open){
+      m.classList.remove("hidden");
+      m.removeAttribute("inert");
+      m.setAttribute("aria-hidden","false");
+      setTimeout(()=>{ try{ $("#gatePass")?.focus(); }catch(_e){} }, 0);
+    } else {
+      const fallback = document.querySelector(".tabbar .tab.active") || document.querySelector(".tabbar .tab");
+      try{ fallback?.focus(); }catch(_e){}
+      m.setAttribute("aria-hidden","true");
+      m.setAttribute("inert","");
+      m.classList.add("hidden");
+    }
+  }
+
+// ---------- Wizard ----------
   function showWizard(open){
     const m = $("#wizardModal");
     if (!m) return;
@@ -850,9 +808,7 @@ function renderWizard(){
   const autosavePlan = debounce(async () => {
     const d = App.state.wizard.draft;
     if (!d) return;
-    if (!App.state.user){ $("#saveStatus").textContent = "Autosave off (sign in)."; return; }
-    if (!App.state.household){ $("#saveStatus").textContent = "Autosave off (no household)."; return; }
-    $("#saveStatus").textContent = "Autosaving…";
+$("#saveStatus").textContent = "Autosaving…";
     const ok = await savePlan(d.date, d);
     $("#saveStatus").textContent = ok ? "Autosaved." : "Autosave failed.";
   }, 450);
@@ -1096,18 +1052,35 @@ function renderWizard(){
     // Prefill UI
     const wakeEl = $("#wakeTime"); if (wakeEl) wakeEl.value = log.wakeTime || "";
     const bedEl = $("#bedtime"); if (bedEl) bedEl.value = log.bedtime || "";
-
-    const nap1En = $("#nap1Enabled"); if (nap1En) nap1En.checked = !!log.nap1.enabled;
+        const nap1En = $("#nap1Enabled"); if (nap1En) nap1En.checked = !!log.nap1.enabled;
     const nap2En = $("#nap2Enabled"); if (nap2En) nap2En.checked = !!log.nap2.enabled;
     const nap1S = $("#nap1Start"); if (nap1S) nap1S.value = log.nap1.start || "";
     const nap1E = $("#nap1End"); if (nap1E) nap1E.value = log.nap1.end || "";
     const nap2S = $("#nap2Start"); if (nap2S) nap2S.value = log.nap2.start || "";
-    const nap2E = \$\(\"#nap2End\"\); if \(nap2E\) nap2E\.value = log\.nap2\.end \|\| \"\";
+    const nap2E = $("#nap2End"); if (nap2E) nap2E.value = log.nap2.end || "";
 
     const btnNap1 = $("#btnNap1Toggle");
     const btnNap2 = $("#btnNap2Toggle");
 
-    const plan = App.state.todayPlan || blankPlan(iso);
+    const syncNapUI = (which, enabledEl, startEl, endEl, btnEl) => {
+      const n = (which===1) ? (App.state.logs.get(iso)?.nap1) : (App.state.logs.get(iso)?.nap2);
+      const enabled = !!n?.enabled;
+      const active = enabled && !!n?.start && !n?.end;
+      if (enabledEl) enabledEl.checked = enabled;
+      if (startEl) startEl.disabled = !enabled;
+      if (endEl) endEl.disabled = !enabled;
+      if (btnEl){
+        btnEl.disabled = !enabled;
+        btnEl.textContent = active ? "Stop" : "Start";
+      }
+    };
+
+    const nowHHMM = () => {
+      const now = new Date();
+      return `${pad2(now.getHours())}:${pad2(now.getMinutes())}`;
+    };
+
+    const plan = normPlan(App.state.plans.get(iso), iso);
     const settings = App.state.settings || DEFAULT_SETTINGS;
 
     const debouncedSave = debounce(async () => {
@@ -1125,7 +1098,8 @@ function renderWizard(){
       $("#bathFlag").textContent = b.overdue ? `Bath overdue (${b.daysSince}d). Suggest: ${b.suggest}` : "";
       // tasks sidebar always refreshes in case today date rolled over
       renderTasks();
-      syncNapControls();
+      syncNapUI(1, $("#nap1Enabled"), $("#nap1Start"), $("#nap1End"), $("#btnNap1Toggle"));
+      syncNapUI(2, $("#nap2Enabled"), $("#nap2Start"), $("#nap2End"), $("#btnNap2Toggle"));
     };
 
     const setLog = (updater) => {
@@ -1135,55 +1109,6 @@ function renderWizard(){
       rerender();
       debouncedSave();
     };
-
-    const nowHHMM = () => {
-      const now = new Date();
-      const hh24 = String(now.getHours()).padStart(2,"0");
-      const mm = String(now.getMinutes()).padStart(2,"0");
-      return `${hh24}:${mm}`;
-    };
-
-    const syncNapControls = () => {
-      const current = normLog(App.state.logs.get(iso), iso);
-
-      // Nap 1
-      if (nap1En) nap1En.checked = !!current.nap1.enabled;
-      if (nap1S) nap1S.disabled = !current.nap1.enabled;
-      if (nap1E) nap1E.disabled = !current.nap1.enabled;
-      if (btnNap1){
-        btnNap1.disabled = !current.nap1.enabled;
-        btnNap1.textContent = current.nap1.running ? "Stop" : "Start";
-      }
-
-      // Nap 2
-      if (nap2En) nap2En.checked = !!current.nap2.enabled;
-      if (nap2S) nap2S.disabled = !current.nap2.enabled;
-      if (nap2E) nap2E.disabled = !current.nap2.enabled;
-      if (btnNap2){
-        btnNap2.disabled = !current.nap2.enabled;
-        btnNap2.textContent = current.nap2.running ? "Stop" : "Start";
-      }
-    };
-
-    const toggleNap = (which) => {
-      setLog(l => {
-        const n = l[which];
-        if (!n.enabled) n.enabled = true;
-        const t = nowHHMM();
-
-        if (n.running){
-          n.end = t;
-          n.running = false;
-        } else {
-          n.start = t;
-          n.end = null;
-          n.running = true;
-        }
-      });
-    };
-
-    if (btnNap1) btnNap1.onclick = () => toggleNap("nap1");
-    if (btnNap2) btnNap2.onclick = () => toggleNap("nap2");
 
     $("#btnWakeNow").onclick = () => {
       const now = new Date();
@@ -1196,17 +1121,46 @@ function renderWizard(){
 
     const el_wakeTime = $("#wakeTime"); if (el_wakeTime) el_wakeTime.onchange = () => setLog(l => { l.wakeTime = el_wakeTime.value || null; });
 
-    const el_nap1Enabled = $("#nap1Enabled"); if (el_nap1Enabled) el_nap1Enabled.onchange = () => setLog(l => { l.nap1.enabled = el_nap1Enabled.checked; if (!l.nap1.enabled){ l.nap1.start=null; l.nap1.end=null; l.nap1.running=false; } });
-    const el_nap2Enabled = $("#nap2Enabled"); if (el_nap2Enabled) el_nap2Enabled.onchange = () => setLog(l => { l.nap2.enabled = el_nap2Enabled.checked; if (!l.nap2.enabled){ l.nap2.start=null; l.nap2.end=null; l.nap2.running=false; } });
+    const el_nap1Enabled = $("#nap1Enabled"); if (el_nap1Enabled) el_nap1Enabled.onchange = () => setLog(l => { l.nap1.enabled = el_nap1Enabled.checked; if (!l.nap1.enabled){ l.nap1.start=null; l.nap1.end=null; } });
+    const el_nap2Enabled = $("#nap2Enabled"); if (el_nap2Enabled) el_nap2Enabled.onchange = () => setLog(l => { l.nap2.enabled = el_nap2Enabled.checked; if (!l.nap2.enabled){ l.nap2.start=null; l.nap2.end=null; } });
 
-    const el_nap1Start = $("#nap1Start"); if (el_nap1Start) el_nap1Start.onchange = () => setLog(l => { l.nap1.enabled = true; l.nap1.start = el_nap1Start.value || null; l.nap1.running = false; });
-    const el_nap1End = $("#nap1End"); if (el_nap1End) el_nap1End.onchange = () => setLog(l => { l.nap1.enabled = true; l.nap1.end = el_nap1End.value || null; l.nap1.running = false; });
-    const el_nap2Start = $("#nap2Start"); if (el_nap2Start) el_nap2Start.onchange = () => setLog(l => { l.nap2.enabled = true; l.nap2.start = el_nap2Start.value || null; l.nap2.running = false; });
-    const el_nap2End = $("#nap2End"); if (el_nap2End) el_nap2End.onchange = () => setLog(l => { l.nap2.enabled = true; l.nap2.end = el_nap2End.value || null; l.nap2.running = false; });
+    const el_nap1Start = $("#nap1Start"); if (el_nap1Start) el_nap1Start.onchange = () => setLog(l => { l.nap1.start = el_nap1Start.value || null; });
+    const el_nap1End = $("#nap1End"); if (el_nap1End) el_nap1End.onchange = () => setLog(l => { l.nap1.end = el_nap1End.value || null; });
+    const el_nap2Start = $("#nap2Start"); if (el_nap2Start) el_nap2Start.onchange = () => setLog(l => { l.nap2.start = el_nap2Start.value || null; });
+    const el_nap2End = $("#nap2End"); if (el_nap2End) el_nap2End.onchange = () => setLog(l => { l.nap2.end = el_nap2End.value || null; });
+
+    // Start/Stop timers
+    if (btnNap1){
+      btnNap1.onclick = () => setLog(l => {
+        if (!l.nap1.enabled) return;
+        if (!l.nap1.start || l.nap1.end){
+          l.nap1.start = nowHHMM();
+          l.nap1.end = null;
+          if ($("#nap1Start")) $("#nap1Start").value = l.nap1.start;
+          if ($("#nap1End")) $("#nap1End").value = "";
+        } else {
+          l.nap1.end = nowHHMM();
+          if ($("#nap1End")) $("#nap1End").value = l.nap1.end;
+        }
+      });
+    }
+    if (btnNap2){
+      btnNap2.onclick = () => setLog(l => {
+        if (!l.nap2.enabled) return;
+        if (!l.nap2.start || l.nap2.end){
+          l.nap2.start = nowHHMM();
+          l.nap2.end = null;
+          if ($("#nap2Start")) $("#nap2Start").value = l.nap2.start;
+          if ($("#nap2End")) $("#nap2End").value = "";
+        } else {
+          l.nap2.end = nowHHMM();
+          if ($("#nap2End")) $("#nap2End").value = l.nap2.end;
+        }
+      });
+    }
 
     const bedInp = $("#bedtime"); if (bedInp) bedInp.onchange = () => setLog(l => { l.bedtime = bedInp.value || null; });
-
-    // Initial render
+        // Initial render
     rerender();
 }
 
@@ -1272,24 +1226,36 @@ function renderWizard(){
       };
     });
 
-        // Gate (shared password, no individual sign-ins)
-    $("#btnGateEnter").onclick = async () => {
-      const pass = $("#gatePass")?.value || "";
-      const status = $("#gateStatus");
-      if (pass === ACCESS_PASSWORD){
-        setGateUnlocked(true);
-        if (status) status.textContent = "✓ Unlocked";
-        showGate(false);
-        await postUnlockBoot();
-      } else {
-        if (status) status.textContent = "Incorrect password.";
-        toast("Incorrect password.");
-      }
-    };
-    $("#gatePass").onkeydown = (e) => { if (e.key==="Enter"){ e.preventDefault(); $("#btnGateEnter").click(); } };
+    // Password gate
+    const openGate = () => showGate(true);
+    const closeGate = () => showGate(false);
 
-    // Lock
-    $("#btnLock").onclick = () => lockApp();
+    $("#btnLock")?.addEventListener("click", () => {
+      try{ localStorage.removeItem("fdp_unlocked"); }catch(_e){}
+      openGate();
+    });
+
+    $("#btnUnlock")?.addEventListener("click", async () => {
+      const inp = $("#gatePass");
+      const v = (inp?.value || "").trim();
+      if (v !== ACCESS_PASSWORD){
+        toast("Incorrect password.");
+        inp?.select?.();
+        return;
+      }
+      try{ localStorage.setItem("fdp_unlocked","1"); }catch(_e){}
+      closeGate();
+      await postUnlockBoot();
+    });
+
+    $("#gateScrim")?.addEventListener("click", () => {
+      // Don't allow scrim close unless already unlocked
+      if (isUnlocked()) closeGate();
+    });
+
+    $("#gatePass")?.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") $("#btnUnlock")?.click();
+    });
 
     // Wizard open/close
     $("#btnOpenWizard").onclick = async () => { try { const iso = dateToISO(addDays(new Date(),1)); await openWizardFor(iso); } catch(e){ console.error(e); toast("Couldn\u2019t open the planner."); } };
@@ -1373,13 +1339,14 @@ function renderWizard(){
   }
 
   // ---------- Boot ----------
+
+
   function setHeader(){
     const todayISO = dateToISO(new Date());
     $("#headerSub").textContent = `Today: ${isoToShort(todayISO)}`;
   }
 
   async function postUnlockBoot(){
-    // Settings + shared data
     await loadSettings();
     await loadTasks();
     renderTasks();
@@ -1395,6 +1362,7 @@ function renderWizard(){
     await loadAndRenderTomorrow();
     await loadAndRenderToday();
     showTab("Evening");
+    showGate(false);
   }
 
   async function boot(){
@@ -1407,24 +1375,20 @@ function renderWizard(){
         navigator.serviceWorker.register("./service-worker.js").catch(()=>{});
       }
 
-      // Gate
-      setGateUnlocked(isGateUnlocked());
-      if (!App.state.gate.unlocked){
-        const status = $("#gateStatus");
-        if (status) status.textContent = "Enter the password to continue.";
+      // Gate: client-side shared password (soft lock)
+      if (!isUnlocked()){
         showGate(true);
         return;
       }
 
-      showGate(false);
       await postUnlockBoot();
     }catch(err){
       console.error(err);
       toast("App failed to start. Check console.");
     }
   }
-        
-function escapeHtml(str){
+
+  function escapeHtml(str){
     return String(str).replace(/[&<>"']/g, s => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[s]));
   }
 

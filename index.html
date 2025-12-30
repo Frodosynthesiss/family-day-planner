@@ -102,6 +102,20 @@
             </div>
           </div>
 
+          <div class="timelineTop">
+            <div class="timelineTitle">Timeline</div>
+            <div class="muted" id="todayMeta">—</div>
+          </div>
+          <div id="todayTimeline" class="timeline"></div>
+        </div>
+
+        <div class="card">
+          <div class="cardHead">
+            <div>
+              <h2>Tasks for Today</h2>
+              <div class="muted">Keep it short. Add anything else in Tasks.</div>
+            </div>
+          </div>
           <div id="todayTasks" class="tasks"></div>
         </div>
       </div>
@@ -199,6 +213,7 @@
         <div class="row">
           <button class="btn" id="btnSaveSettings">Save settings</button>
         </div>
+      </div>
     </section>
   </main>
 
@@ -210,9 +225,9 @@
     <button class="tab" data-tab="Settings">⚙︎<span>Settings</span></button>
   </nav>
 
-  <!-- ACCESS GATE -->
+  <!-- PASSWORD GATE -->
   <div class="modal hidden" id="gateModal" aria-hidden="true">
-    <div class="scrim"></div>
+    <div class="scrim" id="gateScrim"></div>
     <div class="panel" role="dialog" aria-modal="true">
       <div class="panelHead">
         <h3>Enter password</h3>
@@ -220,18 +235,18 @@
       <div class="panelBody">
         <div class="notice">
           <div class="noticeTitle">Private family planner</div>
-          <div class="noticeBody">Anyone with the link + password can access. Data is shared across devices.</div>
+          <div class="noticeBody">Anyone with the link + password can access. (This is a soft lock; do not share the link publicly.)</div>
         </div>
-        <label class="field"><span>Password</span><input class="input" id="gatePass" type="password" placeholder="••••••••"></label>
+        <label class="field"><span>Password</span><input class="input" id="gatePass" type="password" placeholder="JuneR0cks!"></label>
         <div class="row">
-          <button class="btn" id="btnGateEnter">Unlock</button>
+          <button class="btn" id="btnUnlock">Unlock</button>
+          <button class="btn btnSecondary" onclick="location.reload()">Refresh</button>
         </div>
-        <div class="muted small" id="gateStatus">—</div>
       </div>
     </div>
   </div>
 
-<!-- WIZARD -->
+  <!-- WIZARD -->
   <div class="modal hidden" id="wizardModal" aria-hidden="true">
     <div class="scrim" id="wizardScrim"></div>
     <div class="panel wide" role="dialog" aria-modal="true">
