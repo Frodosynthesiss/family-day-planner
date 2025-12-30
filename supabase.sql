@@ -113,7 +113,7 @@ $$;
 -- Policies
 drop policy if exists households_select on public.households;
 create policy households_select on public.households
-for select using (public.is_household_member(id));
+for select using (public.is_household_member(id) or created_by = auth.uid());
 
 drop policy if exists households_insert on public.households;
 create policy households_insert on public.households
@@ -126,7 +126,7 @@ with check (public.is_household_member(id));
 
 drop policy if exists household_members_select on public.household_members;
 create policy household_members_select on public.household_members
-for select using (public.is_household_member(household_id) or user_id = auth.uid());
+for select using (user_id = auth.uid());
 
 drop policy if exists household_members_insert_self on public.household_members;
 create policy household_members_insert_self on public.household_members

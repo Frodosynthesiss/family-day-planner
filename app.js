@@ -214,11 +214,32 @@
   }
 
   async function addTask(title, assignedDate=null){
-    const hh = App.state.household; const u=App.state.user;
-    const t = String(title||"").trim(); if (!hh || !u || !t) return false;
-    const res = await sbTry(()=>App.supa.from("tasks").insert({ household_id:hh.id, title:t, status:"open", assigned_date:assignedDate, created_by:u.id }), "Task add failed.");
+    const hh = App.state.household;
+    const u = App.state.user;
+    const t = String(title||"").trim();
+    if (!t) return false;
+
+    if (!u){
+      toast("Please sign in to add tasks.");
+      return false;
+    }
+    if (!hh){
+      toast("Create or join a household to save tasks.");
+      return false;
+    }
+
+    const res = await sbTry(()=>App.supa.from("tasks").insert({
+      household_id: hh.id,
+      title: t,
+      status: "open",
+      assigned_date: assignedDate,
+      created_by: u.id
+    }), "Task add failed.");
     if (res?.error) return false;
-    await loadTasks(); renderTasks();
+
+    await loadTasks();
+    renderTasks();
+    toast("Task added.");
     return true;
   }
 
@@ -498,10 +519,11 @@
     addRoutine("dinner","Dinner (prep + eat)", dinnerStart, dinnerStart+s.dinnerMin);
     addRoutine("snack2","Snack + milk", dinnerStart+s.dinnerMin+45, dinnerStart+s.dinnerMin+60);
     addRoutine("teethPM","Brush teeth", dinnerStart+s.dinnerMin+60, dinnerStart+s.dinnerMin+65);
-    addRoutine("prepNursery","Prep nursery for bed", ww3MaxEnd-20, ww3MaxEnd-5);
+    const bedStart = ww3MaxEnd - s.bedRoutineMin;
+    addRoutine("prepNursery","Prep nursery for bed", Math.max(dinnerStart + s.dinnerMin + 10, bedStart-15), bedStart);
 
     const bedCare = (p.constraints?.bedtimeCaregiver==="Julio") ? "Julio":"Kristyn";
-    blocks.push({ key:"bedtimeRoutine", title:"Bedtime routine", type:"routine", start: ww3MaxEnd - s.bedRoutineMin, end: ww3MaxEnd, assignee: bedCare });
+    blocks.push({ key:"bedtimeRoutine", title:"Bedtime routine", type:"routine", start: bedStart, end: ww3MaxEnd, assignee: bedCare });
 
     // Bath rule
     const bathRes = maybeBath(blocks, avail, p);
@@ -845,6 +867,8 @@ function renderWizard(){
   const autosavePlan = debounce(async () => {
     const d = App.state.wizard.draft;
     if (!d) return;
+    if (!App.state.user){ $("#saveStatus").textContent = "Autosave off (sign in)."; return; }
+    if (!App.state.household){ $("#saveStatus").textContent = "Autosave off (no household)."; return; }
     $("#saveStatus").textContent = "Autosaving…";
     const ok = await savePlan(d.date, d);
     $("#saveStatus").textContent = ok ? "Autosaved." : "Autosave failed.";
@@ -1087,16 +1111,16 @@ function renderWizard(){
     App.state.logs.set(iso, log);
 
     // Prefill UI
-    $("#wakeTime").value = log.wakeTime || "";
-    $("#bedTime").value = log.bedTime || "";
-    $("#overnightNotes").value = log.notes || "";
+    const wakeEl = $("#wakeTime"); if (wakeEl) wakeEl.value = log.wakeTime || "";
+    const bedEl = $("#bedtime"); if (bedEl) bedEl.value = log.bedtime || "";
+    const notesEl = $("#overnightNotes"); if (notesEl) notesEl.value = log.overnightNotes || "";
 
-    $("#nap1Enabled").checked = !!log.nap1.enabled;
-    $("#nap2Enabled").checked = !!log.nap2.enabled;
-    $("#nap1Start").value = log.nap1.start || "";
-    $("#nap1End").value = log.nap1.end || "";
-    $("#nap2Start").value = log.nap2.start || "";
-    $("#nap2End").value = log.nap2.end || "";
+    const nap1En = $("#nap1Enabled"); if (nap1En) nap1En.checked = !!log.nap1.enabled;
+    const nap2En = $("#nap2Enabled"); if (nap2En) nap2En.checked = !!log.nap2.enabled;
+    const nap1S = $("#nap1Start"); if (nap1S) nap1S.value = log.nap1.start || "";
+    const nap1E = $("#nap1End"); if (nap1E) nap1E.value = log.nap1.end || "";
+    const nap2S = $("#nap2Start"); if (nap2S) nap2S.value = log.nap2.start || "";
+    const nap2E = $("#nap2End"); if (nap2E) nap2E.value = log.nap2.end || "";
 
     const plan = App.state.todayPlan || blankPlan(iso);
     const settings = App.state.settings || DEFAULT_SETTINGS;
@@ -1131,22 +1155,22 @@ function renderWizard(){
       const hh24 = String(now.getHours()).padStart(2,"0");
       const mm = String(now.getMinutes()).padStart(2,"0");
       const val = `${hh24}:${mm}`;
-      $("#wakeTime").value = val;
+      if (wakeEl) wakeEl.value = val; else { const tmp = $("#wakeTime"); if (tmp) tmp.value = val; }
       setLog(l => { l.wakeTime = val; });
     };
 
-    $("#wakeTime").onchange = () => setLog(l => { l.wakeTime = $("#wakeTime").value || null; });
+    const el_wakeTime = $("#wakeTime"); if (el_wakeTime) el_wakeTime.onchange = () => setLog(l => { l.wakeTime = el_wakeTime.value || null; });
 
-    $("#nap1Enabled").onchange = () => setLog(l => { l.nap1.enabled = $("#nap1Enabled").checked; });
-    $("#nap2Enabled").onchange = () => setLog(l => { l.nap2.enabled = $("#nap2Enabled").checked; });
+    const el_nap1Enabled = $("#nap1Enabled"); if (el_nap1Enabled) el_nap1Enabled.onchange = () => setLog(l => { l.nap1.enabled = el_nap1Enabled.checked; });
+    const el_nap2Enabled = $("#nap2Enabled"); if (el_nap2Enabled) el_nap2Enabled.onchange = () => setLog(l => { l.nap2.enabled = el_nap2Enabled.checked; });
 
-    $("#nap1Start").onchange = () => setLog(l => { l.nap1.start = $("#nap1Start").value || null; });
-    $("#nap1End").onchange = () => setLog(l => { l.nap1.end = $("#nap1End").value || null; });
-    $("#nap2Start").onchange = () => setLog(l => { l.nap2.start = $("#nap2Start").value || null; });
-    $("#nap2End").onchange = () => setLog(l => { l.nap2.end = $("#nap2End").value || null; });
+    const el_nap1Start = $("#nap1Start"); if (el_nap1Start) el_nap1Start.onchange = () => setLog(l => { l.nap1.start = el_nap1Start.value || null; });
+    const el_nap1End = $("#nap1End"); if (el_nap1End) el_nap1End.onchange = () => setLog(l => { l.nap1.end = el_nap1End.value || null; });
+    const el_nap2Start = $("#nap2Start"); if (el_nap2Start) el_nap2Start.onchange = () => setLog(l => { l.nap2.start = el_nap2Start.value || null; });
+    const el_nap2End = $("#nap2End"); if (el_nap2End) el_nap2End.onchange = () => setLog(l => { l.nap2.end = el_nap2End.value || null; });
 
-    $("#bedTime").onchange = () => setLog(l => { l.bedTime = $("#bedTime").value || null; });
-    $("#overnightNotes").onchange = () => setLog(l => { l.notes = $("#overnightNotes").value || ""; });
+    const bedInp = $("#bedtime"); if (bedInp) bedInp.onchange = () => setLog(l => { l.bedtime = bedInp.value || null; });
+    const noteInp = $("#overnightNotes"); if (noteInp) noteInp.onchange = () => setLog(l => { l.overnightNotes = noteInp.value || ""; });
 
     // Initial render
     rerender();
