@@ -1,5 +1,5 @@
 /* Static-site PWA service worker (relative paths). Bump version to refresh. */
-const CACHE_NAME = "family-day-planner-v1.0.4";
+const CACHE_NAME = "family-day-planner-v1.0.5";
 const ASSETS = [
   "./",
   "./index.html",

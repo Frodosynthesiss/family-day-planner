@@ -10,18 +10,23 @@ This is a **private**, mobile-friendly PWA (“family intranet”) that runs as 
 - **History** of day logs
 - **Settings** that control forecasting
 - **Google Calendar export** (writes scheduled blocks only) via an Apps Script Web App (no reading calendar)
+- **One shared password gate**: anyone with the link + password can use the app (**no individual sign-ins**)
+
+> Password is currently hard-coded in `app.js` as: `JuneR0cks!`
 
 ---
 
-## 1) Supabase setup
+## 1) Supabase setup (shared space)
 
 ### A) Create the project
 1. Create a new Supabase project.
-2. Confirm your project matches `app.js`:
-   - URL: `https://qsnmuojajbtyxdvijwon.supabase.co`
-   - Publishable key: `sb_publishable_9AFfe1UiuDpQs8FpRUWCvw_wmzFKTMm`
+2. In your project settings, copy:
+   - **Project URL**
+   - **Publishable anon key** (Supabase calls this “anon” / “publishable”)
 
-> Important: The browser uses **publishable** key only. Never put a service role key client-side.
+3. Update `app.js` at the top:
+   - `SUPABASE_URL`
+   - `SUPABASE_KEY`
 
 ### B) Create tables + RLS
 1. Supabase → **SQL Editor**
@@ -29,31 +34,46 @@ This is a **private**, mobile-friendly PWA (“family intranet”) that runs as 
 3. Run it
 
 This creates:
-- `households`, `household_members`, `settings`, `tasks`, `day_plans`, `day_logs`
-- RLS policies + RPC function `join_household(join_code)`
+- `spaces`, `settings`, `tasks`, `day_plans`, `day_logs`
 
-### C) Enable email/password auth
-1. Supabase → **Authentication → Providers**
-2. Enable **Email**
-3. After you deploy to GitHub Pages, set:
-   - **Authentication → URL Configuration → Site URL** to your GitHub Pages URL
-   - Add the same URL to **Redirect URLs**
+**Important security note:** this version allows anonymous read/write at the database level, and relies on the **password gate in the UI** plus an unlisted URL. If you want stronger security, you’d add authenticated access or a server-side proxy later.
 
----
-
-## 2) First login + household
-1. Run the app locally (Step 4).
-2. Create an account → sign in.
-3. In “Household setup”:
-   - Click **Create household** (first person)
-4. Go to **Settings** and copy the **Join code**
-5. Other users create accounts and join with that code.
-
-All data is scoped by household membership (RLS enforces this).
+### C) Shared space id
+The app stores everything under a namespace called `SPACE_ID` (in `app.js`).
+- Default: `family_shared_v1`
+- If you change it, update **both**:
+  - `SPACE_ID` in `app.js`
+  - the `insert into public.spaces(id) ...` line in `supabase.sql`
 
 ---
 
-## 3) Google Calendar export (Apps Script Web App)
+## 2) Run locally
+
+Because this is a PWA with a service worker, run via a local server (don’t double-click `index.html`).
+
+### Option A: VS Code Live Server
+- Right click `index.html` → **Open with Live Server**
+
+### Option B: Python
+```bash
+cd family-day-planner
+python -m http.server 8080
+```
+Open: `http://localhost:8080`
+
+---
+
+## 3) Deploy to GitHub Pages
+
+1. Create a repo (e.g., `family-day-planner`)
+2. Upload all files from this folder to the repo root
+3. Repo Settings → **Pages**
+   - Deploy from branch → `main` / root
+4. When published, open your GitHub Pages URL and enter the shared password.
+
+---
+
+## 4) Google Calendar export (Apps Script Web App)
 
 ### A) Create the destination calendar
 1. In Google Calendar, create a new calendar (e.g., **Family Day Planner (Auto)**).
@@ -116,42 +136,9 @@ In the app: Settings → paste:
 - Calendar ID
 - Shared API key
 
-**Placeholders you must create/paste:**
-- Apps Script Web App URL
-- Calendar ID
-- Shared API key
-
 ---
 
-## 4) Run locally
-
-Because this is a PWA with a service worker, run via a local server (don’t double-click `index.html`).
-
-### Option A: VS Code Live Server
-- Right click `index.html` → **Open with Live Server**
-
-### Option B: Python
-```bash
-cd family-day-planner
-python -m http.server 8080
-```
-Open: `http://localhost:8080`
-
----
-
-## 5) Deploy to GitHub Pages
-
-1. Create a repo (e.g., `family-day-planner`)
-2. Upload all files from this folder to the repo root
-3. Repo Settings → **Pages**
-   - Deploy from branch → `main` / root
-4. When published, copy your GitHub Pages URL
-5. Supabase → Auth → URL Configuration:
-   - Set Site URL + Redirect URLs to your GitHub Pages URL
-
----
-
-## 6) Test checklist (key flows)
+## 5) Test checklist (key flows)
 
 ### Wizard save/edit
 - Evening → Prepare for the Day Ahead
@@ -162,10 +149,11 @@ Open: `http://localhost:8080`
 - Save → Evening shows tomorrow timeline
 - Quick edit → adjust blocks/appointments without redoing everything
 
-### Today regeneration
+### Today regeneration (timers)
 - Today → set wake time → timeline changes
-- Enable Nap 1 tracking and set start/end → timeline changes
-- Enable Nap 2 tracking and set start/end → timeline changes
+- Enable Nap 1 tracking → press **Start** (sets start time) → timeline shifts immediately
+- Press **Stop** (sets end time) → timeline updates again
+- Same for Nap 2
 - Edit plan (quick edit) → timeline updates immediately
 
 ### Kayden nap exclusion (critical)
@@ -174,10 +162,6 @@ Open: `http://localhost:8080`
 - Confirm nap is **NOT** assigned to Kayden
 - Confirm nap is assigned to **Nanny** only if nanny working covers the entire nap window
 - Otherwise nap shows **Uncovered**
-
-### Bath overdue logic
-- In tomorrow’s plan, set `bath.lastBathISO` to 3+ days ago (you can do it by editing the plan in Supabase table `day_plans.data`)
-- Preview should warn Bath overdue and (if possible) schedule a Bath after dinner **only if Julio is available**
 
 ### Export
 - Settings: add Apps Script URL + Calendar ID + key

@@ -20,7 +20,7 @@
     </div>
     <div class="topbarActions">
       <button class="btn btnGhost" id="btnExport">Export</button>
-      <button class="btn btnGhost" id="btnSignOut">Sign out</button>
+      <button class="btn btnGhost" id="btnLock">Lock</button>
     </div>
   </header>
 
@@ -75,7 +75,8 @@
             <div class="logRow">
               <div class="logLabel">Nap 1</div>
               <div class="logControls">
-                <label class="toggle"><input type="checkbox" id="nap1On"> <span>Track</span></label>
+                <label class="toggle"><input type="checkbox" id="nap1Enabled"> <span>Track</span></label>
+                <button class="btn btnTiny" id="btnNap1Toggle" disabled>Start</button>
                 <input class="input inputTime" id="nap1Start" type="time" disabled />
                 <span class="muted">to</span>
                 <input class="input inputTime" id="nap1End" type="time" disabled />
@@ -85,7 +86,8 @@
             <div class="logRow">
               <div class="logLabel">Nap 2</div>
               <div class="logControls">
-                <label class="toggle"><input type="checkbox" id="nap2On"> <span>Track</span></label>
+                <label class="toggle"><input type="checkbox" id="nap2Enabled"> <span>Track</span></label>
+                <button class="btn btnTiny" id="btnNap2Toggle" disabled>Start</button>
                 <input class="input inputTime" id="nap2Start" type="time" disabled />
                 <span class="muted">to</span>
                 <input class="input inputTime" id="nap2End" type="time" disabled />
@@ -98,27 +100,8 @@
                 <input class="input inputTime" id="bedtime" type="time" />
               </div>
             </div>
-
-            <div class="logRow logRowStack">
-              <div class="logLabel">Overnight notes (tracking)</div>
-              <textarea class="textarea" id="overnightNotes" placeholder="Anything notable overnight…"></textarea>
-            </div>
           </div>
 
-          <div class="timelineTop">
-            <div class="timelineTitle">Timeline</div>
-            <div class="muted" id="todayMeta">—</div>
-          </div>
-          <div id="todayTimeline" class="timeline"></div>
-        </div>
-
-        <div class="card">
-          <div class="cardHead">
-            <div>
-              <h2>Tasks for Today</h2>
-              <div class="muted">Keep it short. Add anything else in Tasks.</div>
-            </div>
-          </div>
           <div id="todayTasks" class="tasks"></div>
         </div>
       </div>
@@ -216,16 +199,6 @@
         <div class="row">
           <button class="btn" id="btnSaveSettings">Save settings</button>
         </div>
-
-        <div class="divider"></div>
-        <div class="sectionTitle">Household</div>
-        <div class="muted small">Invite others with the join code.</div>
-        <div class="row wrap">
-          <div class="pill" id="hhName">—</div>
-          <div class="pill mono" id="hhCode">Join code: —</div>
-          <button class="btn btnSecondary" id="btnCopyCode">Copy join code</button>
-        </div>
-      </div>
     </section>
   </main>
 
@@ -237,44 +210,28 @@
     <button class="tab" data-tab="Settings">⚙︎<span>Settings</span></button>
   </nav>
 
-  <!-- AUTH -->
-  <div class="modal hidden" id="authModal" aria-hidden="true">
+  <!-- ACCESS GATE -->
+  <div class="modal hidden" id="gateModal" aria-hidden="true">
     <div class="scrim"></div>
     <div class="panel" role="dialog" aria-modal="true">
       <div class="panelHead">
-        <h3>Sign in</h3>
+        <h3>Enter password</h3>
       </div>
       <div class="panelBody">
         <div class="notice">
-          <div class="noticeTitle">Private household</div>
-          <div class="noticeBody">Sign in with email/password. If you’re new, create an account, then create or join the household.</div>
+          <div class="noticeTitle">Private family planner</div>
+          <div class="noticeBody">Anyone with the link + password can access. Data is shared across devices.</div>
         </div>
-        <label class="field"><span>Email</span><input class="input" id="authEmail" type="email" placeholder="you@example.com"></label>
-        <label class="field"><span>Password</span><input class="input" id="authPass" type="password" placeholder="••••••••"></label>
+        <label class="field"><span>Password</span><input class="input" id="gatePass" type="password" placeholder="••••••••"></label>
         <div class="row">
-          <button class="btn" id="btnSignIn">Sign in</button>
-          <button class="btn btnSecondary" id="btnSignUp">Create account</button>
+          <button class="btn" id="btnGateEnter">Unlock</button>
         </div>
-
-        <div class="divider"></div>
-
-        <div id="hhGate" class="hidden">
-          <div class="sectionTitle">Household setup</div>
-          <div class="muted small">Create a household (first person) or join with a code.</div>
-
-          <label class="field"><span>Household name</span><input class="input" id="newHhName" placeholder="e.g., Vega‑Payne household"></label>
-          <button class="btn" id="btnCreateHh">Create household</button>
-
-          <div class="divider"></div>
-
-          <label class="field"><span>Join code</span><input class="input" id="joinCode" placeholder="paste join code"></label>
-          <button class="btn btnSecondary" id="btnJoinHh">Join household</button>
-        </div>
+        <div class="muted small" id="gateStatus">—</div>
       </div>
     </div>
   </div>
 
-  <!-- WIZARD -->
+<!-- WIZARD -->
   <div class="modal hidden" id="wizardModal" aria-hidden="true">
     <div class="scrim" id="wizardScrim"></div>
     <div class="panel wide" role="dialog" aria-modal="true">

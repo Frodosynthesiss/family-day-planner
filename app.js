@@ -10,6 +10,11 @@
   const SUPABASE_URL = "https://qsnmuojajbtyxdvijwon.supabase.co";
   const SUPABASE_KEY = "sb_publishable_9AFfe1UiuDpQs8FpRUWCvw_wmzFKTMm";
 
+  // Shared access gate (no individual sign-ins)
+  const ACCESS_PASSWORD = "JuneR0cks!";
+  // All shared data in Supabase is namespaced under this space id.
+  const SPACE_ID = "family_shared_v1";
+
   const PARENTS = ["Kristyn","Julio"];
 
   const DEFAULT_SETTINGS = {
@@ -38,8 +43,7 @@
   const App = {
     supa: null,
     state: {
-      user: null,
-      household: null,
+      gate: { unlocked:false },
       settings: { ...DEFAULT_SETTINGS },
       tasks: [],
       plans: new Map(), // dateISO -> plan
@@ -106,7 +110,7 @@
   function initSupabase(){
     if (!window.supabase) throw new Error("Supabase library not loaded.");
     App.supa = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
-      auth: { persistSession:true, autoRefreshToken:true }
+      auth: { persistSession:false, autoRefreshToken:false, detectSessionInUrl:false }
     });
   }
 
@@ -124,118 +128,97 @@
       return { error: e };
     }
   }
+  // ---------- Access Gate ----------
+  function gateStorageKey(){ return `fdp_gate_${SPACE_ID}`; }
 
-  async function refreshUser(){
-    const res = await sbTry(()=>App.supa.auth.getUser(), "Could not read auth state.");
-    App.state.user = res?.data?.user || null;
-    return App.state.user;
-  }
-
-  async function signIn(email, pass){
-    const res = await sbTry(()=>App.supa.auth.signInWithPassword({ email, password:pass }), "Sign in failed.");
-    if (res?.error){ toast(res.error.message || "Sign in failed."); return false; }
-    App.state.user = res?.data?.user || res?.data?.session?.user || App.state.user;
-    toast("Signed in.");
-    return true;
-  }
-  async function signUp(email, pass){
-    const res = await sbTry(()=>App.supa.auth.signUp({ email, password:pass }), "Sign up failed.");
-    if (res?.error){ toast(res.error.message || "Sign up failed."); return false; }
-    App.state.user = res?.data?.user || App.state.user;
-    toast("Account created. Now sign in.");
-    return true;
-  }
-  async function signOut(){
-    await sbTry(()=>App.supa.auth.signOut(), "Sign out failed.");
-    App.state.user=null; App.state.household=null;
-    showAuth(true);
+  function isGateUnlocked(){
+    try{
+      const raw = localStorage.getItem(gateStorageKey());
+      if (!raw) return false;
+      const data = JSON.parse(raw);
+      if (!data || data.ok !== true) return false;
+      // optional expiry (30 days)
+      const ageMs = Date.now() - (Number(data.ts)||0);
+      if (ageMs > 30*24*60*60*1000) return false;
+      return true;
+    }catch(_e){ return false; }
   }
 
-  async function loadHousehold(){
-    const u = App.state.user;
-    if (!u) return null;
-    const mem = await sbTry(()=>App.supa.from("household_members").select("household_id").eq("user_id", u.id).limit(1), "Could not load household membership.");
-    const hhId = mem?.data?.[0]?.household_id;
-    if (!hhId){ App.state.household=null; return null; }
-    const hh = await sbTry(()=>App.supa.from("households").select("id,name,join_code").eq("id", hhId).single(), "Could not load household.");
-    App.state.household = hh?.data || null;
-    return App.state.household;
+  function setGateUnlocked(ok){
+    App.state.gate.unlocked = !!ok;
+    try{
+      if (ok) localStorage.setItem(gateStorageKey(), JSON.stringify({ ok:true, ts: Date.now() }));
+      else localStorage.removeItem(gateStorageKey());
+    }catch(_e){}
   }
 
-  function randomJoinCode(len=8){
-    const chars="ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-    let out=""; for(let i=0;i<len;i++) out+=chars[Math.floor(Math.random()*chars.length)];
-    return out;
+  function showGate(open){
+    const m = $("#gateModal");
+    if (!m) return;
+    if (open){
+      m.classList.remove("hidden");
+      m.removeAttribute("inert");
+      m.setAttribute("aria-hidden","false");
+      setTimeout(()=>{ try{ $("#gatePass")?.focus(); }catch(_e){} }, 0);
+    } else {
+      const fallback = document.querySelector(".tabbar .tab.active") || document.querySelector(".tabbar .tab");
+      try{ fallback?.focus(); }catch(_e){}
+      m.setAttribute("aria-hidden","true");
+      m.setAttribute("inert","");
+      m.classList.add("hidden");
+    }
   }
 
-  async function createHousehold(name){
-    const u = App.state.user;
-    const code = randomJoinCode();
-    const hh = await sbTry(()=>App.supa.from("households").insert({ name:name||"Our household", join_code:code, created_by:u.id }).select("id,name,join_code").single(), "Create household failed.");
-    if (!hh?.data) return false;
-    const ins = await sbTry(()=>App.supa.from("household_members").insert({ household_id: hh.data.id, user_id:u.id, role:"owner" }), "Could not create membership.");
-    if (ins?.error) return false;
-    App.state.household = hh.data;
-    toast("Household created.");
-    return true;
+  function lockApp(){
+    setGateUnlocked(false);
+    showGate(true);
+    toast("Locked.");
   }
 
-  async function joinHousehold(code){
-    const res = await sbTry(()=>App.supa.rpc("join_household", { p_join_code: String(code||"").trim().toUpperCase() }), "Join failed.");
-    if (res?.error) { toast(res.error.message); return false; }
-    toast("Joined household.");
-    return true;
-  }
 
-  async function loadSettings(){
-    const hh = App.state.household;
-    if (!hh) return App.state.settings;
-    const res = await sbTry(()=>App.supa.from("settings").select("data").eq("household_id", hh.id).maybeSingle(), "Could not load settings.");
+    async function loadSettings(){
+    const res = await sbTry(
+      ()=>App.supa.from("settings").select("data").eq("space", SPACE_ID).maybeSingle(),
+      "Could not load settings."
+    );
     const data = res?.data?.data || {};
     const merged = { ...DEFAULT_SETTINGS, ...data, gcal: { ...DEFAULT_SETTINGS.gcal, ...(data.gcal||{}) } };
     App.state.settings = merged;
+
+    // Ensure a shared row exists (so new devices instantly see defaults)
+    if (!res?.data){
+      await sbTry(()=>App.supa.from("settings").upsert({ space: SPACE_ID, data: merged }), "Could not initialize settings.");
+    }
     return merged;
   }
 
   async function saveSettings(s){
-    const hh = App.state.household;
-    if (!hh) { toast("No household."); return false; }
-    const res = await sbTry(()=>App.supa.from("settings").upsert({ household_id: hh.id, data: s }), "Settings save failed.");
+    const res = await sbTry(()=>App.supa.from("settings").upsert({ space: SPACE_ID, data: s }), "Settings save failed.");
     if (res?.error) return false;
     App.state.settings = s;
     toast("Settings saved.");
     return true;
   }
 
-  // ---------- Data: tasks/plans/logs ----------
+    // ---------- Data: tasks/plans/logs ----------
   async function loadTasks(){
-    const hh = App.state.household; if (!hh) return [];
-    const res = await sbTry(()=>App.supa.from("tasks").select("id,title,status,assigned_date,created_at,completed_at").eq("household_id", hh.id).order("created_at",{ascending:false}), "Could not load tasks.");
+    const res = await sbTry(
+      ()=>App.supa.from("tasks").select("id,title,status,assigned_date,created_at,completed_at").eq("space", SPACE_ID).order("created_at",{ascending:false}),
+      "Could not load tasks."
+    );
     App.state.tasks = res?.data || [];
     return App.state.tasks;
   }
 
   async function addTask(title, assignedDate=null){
-    const hh = App.state.household;
-    const u = App.state.user;
     const t = String(title||"").trim();
     if (!t) return false;
 
-    if (!u){
-      toast("Please sign in to add tasks.");
-      return false;
-    }
-    if (!hh){
-      toast("Create or join a household to save tasks.");
-      return false;
-    }
-
     const res = await sbTry(()=>App.supa.from("tasks").insert({
-      household_id: hh.id,
+      space: SPACE_ID,
       title: t,
       status: "open",
-      assigned_date: assignedDate,
-      created_by: u.id
+      assigned_date: assignedDate
     }), "Task add failed.");
     if (res?.error) return false;
 
@@ -246,8 +229,7 @@
   }
 
   async function updateTask(id, patch){
-    const hh = App.state.household; if (!hh) return false;
-    const res = await sbTry(()=>App.supa.from("tasks").update(patch).eq("household_id", hh.id).eq("id", id), "Task update failed.");
+    const res = await sbTry(()=>App.supa.from("tasks").update(patch).eq("space", SPACE_ID).eq("id", id), "Task update failed.");
     if (res?.error) return false;
     await loadTasks(); renderTasks();
     return true;
@@ -280,7 +262,7 @@
     return p;
   }
   function blankLog(dateISO){
-    return { date:dateISO, wakeTime:null, nap1:{enabled:false,start:null,end:null}, nap2:{enabled:false,start:null,end:null}, bedtime:null, overnightNotes:"" };
+    return { date:dateISO, wakeTime:null, nap1:{enabled:false,start:null,end:null,running:false}, nap2:{enabled:false,start:null,end:null,running:false}, bedtime:null };
   }
   function normLog(log, dateISO){
     const b = blankLog(dateISO);
@@ -290,39 +272,43 @@
     return l;
   }
 
-  async function loadPlan(dateISO){
-    const hh = App.state.household; if (!hh) return null;
-    const res = await sbTry(()=>App.supa.from("day_plans").select("data").eq("household_id", hh.id).eq("date", dateISO).maybeSingle(), "Could not load plan.");
+    async function loadPlan(dateISO){
+    const res = await sbTry(
+      ()=>App.supa.from("day_plans").select("data").eq("space", SPACE_ID).eq("date", dateISO).maybeSingle(),
+      "Could not load plan."
+    );
     const plan = res?.data?.data || null;
     App.state.plans.set(dateISO, plan);
     return plan;
   }
   async function savePlan(dateISO, planData){
-    const hh = App.state.household; if (!hh) return false;
-    const res = await sbTry(()=>App.supa.from("day_plans").upsert({ household_id:hh.id, date:dateISO, data:planData }), "Plan save failed.");
+    const res = await sbTry(()=>App.supa.from("day_plans").upsert({ space:SPACE_ID, date:dateISO, data:planData }), "Plan save failed.");
     if (res?.error) return false;
     App.state.plans.set(dateISO, planData);
     return true;
   }
 
   async function loadLog(dateISO){
-    const hh = App.state.household; if (!hh) return null;
-    const res = await sbTry(()=>App.supa.from("day_logs").select("data,updated_at").eq("household_id", hh.id).eq("date", dateISO).maybeSingle(), "Could not load log.");
+    const res = await sbTry(
+      ()=>App.supa.from("day_logs").select("data,updated_at").eq("space", SPACE_ID).eq("date", dateISO).maybeSingle(),
+      "Could not load log."
+    );
     const log = res?.data?.data || null;
     App.state.logs.set(dateISO, log);
     return log;
   }
   async function saveLog(dateISO, logData){
-    const hh = App.state.household; if (!hh) return false;
-    const res = await sbTry(()=>App.supa.from("day_logs").upsert({ household_id:hh.id, date:dateISO, data:logData }), "Log save failed.");
+    const res = await sbTry(()=>App.supa.from("day_logs").upsert({ space:SPACE_ID, date:dateISO, data:logData }), "Log save failed.");
     if (res?.error) return false;
     App.state.logs.set(dateISO, logData);
     return true;
   }
 
   async function loadHistory(limit=60){
-    const hh = App.state.household; if (!hh) return [];
-    const res = await sbTry(()=>App.supa.from("day_logs").select("date,data,updated_at").eq("household_id", hh.id).order("date",{ascending:false}).limit(limit), "Could not load history.");
+    const res = await sbTry(
+      ()=>App.supa.from("day_logs").select("date,data,updated_at").eq("space", SPACE_ID).order("date",{ascending:false}).limit(limit),
+      "Could not load history."
+    );
     return res?.data || [];
   }
 
@@ -443,11 +429,18 @@
     return out;
   }
 
-  function resolveNap(nap, defaultStart, defaultDur, earliest){
+    function resolveNap(nap, defaultStart, defaultDur, earliest){
     const enabled = !!nap?.enabled;
     const s = enabled ? timeToMin(nap.start) : null;
     const e = enabled ? timeToMin(nap.end) : null;
-    if (enabled && s!=null && e!=null && e>s) return { start:s, end:e, source:"actual" };
+
+    // If we have a real start but no end yet (or end invalid), treat as "in progress / start-only"
+    // and forecast the end from the actual start so the schedule shifts immediately.
+    if (enabled && s!=null){
+      if (e!=null && e>s) return { start:s, end:e, source:"actual" };
+      return { start:s, end:s + defaultDur, source:"start_only" };
+    }
+
     const st = (defaultStart!=null) ? defaultStart : (earliest!=null ? earliest : null);
     if (st==null) return { start:null, end:null, source:"none" };
     return { start: st, end: st + defaultDur, source:"forecast" };
@@ -736,9 +729,6 @@
     $("#gcalUrl").value = s.gcal?.scriptUrl || "";
     $("#gcalCalId").value = s.gcal?.calendarId || "";
     $("#gcalKey").value = s.gcal?.apiKey || "";
-
-    $("#hhName").textContent = App.state.household?.name ? `Household: ${App.state.household.name}` : "Household: —";
-    $("#hhCode").textContent = App.state.household?.join_code ? `Join code: ${App.state.household.join_code}` : "Join code: —";
   }
 
   // ---------- Views ----------
@@ -749,30 +739,6 @@
       v.classList.toggle("hidden", k!==name);
     }
     $$(".tab").forEach(b=>b.classList.toggle("active", b.dataset.tab===name));
-  }
-
-  // ---------- Auth modal ----------
-  function showAuth(open){
-    const m = $("#authModal");
-    if (!m) return;
-    if (open){
-      m.classList.remove("hidden");
-      m.removeAttribute("inert");
-      m.setAttribute("aria-hidden","false");
-      setTimeout(()=>{ try{ $("#authEmail")?.focus(); }catch(_e){} }, 0);
-    } else {
-      const fallback = document.querySelector(".tabbar .tab.active") || document.querySelector(".tabbar .tab");
-      try{ fallback?.focus(); }catch(_e){}
-      m.setAttribute("aria-hidden","true");
-      m.setAttribute("inert","");
-      m.classList.add("hidden");
-    }
-  }
-
-  async function updateGate(){
-    const gate = $("#hhGate");
-    const hh = await loadHousehold();
-    gate.classList.toggle("hidden", !!hh);
   }
 
   // ---------- Wizard ----------
@@ -1130,14 +1096,16 @@ function renderWizard(){
     // Prefill UI
     const wakeEl = $("#wakeTime"); if (wakeEl) wakeEl.value = log.wakeTime || "";
     const bedEl = $("#bedtime"); if (bedEl) bedEl.value = log.bedtime || "";
-    const notesEl = $("#overnightNotes"); if (notesEl) notesEl.value = log.overnightNotes || "";
 
     const nap1En = $("#nap1Enabled"); if (nap1En) nap1En.checked = !!log.nap1.enabled;
     const nap2En = $("#nap2Enabled"); if (nap2En) nap2En.checked = !!log.nap2.enabled;
     const nap1S = $("#nap1Start"); if (nap1S) nap1S.value = log.nap1.start || "";
     const nap1E = $("#nap1End"); if (nap1E) nap1E.value = log.nap1.end || "";
     const nap2S = $("#nap2Start"); if (nap2S) nap2S.value = log.nap2.start || "";
-    const nap2E = $("#nap2End"); if (nap2E) nap2E.value = log.nap2.end || "";
+    const nap2E = \$\(\"#nap2End\"\); if \(nap2E\) nap2E\.value = log\.nap2\.end \|\| \"\";
+
+    const btnNap1 = $("#btnNap1Toggle");
+    const btnNap2 = $("#btnNap2Toggle");
 
     const plan = App.state.todayPlan || blankPlan(iso);
     const settings = App.state.settings || DEFAULT_SETTINGS;
@@ -1157,6 +1125,7 @@ function renderWizard(){
       $("#bathFlag").textContent = b.overdue ? `Bath overdue (${b.daysSince}d). Suggest: ${b.suggest}` : "";
       // tasks sidebar always refreshes in case today date rolled over
       renderTasks();
+      syncNapControls();
     };
 
     const setLog = (updater) => {
@@ -1166,6 +1135,55 @@ function renderWizard(){
       rerender();
       debouncedSave();
     };
+
+    const nowHHMM = () => {
+      const now = new Date();
+      const hh24 = String(now.getHours()).padStart(2,"0");
+      const mm = String(now.getMinutes()).padStart(2,"0");
+      return `${hh24}:${mm}`;
+    };
+
+    const syncNapControls = () => {
+      const current = normLog(App.state.logs.get(iso), iso);
+
+      // Nap 1
+      if (nap1En) nap1En.checked = !!current.nap1.enabled;
+      if (nap1S) nap1S.disabled = !current.nap1.enabled;
+      if (nap1E) nap1E.disabled = !current.nap1.enabled;
+      if (btnNap1){
+        btnNap1.disabled = !current.nap1.enabled;
+        btnNap1.textContent = current.nap1.running ? "Stop" : "Start";
+      }
+
+      // Nap 2
+      if (nap2En) nap2En.checked = !!current.nap2.enabled;
+      if (nap2S) nap2S.disabled = !current.nap2.enabled;
+      if (nap2E) nap2E.disabled = !current.nap2.enabled;
+      if (btnNap2){
+        btnNap2.disabled = !current.nap2.enabled;
+        btnNap2.textContent = current.nap2.running ? "Stop" : "Start";
+      }
+    };
+
+    const toggleNap = (which) => {
+      setLog(l => {
+        const n = l[which];
+        if (!n.enabled) n.enabled = true;
+        const t = nowHHMM();
+
+        if (n.running){
+          n.end = t;
+          n.running = false;
+        } else {
+          n.start = t;
+          n.end = null;
+          n.running = true;
+        }
+      });
+    };
+
+    if (btnNap1) btnNap1.onclick = () => toggleNap("nap1");
+    if (btnNap2) btnNap2.onclick = () => toggleNap("nap2");
 
     $("#btnWakeNow").onclick = () => {
       const now = new Date();
@@ -1178,16 +1196,15 @@ function renderWizard(){
 
     const el_wakeTime = $("#wakeTime"); if (el_wakeTime) el_wakeTime.onchange = () => setLog(l => { l.wakeTime = el_wakeTime.value || null; });
 
-    const el_nap1Enabled = $("#nap1Enabled"); if (el_nap1Enabled) el_nap1Enabled.onchange = () => setLog(l => { l.nap1.enabled = el_nap1Enabled.checked; });
-    const el_nap2Enabled = $("#nap2Enabled"); if (el_nap2Enabled) el_nap2Enabled.onchange = () => setLog(l => { l.nap2.enabled = el_nap2Enabled.checked; });
+    const el_nap1Enabled = $("#nap1Enabled"); if (el_nap1Enabled) el_nap1Enabled.onchange = () => setLog(l => { l.nap1.enabled = el_nap1Enabled.checked; if (!l.nap1.enabled){ l.nap1.start=null; l.nap1.end=null; l.nap1.running=false; } });
+    const el_nap2Enabled = $("#nap2Enabled"); if (el_nap2Enabled) el_nap2Enabled.onchange = () => setLog(l => { l.nap2.enabled = el_nap2Enabled.checked; if (!l.nap2.enabled){ l.nap2.start=null; l.nap2.end=null; l.nap2.running=false; } });
 
-    const el_nap1Start = $("#nap1Start"); if (el_nap1Start) el_nap1Start.onchange = () => setLog(l => { l.nap1.start = el_nap1Start.value || null; });
-    const el_nap1End = $("#nap1End"); if (el_nap1End) el_nap1End.onchange = () => setLog(l => { l.nap1.end = el_nap1End.value || null; });
-    const el_nap2Start = $("#nap2Start"); if (el_nap2Start) el_nap2Start.onchange = () => setLog(l => { l.nap2.start = el_nap2Start.value || null; });
-    const el_nap2End = $("#nap2End"); if (el_nap2End) el_nap2End.onchange = () => setLog(l => { l.nap2.end = el_nap2End.value || null; });
+    const el_nap1Start = $("#nap1Start"); if (el_nap1Start) el_nap1Start.onchange = () => setLog(l => { l.nap1.enabled = true; l.nap1.start = el_nap1Start.value || null; l.nap1.running = false; });
+    const el_nap1End = $("#nap1End"); if (el_nap1End) el_nap1End.onchange = () => setLog(l => { l.nap1.enabled = true; l.nap1.end = el_nap1End.value || null; l.nap1.running = false; });
+    const el_nap2Start = $("#nap2Start"); if (el_nap2Start) el_nap2Start.onchange = () => setLog(l => { l.nap2.enabled = true; l.nap2.start = el_nap2Start.value || null; l.nap2.running = false; });
+    const el_nap2End = $("#nap2End"); if (el_nap2End) el_nap2End.onchange = () => setLog(l => { l.nap2.enabled = true; l.nap2.end = el_nap2End.value || null; l.nap2.running = false; });
 
     const bedInp = $("#bedtime"); if (bedInp) bedInp.onchange = () => setLog(l => { l.bedtime = bedInp.value || null; });
-    const noteInp = $("#overnightNotes"); if (noteInp) noteInp.onchange = () => setLog(l => { l.overnightNotes = noteInp.value || ""; });
 
     // Initial render
     rerender();
@@ -1255,28 +1272,24 @@ function renderWizard(){
       };
     });
 
-    // Auth buttons
-    $("#btnSignIn").onclick = async () => {
-      const ok = await signIn($("#authEmail").value, $("#authPass").value);
-      if (ok){
-        await refreshUser();
-        setAuthButtons();
-        showAuth(false);
-        await postLoginBoot();
+        // Gate (shared password, no individual sign-ins)
+    $("#btnGateEnter").onclick = async () => {
+      const pass = $("#gatePass")?.value || "";
+      const status = $("#gateStatus");
+      if (pass === ACCESS_PASSWORD){
+        setGateUnlocked(true);
+        if (status) status.textContent = "✓ Unlocked";
+        showGate(false);
+        await postUnlockBoot();
+      } else {
+        if (status) status.textContent = "Incorrect password.";
+        toast("Incorrect password.");
       }
     };
-    $("#btnSignUp").onclick = async () => { await signUp($("#authEmail").value, $("#authPass").value); };
-    $("#btnCreateHh").onclick = async () => {
-      const ok = await createHousehold($("#newHhName").value);
-      if (ok){ showAuth(false); await postLoginBoot(); }
-    };
-    $("#btnJoinHh").onclick = async () => {
-      const ok = await joinHousehold($("#joinCode").value);
-      if (ok){ showAuth(false); await postLoginBoot(); }
-    };
+    $("#gatePass").onkeydown = (e) => { if (e.key==="Enter"){ e.preventDefault(); $("#btnGateEnter").click(); } };
 
-    // Sign out
-    $("#btnSignOut").onclick = async () => { if (!App.state.user){ showAuth(true); return; } await signOut(); };
+    // Lock
+    $("#btnLock").onclick = () => lockApp();
 
     // Wizard open/close
     $("#btnOpenWizard").onclick = async () => { try { const iso = dateToISO(addDays(new Date(),1)); await openWizardFor(iso); } catch(e){ console.error(e); toast("Couldn\u2019t open the planner."); } };
@@ -1355,41 +1368,18 @@ function renderWizard(){
       renderSettings();
     };
 
-    $("#btnCopyCode").onclick = async () => {
-      const code = App.state.household?.join_code || "";
-      if (!code) return;
-      try{ await navigator.clipboard.writeText(code); toast("Join code copied."); }
-      catch{ toast(`Join code: ${code}`); }
-    };
-
     // Export
     $("#btnExport").onclick = exportToday;
   }
 
   // ---------- Boot ----------
-  
-function setAuthButtons(){
-  const so = $("#btnSignOut");
-  if (!so) return;
-  so.classList.toggle("hidden", !App.state.user);
-}
-
-function setHeader(){
+  function setHeader(){
     const todayISO = dateToISO(new Date());
     $("#headerSub").textContent = `Today: ${isoToShort(todayISO)}`;
   }
 
-  async function postLoginBoot(){
-    if (!App.state.user) await refreshUser();
-    setAuthButtons();
-    await loadHousehold();
-    $("#hhGate")?.classList.add("hidden");
-    if (!App.state.household){
-      showAuth(true);
-      $("#hhGate").classList.remove("hidden");
-      return;
-    }
-
+  async function postUnlockBoot(){
+    // Settings + shared data
     await loadSettings();
     await loadTasks();
     renderTasks();
@@ -1405,7 +1395,6 @@ function setHeader(){
     await loadAndRenderTomorrow();
     await loadAndRenderToday();
     showTab("Evening");
-    showAuth(false);
   }
 
   async function boot(){
@@ -1414,34 +1403,28 @@ function setHeader(){
       wire();
       setHeader();
 
-      // Register auth listener early so sign-in works even if we show the modal and return.
-      App.supa.auth.onAuthStateChange(async (_event, session) => {
-        App.state.user = session?.user || null;
-        setAuthButtons();
-        if (!App.state.user){
-          App.state.household = null;
-          showAuth(true);
-          return;
-        }
-        await postLoginBoot();
-      });
-
       if ("serviceWorker" in navigator){
         navigator.serviceWorker.register("./service-worker.js").catch(()=>{});
       }
 
-      await refreshUser();
-      setAuthButtons();
-      if (!App.state.user){ showAuth(true); return; }
+      // Gate
+      setGateUnlocked(isGateUnlocked());
+      if (!App.state.gate.unlocked){
+        const status = $("#gateStatus");
+        if (status) status.textContent = "Enter the password to continue.";
+        showGate(true);
+        return;
+      }
 
-      await postLoginBoot();
+      showGate(false);
+      await postUnlockBoot();
     }catch(err){
       console.error(err);
       toast("App failed to start. Check console.");
     }
   }
-
-  function escapeHtml(str){
+        
+function escapeHtml(str){
     return String(str).replace(/[&<>"']/g, s => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[s]));
   }
 
