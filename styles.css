@@ -205,3 +205,14 @@ h2,h3,h4{margin:0}
   .logRow{grid-template-columns:1fr}
   .logControls{justify-content:flex-start}
 }
+
+.timeRow.major{border-top:1px solid rgba(31,42,36,.14)}
+
+
+.event.compact{padding:6px 8px}
+.event.compact .eventMeta{display:none}
+.event.tiny{padding:4px 6px}
+.event.tiny .eventTitle{font-size:11px}
+.event.tiny .eventMeta{display:none}
+
+#btnSignOut.hidden{display:none}

@@ -133,13 +133,15 @@
 
   async function signIn(email, pass){
     const res = await sbTry(()=>App.supa.auth.signInWithPassword({ email, password:pass }), "Sign in failed.");
-    if (res?.error) { toast(res.error.message); return false; }
+    if (res?.error){ toast(res.error.message || "Sign in failed."); return false; }
+    App.state.user = res?.data?.user || res?.data?.session?.user || App.state.user;
     toast("Signed in.");
     return true;
   }
   async function signUp(email, pass){
     const res = await sbTry(()=>App.supa.auth.signUp({ email, password:pass }), "Sign up failed.");
-    if (res?.error) { toast(res.error.message); return false; }
+    if (res?.error){ toast(res.error.message || "Sign up failed."); return false; }
+    App.state.user = res?.data?.user || App.state.user;
     toast("Account created. Now sign in.");
     return true;
   }
@@ -568,17 +570,24 @@
     const startHour = clamp(Math.floor((minStart-60)/60), 0, 23);
     const endHour = clamp(Math.ceil((maxEnd+60)/60), startHour+1, 24);
 
-    const pxPerMin = 1; // 60px/hour => 120px per 2-hour row // 40px per hour
+    // Taller timeline so short blocks don't visually collide.
+    const pxPerMin = 1.6; // ~96px/hour
     const dayOffset = startHour*60;
     const totalMin = (endHour*60) - dayOffset;
 
-    for (let h=startHour; h<endHour; h+=2){
+    const rowHeight = 60 * pxPerMin; // 1-hour grid
+    for (let h=startHour; h<endHour; h++){
       const row = document.createElement("div");
-      row.className = "timeRow";
-      const label = document.createElement("div");
-      label.className = "timeLabel";
-      label.textContent = minTo12h(h*60).replace(":00","");
-      row.appendChild(label);
+      row.className = "timeRow" + ((h%2===0) ? " major" : "");
+      row.style.height = `${rowHeight}px`;
+
+      // Label every 2 hours to reduce clutter
+      if (h%2===0 || h===startHour){
+        const label = document.createElement("div");
+        label.className = "timeLabel";
+        label.textContent = minTo12h(h*60).replace(":00","");
+        row.appendChild(label);
+      }
       el.appendChild(row);
     }
 
@@ -595,7 +604,8 @@
       if (b.status==="uncovered") div.classList.add("warn");
 
       const top = (b.start - dayOffset) * pxPerMin;
-      const height = Math.max(4, (b.end-b.start)*pxPerMin);
+      const rawH = (b.end-b.start)*pxPerMin;
+      const height = Math.max(10, rawH - 2);
 
       const leftPct = (b.lane / b.laneCount) * 100;
       const widthPct = (1 / b.laneCount) * 100;
@@ -605,14 +615,21 @@
       div.style.left = `calc(${leftPct}% + 6px)`;
       div.style.width = `calc(${widthPct}% - 10px)`;
 
+      const range = `${minTo12h(b.start)}–${minTo12h(b.end)}`;
+      const who = b.assignee && b.assignee!=="—" ? ` • ${b.assignee}` : "";
+      const tip = `${b.title} • ${range}${who}`;
+      div.title = tip;
+      div.onclick = () => toast(tip);
+
+      if (height < 34) div.classList.add("compact");
+      if (height < 22) div.classList.add("tiny");
+
       const t = document.createElement("div");
       t.className = "eventTitle";
       t.textContent = b.title;
 
       const meta = document.createElement("div");
       meta.className = "eventMeta";
-      const range = `${minTo12h(b.start)}–${minTo12h(b.end)}`;
-      const who = b.assignee && b.assignee!=="—" ? ` • ${b.assignee}` : "";
       meta.textContent = `${range}${who}`;
 
       div.appendChild(t); div.appendChild(meta);
@@ -1241,7 +1258,12 @@ function renderWizard(){
     // Auth buttons
     $("#btnSignIn").onclick = async () => {
       const ok = await signIn($("#authEmail").value, $("#authPass").value);
-      if (ok){ showAuth(false); await postLoginBoot(); }
+      if (ok){
+        await refreshUser();
+        setAuthButtons();
+        showAuth(false);
+        await postLoginBoot();
+      }
     };
     $("#btnSignUp").onclick = async () => { await signUp($("#authEmail").value, $("#authPass").value); };
     $("#btnCreateHh").onclick = async () => {
@@ -1254,7 +1276,7 @@ function renderWizard(){
     };
 
     // Sign out
-    $("#btnSignOut").onclick = signOut;
+    $("#btnSignOut").onclick = async () => { if (!App.state.user){ showAuth(true); return; } await signOut(); };
 
     // Wizard open/close
     $("#btnOpenWizard").onclick = async () => { try { const iso = dateToISO(addDays(new Date(),1)); await openWizardFor(iso); } catch(e){ console.error(e); toast("Couldn\u2019t open the planner."); } };
@@ -1345,13 +1367,23 @@ function renderWizard(){
   }
 
   // ---------- Boot ----------
-  function setHeader(){
+  
+function setAuthButtons(){
+  const so = $("#btnSignOut");
+  if (!so) return;
+  so.classList.toggle("hidden", !App.state.user);
+}
+
+function setHeader(){
     const todayISO = dateToISO(new Date());
     $("#headerSub").textContent = `Today: ${isoToShort(todayISO)}`;
   }
 
   async function postLoginBoot(){
+    if (!App.state.user) await refreshUser();
+    setAuthButtons();
     await loadHousehold();
+    $("#hhGate")?.classList.add("hidden");
     if (!App.state.household){
       showAuth(true);
       $("#hhGate").classList.remove("hidden");
@@ -1382,20 +1414,27 @@ function renderWizard(){
       wire();
       setHeader();
 
+      // Register auth listener early so sign-in works even if we show the modal and return.
+      App.supa.auth.onAuthStateChange(async (_event, session) => {
+        App.state.user = session?.user || null;
+        setAuthButtons();
+        if (!App.state.user){
+          App.state.household = null;
+          showAuth(true);
+          return;
+        }
+        await postLoginBoot();
+      });
+
       if ("serviceWorker" in navigator){
         navigator.serviceWorker.register("./service-worker.js").catch(()=>{});
       }
 
       await refreshUser();
+      setAuthButtons();
       if (!App.state.user){ showAuth(true); return; }
 
       await postLoginBoot();
-
-      App.supa.auth.onAuthStateChange(async (_event, session) => {
-        App.state.user = session?.user || null;
-        if (!App.state.user) showAuth(true);
-        else await postLoginBoot();
-      });
     }catch(err){
       console.error(err);
       toast("App failed to start. Check console.");
