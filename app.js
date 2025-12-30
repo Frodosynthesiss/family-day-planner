@@ -7,8 +7,8 @@
 (() => {
   "use strict";
 
-  const SUPABASE_URL = "https://qsnmuojajbtyxdvijwon.supabase.co";
-  const SUPABASE_KEY = "sb_publishable_9AFfe1UiuDpQs8FpRUWCvw_wmzFKTMm";
+const SUPABASE_URL = "https://onphitewfrmawyixzufc.supabase.co";
+const SUPABASE_KEY = "sb_publishable_YjTPPg2V2O6W7MV7rPSK5w_TBJPohp7";
 
   // Shared access gate (no individual sign-ins)
   const ACCESS_PASSWORD = "JuneR0cks!";
