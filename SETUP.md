@@ -183,3 +183,32 @@ Open: `http://localhost:8080`
 - Settings: add Apps Script URL + Calendar ID + key
 - Click Export
 - Verify events created in your dedicated calendar
+
+
+## Patch 6 note: Single Household Mode + Debug panel
+
+This build is locked to one household:
+- Household ID: `c69f39a8-aeee-428f-a26d-18a3ac28f97b` (VegaPayne Household)
+
+### Required DB constraint (for upsert)
+Make sure `household_members` has a unique constraint on `(household_id, user_id)` so upsert works:
+
+```sql
+alter table public.household_members
+  add constraint household_members_household_user_key unique (household_id, user_id);
+```
+
+### Required RLS policies (minimum)
+```sql
+drop policy if exists household_members_select on public.household_members;
+create policy household_members_select
+on public.household_members
+for select using (user_id = auth.uid());
+
+drop policy if exists household_members_insert_self on public.household_members;
+create policy household_members_insert_self
+on public.household_members
+for insert with check (user_id = auth.uid());
+```
+
+Open Settings → Debug to confirm build + auth + household status.

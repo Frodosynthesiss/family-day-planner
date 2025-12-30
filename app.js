@@ -161,6 +161,13 @@ const SINGLE_HOUSEHOLD_MODE = true;
       console.error(e);
       toast("Sign out failed.");
     }
+    App.state.user = null;
+    App.state.household = null;
+    setAuthButtons();
+    setHeader();
+    updateDebugPanel();
+    showAuth(true);
+  }
     App.state.user=null;
     App.state.household=null;
     setAuthButtons();
@@ -771,7 +778,9 @@ const SINGLE_HOUSEHOLD_MODE = true;
   // ---------- Auth modal ----------
   function showAuth(open){
     updateAuthHouseholdUI();
-    const m = $("#authModal");
+    hardWireCritical();
+    updateDebugPanel();
+const m = $("#authModal");
     if (!m) return;
     if (open){
       m.classList.remove("hidden");
@@ -1211,6 +1220,35 @@ function renderWizard(){
     rerender();
 }
 
+function hardWireCritical(){
+  const so = document.getElementById("btnSignOut");
+  if (so && !so.__bound){
+    so.__bound = true;
+    so.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      signOut();
+    });
+  }
+  const attach = document.getElementById("btnForceAttach");
+  if (attach && !attach.__bound){
+    attach.__bound = true;
+    attach.addEventListener("click", async (e) => {
+      e.preventDefault();
+      await ensureSingleHousehold();
+      await refreshAll();
+    });
+  }
+  const hr = document.getElementById("btnHardReload");
+  if (hr && !hr.__bound){
+    hr.__bound = true;
+    hr.addEventListener("click", (e) => {
+      e.preventDefault();
+      location.href = location.pathname + "?v=patch6-20251230052853";
+    });
+  }
+}
+
   // ---------- Tomorrow ----------
   async function loadAndRenderTomorrow(){
     const tomorrowISO = dateToISO(addDays(new Date(),1));
@@ -1468,6 +1506,12 @@ async function postLoginBoot(){
   }
 
   async function boot(){
+    try {
+      const bb = document.getElementById("buildBadge");
+      if (bb) bb.textContent = "Build patch6-20251230052853";
+    } catch {}
+    hardWireCritical();
+
     try{
       initSupabase();
       wire();
@@ -1506,3 +1550,32 @@ async function postLoginBoot(){
 
   document.addEventListener("DOMContentLoaded", boot);
 })();
+
+
+async function refreshAll(){
+  try {
+    const { data } = await App.supa.auth.getUser();
+    App.state.user = data?.user ?? null;
+  } catch {}
+  await ensureSingleHousehold();
+  setAuthButtons();
+  setHeader();
+  updateDebugPanel();
+  try { await loadAndRenderToday(); } catch(e){ console.error(e); }
+  try { await loadAndRenderTasks(); } catch(e){ console.error(e); }
+}
+
+function updateDebugPanel(){
+  const el = document.getElementById("debugPanel");
+  if (!el) return;
+  const u = App.state.user;
+  const hh = App.state.household;
+  const parts = [];
+  parts.push("Build: patch6-20251230052853");
+  parts.push("Signed in: " + (u ? "Yes" : "No"));
+  if (u) parts.push("User: " + u.id);
+  parts.push("Household loaded: " + (hh ? "Yes" : "No"));
+  if (hh) parts.push("Household: " + hh.name);
+  parts.push("SW controlled: " + (navigator.serviceWorker?.controller ? "Yes" : "No"));
+  el.textContent = parts.join(" • ");
+}
