@@ -20,7 +20,7 @@
     </div>
     <div class="topbarActions">
       <button class="btn btnGhost" id="btnExport">Export</button>
-      <button class="btn btnGhost" id="btnLock">Lock</button>
+      <button class="btn btnGhost" id="btnSignOut">Sign out</button>
     </div>
   </header>
 
@@ -75,8 +75,7 @@
             <div class="logRow">
               <div class="logLabel">Nap 1</div>
               <div class="logControls">
-                <label class="toggle"><input type="checkbox" id="nap1Enabled"> <span>Track</span></label>
-                <button class="btn btnTiny" id="btnNap1Toggle" disabled>Start</button>
+                <label class="toggle"><input type="checkbox" id="nap1On"> <span>Track</span></label>
                 <input class="input inputTime" id="nap1Start" type="time" disabled />
                 <span class="muted">to</span>
                 <input class="input inputTime" id="nap1End" type="time" disabled />
@@ -86,8 +85,7 @@
             <div class="logRow">
               <div class="logLabel">Nap 2</div>
               <div class="logControls">
-                <label class="toggle"><input type="checkbox" id="nap2Enabled"> <span>Track</span></label>
-                <button class="btn btnTiny" id="btnNap2Toggle" disabled>Start</button>
+                <label class="toggle"><input type="checkbox" id="nap2On"> <span>Track</span></label>
                 <input class="input inputTime" id="nap2Start" type="time" disabled />
                 <span class="muted">to</span>
                 <input class="input inputTime" id="nap2End" type="time" disabled />
@@ -100,7 +98,7 @@
                 <input class="input inputTime" id="bedtime" type="time" />
               </div>
             </div>
-          </div>
+</div>
 
           <div class="timelineTop">
             <div class="timelineTitle">Timeline</div>
@@ -213,7 +211,6 @@
         <div class="row">
           <button class="btn" id="btnSaveSettings">Save settings</button>
         </div>
-      </div>
     </section>
   </main>
 
@@ -225,9 +222,9 @@
     <button class="tab" data-tab="Settings">⚙︎<span>Settings</span></button>
   </nav>
 
-  <!-- PASSWORD GATE -->
-  <div class="modal hidden" id="gateModal" aria-hidden="true">
-    <div class="scrim" id="gateScrim"></div>
+    <!-- PASSWORD GATE -->
+  <div class="modal hidden" id="unlockModal" aria-hidden="true">
+    <div class="scrim"></div>
     <div class="panel" role="dialog" aria-modal="true">
       <div class="panelHead">
         <h3>Enter password</h3>
@@ -235,18 +232,17 @@
       <div class="panelBody">
         <div class="notice">
           <div class="noticeTitle">Private family planner</div>
-          <div class="noticeBody">Anyone with the link + password can access. (This is a soft lock; do not share the link publicly.)</div>
+          <div class="noticeBody">Anyone with the link + password can access the shared planner.</div>
         </div>
-        <label class="field"><span>Password</span><input class="input" id="gatePass" type="password" placeholder="JuneR0cks!"></label>
+        <label class="field"><span>Password</span><input class="input" id="unlockPass" type="password" placeholder="JuneR0cks!" autocomplete="current-password"></label>
         <div class="row">
-          <button class="btn" id="btnUnlock">Unlock</button>
-          <button class="btn btnSecondary" onclick="location.reload()">Refresh</button>
+          <button class="btn primary" id="unlockBtn">Unlock</button>
         </div>
+        <div class="muted small" id="unlockHint" style="margin-top:10px;">If you update the app later, you may need to refresh/clear cache.</div>
       </div>
     </div>
   </div>
 
-  <!-- WIZARD -->
   <div class="modal hidden" id="wizardModal" aria-hidden="true">
     <div class="scrim" id="wizardScrim"></div>
     <div class="panel wide" role="dialog" aria-modal="true">
