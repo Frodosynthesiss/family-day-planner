@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="theme-color" content="#7A6C5D">
+    <title>Family Day Planner</title>
+    <link rel="manifest" href="manifest.json">
+    <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+    <link rel="apple-touch-icon" href="icon-192.png">
+    <link rel="stylesheet" href="styles.css">
+    <link href="https://fonts.googleapis.com/css2?family=Clash+Display:wght@400;500;600&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+</head>
+<body>
+    <!-- Sign In Screen -->
+    <div id="signInScreen" class="sign-in-screen">
+        <div class="sign-in-container">
+            <div class="sign-in-content">
+                <div class="brand">
+                    <div class="brand-icon">
+                        <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
+                            <path d="M24 4L8 16V36C8 38.2091 9.79086 40 12 40H36C38.2091 40 40 38.2091 40 36V16L24 4Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+                            <path d="M18 40V26H30V40" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+                        </svg>
+                    </div>
+                    <h1>Family Planner</h1>
+                    <p>Your shared space for better days</p>
+                </div>
+                <button id="signInBtn" class="sign-in-btn">
+                    <svg width="20" height="20" viewBox="0 0 20 20">
+                        <path fill="#4285F4" d="M19.6 10.23c0-.82-.1-1.42-.25-2.05H10v3.72h5.5c-.15.96-.74 2.31-2.04 3.22v2.45h3.16c1.89-1.73 2.98-4.3 2.98-7.34z"/>
+                        <path fill="#34A853" d="M13.46 15.13c-.83.59-1.96 1-3.46 1-2.64 0-4.88-1.74-5.68-4.15H1.07v2.52C2.72 17.75 6.09 20 10 20c2.7 0 4.96-.89 6.62-2.42l-3.16-2.45z"/>
+                        <path fill="#FBBC05" d="M3.99 10c0-.69.12-1.35.32-1.97V5.51H1.07A9.973 9.973 0 000 10c0 1.61.39 3.14 1.07 4.49l3.24-2.52c-.2-.62-.32-1.28-.32-1.97z"/>
+                        <path fill="#EA4335" d="M10 3.88c1.88 0 3.13.81 3.85 1.48l2.84-2.76C14.96.99 12.7 0 10 0 6.09 0 2.72 2.25 1.07 5.51l3.24 2.52C5.12 5.62 7.36 3.88 10 3.88z"/>
+                    </svg>
+                    <span>Continue with Google</span>
+                </button>
+                <div class="sign-in-footer">
+                    <small>Secure sign-in for you and your family</small>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Main App -->
+    <div id="app" class="app-container" style="display: none;">
+        <!-- Header -->
+        <header class="app-header">
+            <div class="header-content">
+                <div class="header-brand">
+                    <svg width="28" height="28" viewBox="0 0 48 48" fill="none">
+                        <path d="M24 4L8 16V36C8 38.2091 9.79086 40 12 40H36C38.2091 40 40 38.2091 40 36V16L24 4Z" stroke="currentColor" stroke-width="2.5" stroke-linejoin="round"/>
+                        <path d="M18 40V26H30V40" stroke="currentColor" stroke-width="2.5" stroke-linejoin="round"/>
+                    </svg>
+                    <span id="headerText">Family Planner</span>
+                </div>
+                <div class="header-actions">
+                    <div class="user-badge" id="userBadge"></div>
+                    <button id="signOutBtn" class="icon-btn" aria-label="Sign out">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
+                            <polyline points="16 17 21 12 16 7"/>
+                            <line x1="21" y1="12" x2="9" y2="12"/>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+        </header>
+
+        <!-- Tab Content -->
+        <main class="tab-content">
+            <!-- Evening Tab -->
+            <div id="eveningTab" class="tab-pane active">
+                <div class="tab-header">
+                    <h2>Evening Planning</h2>
+                    <p class="tab-subtitle">Prepare for tomorrow</p>
+                </div>
+                <div class="hero-card">
+                    <div class="hero-icon">
+                        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+                        </svg>
+                    </div>
+                    <h3>Tomorrow's Plan</h3>
+                    <p class="hero-date" id="tomorrowDate"></p>
+                    <button id="openWizardBtn" class="primary-btn">
+                        <span>Start Planning</span>
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <line x1="5" y1="12" x2="19" y2="12"/>
+                            <polyline points="12 5 19 12 12 19"/>
+                        </svg>
+                    </button>
+                </div>
+                <div id="tomorrowPreview" class="preview-section"></div>
+            </div>
+
+            <!-- Today Tab -->
+            <div id="todayTab" class="tab-pane">
+                <div class="tab-header">
+                    <h2>Today's Schedule</h2>
+                    <p class="tab-subtitle" id="todayDate"></p>
+                </div>
+                <div class="control-card">
+                    <div class="control-section">
+                        <label class="control-label">Actual Wake Time</label>
+                        <input type="time" id="actualWakeTime" class="time-input">
+                    </div>
+                    <div class="nap-grid">
+                        <div class="nap-card">
+                            <div class="nap-header">
+                                <label class="switch">
+                                    <input type="checkbox" id="nap1Enabled">
+                                    <span class="slider"></span>
+                                </label>
+                                <span class="nap-label">Nap 1</span>
+                            </div>
+                            <div class="nap-controls" id="nap1Controls" style="display: none;">
+                                <button class="nap-btn start" data-nap="1">
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                                        <polygon points="5 3 19 12 5 21 5 3"/>
+                                    </svg>
+                                    Start
+                                </button>
+                                <button class="nap-btn stop" data-nap="1" disabled>
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                                        <rect x="6" y="6" width="12" height="12"/>
+                                    </svg>
+                                    Stop
+                                </button>
+                                <span class="nap-time" id="nap1Time"></span>
+                            </div>
+                        </div>
+                        <div class="nap-card">
+                            <div class="nap-header">
+                                <label class="switch">
+                                    <input type="checkbox" id="nap2Enabled">
+                                    <span class="slider"></span>
+                                </label>
+                                <span class="nap-label">Nap 2</span>
+                            </div>
+                            <div class="nap-controls" id="nap2Controls" style="display: none;">
+                                <button class="nap-btn start" data-nap="2">
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                                        <polygon points="5 3 19 12 5 21 5 3"/>
+                                    </svg>
+                                    Start
+                                </button>
+                                <button class="nap-btn stop" data-nap="2" disabled>
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                                        <rect x="6" y="6" width="12" height="12"/>
+                                    </svg>
+                                    Stop
+                                </button>
+                                <span class="nap-time" id="nap2Time"></span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div id="todaySchedule" class="schedule-timeline"></div>
+                <button id="exportTodayBtn" class="secondary-btn export-btn">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/>
+                        <line x1="16" y1="2" x2="16" y2="6"/>
+                        <line x1="8" y1="2" x2="8" y2="6"/>
+                        <line x1="3" y1="10" x2="21" y2="10"/>
+                    </svg>
+                    Export to Google Calendar
+                </button>
+            </div>
+
+            <!-- Tasks Tab -->
+            <div id="tasksTab" class="tab-pane">
+                <div class="tab-header">
+                    <h2>Task Manager</h2>
+                    <p class="tab-subtitle">Organize your day</p>
+                </div>
+                <div class="task-input-container">
+                    <input 
+                        type="text" 
+                        id="newTaskInput" 
+                        placeholder="Add a new task..."
+                        class="task-input"
+                    >
+                    <button id="addTaskBtn" class="add-task-btn">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                            <line x1="12" y1="5" x2="12" y2="19"/>
+                            <line x1="5" y1="12" x2="19" y2="12"/>
+                        </svg>
+                    </button>
+                </div>
+                <div class="task-groups">
+                    <div class="task-group">
+                        <h3 class="task-group-title">Today's Focus</h3>
+                        <div id="todayTasks" class="task-list"></div>
+                    </div>
+                    <div class="task-group">
+                        <h3 class="task-group-title">Brain Dump</h3>
+                        <div id="brainDumpTasks" class="task-list"></div>
+                    </div>
+                    <div class="task-group">
+                        <h3 class="task-group-title">Completed</h3>
+                        <div id="completedTasks" class="task-list"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- History Tab -->
+            <div id="historyTab" class="tab-pane">
+                <div class="tab-header">
+                    <h2>Day Logs</h2>
+                    <p class="tab-subtitle">View past schedules</p>
+                </div>
+                <div id="historyList" class="history-grid"></div>
+            </div>
+
+            <!-- Settings Tab -->
+            <div id="settingsTab" class="tab-pane">
+                <div class="tab-header">
+                    <h2>Settings</h2>
+                    <p class="tab-subtitle">Manage your planner</p>
+                </div>
+                
+                <div class="settings-card">
+                    <h3>Default Constraints</h3>
+                    <div class="constraint-list" id="defaultConstraints"></div>
+                </div>
+
+                <div class="settings-card">
+                    <h3>Google Calendar</h3>
+                    <div id="calendarStatus" class="status-badge">Not connected</div>
+                    <button id="connectCalendarBtn" class="secondary-btn">Connect Calendar</button>
+                    <button id="disconnectCalendarBtn" class="secondary-btn" style="display: none;">Disconnect</button>
+                </div>
+
+                <div class="settings-card danger-zone">
+                    <h3>Danger Zone</h3>
+                    <button id="clearDataBtn" class="danger-btn">Clear All Data</button>
+                </div>
+            </div>
+        </main>
+
+        <!-- Bottom Navigation -->
+        <nav class="bottom-nav">
+            <button class="nav-item active" data-tab="evening">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+                </svg>
+                <span>Evening</span>
+            </button>
+            <button class="nav-item" data-tab="today">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="5"/>
+                    <line x1="12" y1="1" x2="12" y2="3"/>
+                    <line x1="12" y1="21" x2="12" y2="23"/>
+                    <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/>
+                    <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/>
+                    <line x1="1" y1="12" x2="3" y2="12"/>
+                    <line x1="21" y1="12" x2="23" y2="12"/>
+                    <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/>
+                    <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
+                </svg>
+                <span>Today</span>
+            </button>
+            <button class="nav-item" data-tab="tasks">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polyline points="9 11 12 14 22 4"/>
+                    <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
+                </svg>
+                <span>Tasks</span>
+            </button>
+            <button class="nav-item" data-tab="history">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M3 3v5h5"/>
+                    <path d="M3.05 13A9 9 0 1 0 6 5.3L3 8"/>
+                </svg>
+                <span>History</span>
+            </button>
+            <button class="nav-item" data-tab="settings">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="3"/>
+                    <path d="M12 1v6m0 6v6m5.66-17.66l-4.24 4.24m-2.83 2.83l-4.24 4.24m17.66-5.66l-4.24 4.24m-2.83 2.83l-4.24 4.24"/>
+                </svg>
+                <span>Settings</span>
+            </button>
+        </nav>
+    </div>
+
+    <!-- Planning Wizard Modal -->
+    <div id="wizardModal" class="modal">
+        <div class="modal-backdrop"></div>
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Plan Tomorrow</h2>
+                <button class="modal-close" id="closeWizard">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="18" y1="6" x2="6" y2="18"/>
+                        <line x1="6" y1="6" x2="18" y2="18"/>
+                    </svg>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div class="wizard-progress">
+                    <div class="progress-bar">
+                        <div class="progress-fill" id="wizardProgress"></div>
+                    </div>
+                    <span class="progress-text" id="wizardProgressText">Step 1 of 5</span>
+                </div>
+
+                <div class="wizard-step" id="step1">
+                    <h3>Wake Time Target</h3>
+                    <p class="step-desc" id="wizardDate"></p>
+                    <div class="form-field">
+                        <label>Target Wake Time</label>
+                        <input type="time" id="wakeTarget" class="time-input">
+                    </div>
+                    <button class="primary-btn full-width wizard-next">Continue</button>
+                </div>
+
+                <div class="wizard-step" id="step2" style="display: none;">
+                    <h3>Appointments</h3>
+                    <div id="appointmentsList" class="appointments-list"></div>
+                    <button class="secondary-btn full-width" id="addAppointment">+ Add Appointment</button>
+                    <div class="wizard-nav">
+                        <button class="secondary-btn wizard-back">Back</button>
+                        <button class="primary-btn wizard-next">Continue</button>
+                    </div>
+                </div>
+
+                <div class="wizard-step" id="step3" style="display: none;">
+                    <h3>Caregiver Availability</h3>
+                    <p class="step-desc">Who's available for naps?</p>
+                    <div id="caregiverAvailability" class="caregiver-grid"></div>
+                    <div class="wizard-nav">
+                        <button class="secondary-btn wizard-back">Back</button>
+                        <button class="primary-btn wizard-next">Continue</button>
+                    </div>
+                </div>
+
+                <div class="wizard-step" id="step4" style="display: none;">
+                    <h3>Constraints</h3>
+                    <div id="constraintsList" class="constraints-list"></div>
+                    <div class="wizard-nav">
+                        <button class="secondary-btn wizard-back">Back</button>
+                        <button class="primary-btn wizard-next">Continue</button>
+                    </div>
+                </div>
+
+                <div class="wizard-step" id="step5" style="display: none;">
+                    <h3>Quick Tasks</h3>
+                    <p class="step-desc">Any tasks for tomorrow?</p>
+                    <textarea id="brainDumpText" class="textarea" placeholder="Enter tasks, one per line..."></textarea>
+                    <div class="wizard-nav">
+                        <button class="secondary-btn wizard-back">Back</button>
+                        <button class="primary-btn" id="saveWizard">Save Plan</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast Container -->
+    <div id="toastContainer" class="toast-container"></div>
+
+    <!-- Firebase SDKs -->
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-functions-compat.js"></script>
+    
+    <script src="app.js"></script>
+</body>
+</html>
