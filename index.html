@@ -103,6 +103,17 @@
                     <h2>Today's Schedule</h2>
                     <p class="tab-subtitle" id="todayDate"></p>
                 </div>
+                
+                <div class="plan-actions" id="planActions" style="display: none;">
+                    <button id="editTodayPlanBtn" class="secondary-btn full-width">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+                            <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                        </svg>
+                        Edit Today's Plan
+                    </button>
+                </div>
+                
                 <div class="control-card">
                     <div class="control-section">
                         <label class="control-label">Actual Wake Time</label>
@@ -443,6 +454,52 @@
 
     <!-- Toast Container -->
     <div id="toastContainer" class="toast-container"></div>
+
+    <!-- Edit Today Modal -->
+    <div id="editTodayModal" class="modal">
+        <div class="modal-backdrop"></div>
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Edit Today's Plan</h2>
+                <button class="modal-close" id="closeEditToday">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="18" y1="6" x2="6" y2="18"/>
+                        <line x1="6" y1="6" x2="18" y2="18"/>
+                    </svg>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div class="availability-section">
+                    <h4>Kristyn Unavailable</h4>
+                    <div id="editKristynList" class="time-block-list"></div>
+                    <button class="secondary-btn full-width" id="editAddKristyn">+ Add Time Block</button>
+                </div>
+                
+                <div class="availability-section">
+                    <h4>Julio Unavailable</h4>
+                    <div id="editJulioList" class="time-block-list"></div>
+                    <button class="secondary-btn full-width" id="editAddJulio">+ Add Time Block</button>
+                </div>
+                
+                <div class="availability-section">
+                    <h4>Nanny Available</h4>
+                    <div id="editNannyList" class="time-block-list"></div>
+                    <button class="secondary-btn full-width" id="editAddNanny">+ Add Time Block</button>
+                </div>
+                
+                <div class="availability-section">
+                    <h4>Appointments</h4>
+                    <div id="editAppointmentsList" class="appointments-list"></div>
+                    <button class="secondary-btn full-width" id="editAddAppointment">+ Add Appointment</button>
+                </div>
+                
+                <div class="wizard-nav">
+                    <button class="secondary-btn" id="cancelEditToday">Cancel</button>
+                    <button class="primary-btn" id="saveEditToday">Save Changes</button>
+                </div>
+            </div>
+        </div>
+    </div>
 
     <!-- Firebase SDKs -->
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>

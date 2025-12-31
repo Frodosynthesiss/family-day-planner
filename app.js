@@ -503,10 +503,34 @@ const scheduler = {
         
         // Get constraints
         const constraints = plan.constraints || this.getDefaultConstraints();
-        const wakeWindow1 = parseDuration(constraints.find(c => c.name === 'Wake Window Before Nap 1')?.value || '2.5 hrs');
-        const napDuration1 = parseDuration(constraints.find(c => c.name === 'Nap 1 Duration')?.value || '90 min');
-        const wakeWindow2 = parseDuration(constraints.find(c => c.name === 'Wake Window Between Naps')?.value || '3 hrs');
-        const napDuration2 = parseDuration(constraints.find(c => c.name === 'Nap 2 Duration')?.value || '90 min');
+        
+        // Parse wake windows and nap durations
+        const parseWakeWindow = (value) => {
+            const match = value.match(/([\d.]+)-([\d.]+)\s*hrs?/);
+            if (match) {
+                const min = parseFloat(match[1]);
+                const max = parseFloat(match[2]);
+                return ((min + max) / 2) * 60;
+            }
+            const singleMatch = value.match(/([\d.]+)\s*hrs?/);
+            if (singleMatch) return parseFloat(singleMatch[1]) * 60;
+            return 195; // Default 3.25 hrs
+        };
+        
+        const parseNapDuration = (value) => {
+            const match = value.match(/(\d+)-(\d+)\s*min/);
+            if (match) {
+                const min = parseInt(match[1]);
+                const max = parseInt(match[2]);
+                return (min + max) / 2;
+            }
+            return 65; // Default
+        };
+        
+        const wakeWindow1 = parseWakeWindow(constraints.find(c => c.name === 'Wake Window 1')?.value || '3-3.5 hrs');
+        const napDuration1 = parseNapDuration(constraints.find(c => c.name === 'Nap 1 Duration')?.value || '40-90 min');
+        const wakeWindow2 = parseWakeWindow(constraints.find(c => c.name === 'Wake Window 2')?.value || '3.5-4 hrs');
+        const napDuration2 = parseNapDuration(constraints.find(c => c.name === 'Nap 2 Duration')?.value || '40-90 min');
         
         // Wake block
         blocks.push({
@@ -1514,11 +1538,33 @@ const wizard = {
         return warnings;
     },
     
-    next() {
-        this.saveCurrentStep();
+    async next() {
+        await this.saveCurrentStep();
+        
+        // If moving from brain dump (step 6) to task selection (step 7), process brain dump first
+        if (this.currentStep === 6 && this.currentStep < this.totalSteps) {
+            await this.processBrainDump();
+        }
+        
         if (this.currentStep < this.totalSteps) {
             this.currentStep++;
-            this.renderStep();
+            await this.renderStep();
+        }
+    },
+    
+    async processBrainDump() {
+        // Create tasks from brain dump immediately so they show in step 7
+        if (this.data.brainDump && this.data.brainDump.trim()) {
+            const tasks = this.data.brainDump.split('\n').filter(t => t.trim());
+            for (const task of tasks) {
+                await db_ops.addTask(task.trim());
+            }
+            
+            // Wait a moment for tasks to be created
+            await new Promise(resolve => setTimeout(resolve, 300));
+            
+            // Reload tasks so they appear in step 7
+            state.tasks = await db_ops.getTasks();
         }
     },
     
@@ -1571,27 +1617,8 @@ const wizard = {
             }
         }
         
-        // Add brain dump tasks FIRST (before assigning selected tasks)
-        if (this.data.brainDump && this.data.brainDump.trim()) {
-            const tasks = this.data.brainDump.split('\n').filter(t => t.trim());
-            for (const task of tasks) {
-                const newTask = await db_ops.addTask(task.trim());
-                // If this task was selected in step 7, it needs to be assigned
-                // Since we just created it, we need to track it
-                if (newTask && newTask.id) {
-                    // Check if task title was selected (this is a workaround)
-                    // We'll need to reload tasks after brain dump
-                }
-            }
-        }
-        
-        // Wait a moment for tasks to be created
-        await new Promise(resolve => setTimeout(resolve, 500));
-        
-        // Reload tasks to get the new brain dump tasks
-        state.tasks = await db_ops.getTasks();
-        
-        // Assign selected tasks to tomorrow
+        // Brain dump tasks were already created in step 6->7 transition
+        // Just assign selected tasks to tomorrow
         for (const taskId of this.data.selectedTasks) {
             await db_ops.updateTask(taskId, { assignedDate: tomorrow });
         }
@@ -1600,6 +1627,140 @@ const wizard = {
         this.close();
         
         await loadData();
+    }
+};
+
+// Edit Today's Plan
+const editToday = {
+    data: {},
+    
+    open() {
+        if (!state.todayPlan) {
+            utils.showToast('No plan to edit - use Evening wizard first', 'warning');
+            return;
+        }
+        
+        // Load current plan data
+        this.data = {
+            parentUnavailable: {
+                kristyn: [...(state.todayPlan.parentUnavailable?.kristyn || [])],
+                julio: [...(state.todayPlan.parentUnavailable?.julio || [])]
+            },
+            helpersAvailable: {
+                nanny: [...(state.todayPlan.helpersAvailable?.nanny || [])],
+            },
+            appointments: [...(state.todayPlan.appointments || [])]
+        };
+        
+        document.getElementById('editTodayModal').classList.add('active');
+        this.render();
+    },
+    
+    close() {
+        document.getElementById('editTodayModal').classList.remove('active');
+    },
+    
+    render() {
+        this.renderTimeBlocks('kristyn', 'editKristynList');
+        this.renderTimeBlocks('julio', 'editJulioList');
+        this.renderTimeBlocks('nanny', 'editNannyList', true);
+        this.renderAppointments();
+    },
+    
+    renderTimeBlocks(person, containerId, isHelper = false) {
+        const container = document.getElementById(containerId);
+        const blocks = isHelper ? 
+            this.data.helpersAvailable[person] : 
+            this.data.parentUnavailable[person];
+        
+        if (blocks.length === 0) {
+            container.innerHTML = '<p class="empty-state-text">No time blocks</p>';
+            return;
+        }
+        
+        container.innerHTML = blocks.map((block, idx) => `
+            <div class="time-block-item">
+                <input type="time" value="${block.start}" class="edit-time-input" data-person="${person}" data-idx="${idx}" data-field="start" data-helper="${isHelper}">
+                <input type="time" value="${block.end}" class="edit-time-input" data-person="${person}" data-idx="${idx}" data-field="end" data-helper="${isHelper}">
+                <button onclick="editToday.removeTimeBlock('${person}', ${idx}, ${isHelper})">×</button>
+            </div>
+        `).join('');
+    },
+    
+    renderAppointments() {
+        const container = document.getElementById('editAppointmentsList');
+        
+        if (this.data.appointments.length === 0) {
+            container.innerHTML = '<p class="empty-state-text">No appointments</p>';
+            return;
+        }
+        
+        container.innerHTML = this.data.appointments.map((apt, idx) => `
+            <div class="appointment-item">
+                <input type="text" placeholder="Title" value="${apt.title || ''}" 
+                       class="edit-apt-input" data-idx="${idx}" data-field="title">
+                <input type="time" value="${apt.start || ''}" 
+                       class="edit-apt-input" data-idx="${idx}" data-field="start">
+                <input type="time" value="${apt.end || ''}" 
+                       class="edit-apt-input" data-idx="${idx}" data-field="end">
+                <button class="secondary-btn full-width" onclick="editToday.removeAppointment(${idx})">Remove</button>
+            </div>
+        `).join('');
+    },
+    
+    addTimeBlock(person, isHelper = false) {
+        const block = { start: '09:00', end: '12:00' };
+        if (isHelper) {
+            this.data.helpersAvailable[person].push(block);
+        } else {
+            this.data.parentUnavailable[person].push(block);
+        }
+        this.render();
+    },
+    
+    removeTimeBlock(person, idx, isHelper = false) {
+        if (isHelper) {
+            this.data.helpersAvailable[person].splice(idx, 1);
+        } else {
+            this.data.parentUnavailable[person].splice(idx, 1);
+        }
+        this.render();
+    },
+    
+    addAppointment() {
+        this.data.appointments.push({ title: '', start: '', end: '' });
+        this.render();
+    },
+    
+    removeAppointment(idx) {
+        this.data.appointments.splice(idx, 1);
+        this.render();
+    },
+    
+    async save() {
+        const today = utils.getTodayString();
+        
+        // Update today's plan with new data
+        const updatedPlan = {
+            ...state.todayPlan,
+            parentUnavailable: this.data.parentUnavailable,
+            helpersAvailable: this.data.helpersAvailable,
+            appointments: this.data.appointments
+        };
+        
+        // Recalculate schedule with new constraints
+        const schedule = wizard.calculateSchedule.call({ data: updatedPlan });
+        updatedPlan.calculatedSchedule = schedule.blocks;
+        
+        // Save to database
+        await db_ops.saveDayPlan(today, updatedPlan);
+        
+        // Update state and UI
+        state.todayPlan = updatedPlan;
+        await renderTodaySchedule();
+        
+        utils.showToast('Plan updated!', 'success');
+        this.close();
     }
 };
 
@@ -1634,6 +1795,39 @@ function setupEventHandlers() {
     // Wizard
     document.getElementById('openWizardBtn').addEventListener('click', () => wizard.open());
     document.getElementById('closeWizard').addEventListener('click', () => wizard.close());
+    
+    // Edit Today
+    document.getElementById('editTodayPlanBtn')?.addEventListener('click', () => editToday.open());
+    document.getElementById('closeEditToday').addEventListener('click', () => editToday.close());
+    document.getElementById('cancelEditToday').addEventListener('click', () => editToday.close());
+    document.getElementById('saveEditToday').addEventListener('click', () => editToday.save());
+    
+    document.getElementById('editAddKristyn').addEventListener('click', () => editToday.addTimeBlock('kristyn'));
+    document.getElementById('editAddJulio').addEventListener('click', () => editToday.addTimeBlock('julio'));
+    document.getElementById('editAddNanny').addEventListener('click', () => editToday.addTimeBlock('nanny', true));
+    document.getElementById('editAddAppointment').addEventListener('click', () => editToday.addAppointment());
+    
+    // Edit inputs (event delegation)
+    document.addEventListener('input', (e) => {
+        if (e.target.classList.contains('edit-time-input')) {
+            const person = e.target.dataset.person;
+            const idx = parseInt(e.target.dataset.idx);
+            const field = e.target.dataset.field;
+            const isHelper = e.target.dataset.helper === 'true';
+            
+            if (isHelper) {
+                editToday.data.helpersAvailable[person][idx][field] = e.target.value;
+            } else {
+                editToday.data.parentUnavailable[person][idx][field] = e.target.value;
+            }
+        }
+        
+        if (e.target.classList.contains('edit-apt-input')) {
+            const idx = parseInt(e.target.dataset.idx);
+            const field = e.target.dataset.field;
+            editToday.data.appointments[idx][field] = e.target.value;
+        }
+    });
     
     document.getElementById('clearPlanBtn').addEventListener('click', async () => {
         if (confirm('Clear tomorrow\'s plan? This cannot be undone.')) {
@@ -1883,6 +2077,12 @@ async function loadData() {
         document.getElementById('todayDate').textContent = utils.formatDate(utils.getTodayString());
         document.getElementById('tomorrowDate').textContent = utils.formatDate(utils.getTomorrowString());
         
+        // Show/hide edit button based on whether plan exists
+        const planActions = document.getElementById('planActions');
+        if (planActions) {
+            planActions.style.display = state.todayPlan ? 'block' : 'none';
+        }
+        
         renderSettings();
         await renderTodaySchedule();
         renderTomorrowPreview();
@@ -1896,25 +2096,48 @@ async function renderTodaySchedule() {
     const date = utils.getTodayString();
     const log = await db_ops.getDayLog(date);
     
-    if (!state.todayPlan || !state.todayPlan.calculatedSchedule) {
-        ui.renderSchedule([]);
+    // If we have a plan with calculated schedule, use it
+    if (state.todayPlan && state.todayPlan.calculatedSchedule) {
+        let blocks = [...state.todayPlan.calculatedSchedule];
+        
+        // Apply dynamic adjustments based on actual tracking
+        if (log?.actualWake) {
+            blocks = scheduler.adjustScheduleForActualWake(
+                state.todayPlan,
+                log.actualWake,
+                log.naps
+            );
+        }
+        
+        ui.renderSchedule(blocks);
         return;
     }
     
-    // Use the pre-calculated schedule from wizard
-    let blocks = [...state.todayPlan.calculatedSchedule];
-    
-    // Apply dynamic adjustments based on actual tracking
+    // If no plan exists but wake time is set, generate a basic schedule for testing
     if (log?.actualWake) {
-        // Recalculate based on actual wake time
-        blocks = scheduler.adjustScheduleForActualWake(
-            state.todayPlan,
+        // Create a minimal plan structure for testing
+        const testPlan = {
+            wakeTarget: log.actualWake,
+            constraints: state.settings?.constraints || scheduler.getDefaultConstraints(),
+            calculatedSchedule: null, // Will be generated
+            parentUnavailable: { kristyn: [], julio: [] },
+            helpersAvailable: { nanny: [], kayden: [] },
+            appointments: [],
+            includeBath: false
+        };
+        
+        const blocks = scheduler.adjustScheduleForActualWake(
+            testPlan,
             log.actualWake,
             log.naps
         );
+        
+        ui.renderSchedule(blocks);
+        return;
     }
     
-    ui.renderSchedule(blocks);
+    // No plan and no wake time - show empty
+    ui.renderSchedule([]);
 }
 
 function renderTomorrowPreview() {
