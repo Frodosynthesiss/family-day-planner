@@ -3,13 +3,13 @@
 
 // Firebase Configuration
 const firebaseConfig = {
-  apiKey: "AIzaSyA2YSjOktRbinbKMjIy1pbd_Bkbwp3ruRY",
-  authDomain: "vega-payne-command-center.firebaseapp.com",
-  projectId: "vega-payne-command-center",
-  storageBucket: "vega-payne-command-center.firebasestorage.app",
-  messagingSenderId: "325061344708",
-  appId: "1:325061344708:web:397bff2f1776308a997891",
-  measurementId: "G-JHR2MYTHM1"
+    apiKey: "AIzaSyA2YSjOktRbinbKMjIy1pbd_Bkbwp3ruRY",
+    authDomain: "vega-payne-command-center.firebaseapp.com",
+    projectId: "vega-payne-command-center",
+    storageBucket: "vega-payne-command-center.firebasestorage.app",
+    messagingSenderId: "325061344708",
+    appId: "1:325061344708:web:397bff2f1776308a997891",
+    measurementId: "G-JHR2MYTHM1"
 };
 
 // Initialize Firebase
@@ -1509,28 +1509,6 @@ const wizard = {
                     });
                 }
             }
-        });
-        
-        return warnings;
-    },
-        const mealTimes = [
-            { name: 'Lunch', start: '12:00', end: '13:00' },
-            { name: 'Dinner', start: '17:30', end: '18:30' }
-        ];
-        
-        appointments.forEach(apt => {
-            mealTimes.forEach(meal => {
-                const aptEnd = apt.end || addMinutes(apt.start, 60);
-                const hasConflict = (apt.start >= meal.start && apt.start < meal.end) ||
-                                   (aptEnd > meal.start && aptEnd <= meal.end);
-                
-                if (hasConflict) {
-                    warnings.push({
-                        severity: 'info',
-                        message: `"${apt.title}" during typical ${meal.name} time`
-                    });
-                }
-            });
         });
         
         return warnings;
