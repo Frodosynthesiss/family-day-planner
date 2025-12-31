@@ -14,6 +14,31 @@
 
   // Shared password gate (client-side)
   const APP_PASSWORD = "JuneR0cks!";
+
+const CAREGIVERS = ["Kristyn","Julio","Nanny","Kayden"];
+
+function defaultCaregivers() {
+  return { Kristyn: true, Julio: true, Nanny: true, Kayden: true };
+}
+
+function normCaregivers(obj) {
+  const base = defaultCaregivers();
+  const o = (obj && typeof obj === "object") ? obj : {};
+  for (const k of CAREGIVERS) {
+    base[k] = (k in o) ? !!o[k] : base[k];
+  }
+  return base;
+}
+
+function pickNapCaregiver(cg) {
+  const c = normCaregivers(cg);
+  // Rule: Kayden is never assigned naps.
+  if (c.Nanny) return "Nanny";
+  if (c.Kristyn) return "Kristyn";
+  if (c.Julio) return "Julio";
+  return "Unassigned";
+}
+
   const LS_UNLOCK_KEY = "fdp_unlocked_v1";
 
   const DEFAULT_SETTINGS = {
@@ -149,9 +174,11 @@
       date: dateISO,
       brainDump: "",
       constraints: {
-        appointments: [] // {title,start,end}
+        appointments: [], // {title,start,end}
+        caregivers: defaultCaregivers()
       }
     };
+  }
   }
 
   function normPlan(plan, dateISO) {
@@ -159,6 +186,7 @@
     if (!p.date) p.date = dateISO;
     if (!p.constraints) p.constraints = { appointments: [] };
     if (!Array.isArray(p.constraints.appointments)) p.constraints.appointments = [];
+    p.constraints.caregivers = normCaregivers(p.constraints.caregivers);
     if (typeof p.brainDump !== "string") p.brainDump = "";
     return p;
   }
@@ -169,7 +197,8 @@
       wakeTime: "",
       bedtime: "",
       nap1: { enabled: true, start: "", end: "", running: false },
-      nap2: { enabled: true, start: "", end: "", running: false }
+      nap2: { enabled: true, start: "", end: "", running: false },
+      caregivers: defaultCaregivers()
     };
   }
 
@@ -184,6 +213,7 @@
     l.nap1.end = l.nap1.end || "";
     l.nap2.start = l.nap2.start || "";
     l.nap2.end = l.nap2.end || "";
+    l.caregivers = normCaregivers(l.caregivers);
     l.nap1.running = !!l.nap1.running;
     l.nap2.running = !!l.nap2.running;
     l.wakeTime = l.wakeTime || "";
@@ -356,7 +386,9 @@
       if (nap1End == null && nap1Start != null) nap1End = nap1Start + s.nap1ForecastMin;
       // routine
       push(Math.max(t, nap1Start - s.napRoutineMin), Math.max(t, nap1Start), "Nap 1 routine");
-      push(Math.max(t, nap1Start), nap1End, "Nap 1", l.nap1.running ? "running…" : (l.nap1.end ? "actual" : "forecast"));
+      const cgNap = pickNapCaregiver(l.caregivers);
+      const status1 = l.nap1.running ? "running…" : (l.nap1.end ? "actual" : "forecast");
+      push(Math.max(t, nap1Start), nap1End, "Nap 1", (cgNap==="Unassigned" ? "⚠ no nap caregiver • " : `Caregiver: ${cgNap} • `) + status1);
       t = Math.max(t, nap1End);
     }
 
@@ -376,7 +408,9 @@
       }
       if (nap2End == null && nap2Start!=null) nap2End = nap2Start + s.nap2ForecastMin;
       push(Math.max(t, nap2Start - s.napRoutineMin), Math.max(t, nap2Start), "Nap 2 routine");
-      push(Math.max(t, nap2Start), nap2End, "Nap 2", l.nap2.running ? "running…" : (l.nap2.end ? "actual" : "forecast"));
+      const cgNap2 = pickNapCaregiver(l.caregivers);
+      const status2 = l.nap2.running ? "running…" : (l.nap2.end ? "actual" : "forecast");
+      push(Math.max(t, nap2Start), nap2End, "Nap 2", (cgNap2==="Unassigned" ? "⚠ no nap caregiver • " : `Caregiver: ${cgNap2} • `) + status2);
       t = Math.max(t, nap2End);
     }
 
@@ -544,6 +578,14 @@
     $("#nap2Start").value = log.nap2.start || "";
     $("#nap2End").value = log.nap2.end || "";
 
+    // caregivers
+    if ($("#cgKristyn")) {
+      $("#cgKristyn").checked = !!log.caregivers?.Kristyn;
+      $("#cgJulio").checked = !!log.caregivers?.Julio;
+      $("#cgNanny").checked = !!log.caregivers?.Nanny;
+      $("#cgKayden").checked = !!log.caregivers?.Kayden;
+    }
+
     updateNapPills(log);
 
     const blocks = computeTodayBlocks(App.settings, log);
@@ -651,6 +693,14 @@
   // ---- Wizard (tomorrow planning) ----
   function renderWizard(plan) {
     $("#wizBrainDump").value = plan.brainDump || "";
+    // caregivers
+    if ($("#wizCgKristyn")) {
+      const cg = normCaregivers(plan.constraints.caregivers);
+      $("#wizCgKristyn").checked = !!cg.Kristyn;
+      $("#wizCgJulio").checked = !!cg.Julio;
+      $("#wizCgNanny").checked = !!cg.Nanny;
+      $("#wizCgKayden").checked = !!cg.Kayden;
+    }
     renderWizardAppts(plan.constraints.appointments);
   }
 
@@ -760,6 +810,15 @@
       const iso = dateToISO(addDays(new Date(), 1));
       const plan = normPlan(App.plans.get(iso), iso);
       plan.brainDump = $("#wizBrainDump").value || "";
+      // caregivers from wizard
+      if ($("#wizCgKristyn")) {
+        plan.constraints.caregivers = {
+          Kristyn: $("#wizCgKristyn").checked,
+          Julio: $("#wizCgJulio").checked,
+          Nanny: $("#wizCgNanny").checked,
+          Kayden: $("#wizCgKayden").checked
+        };
+      }
       await savePlan(iso, plan);
       await loadAndRenderTomorrow();
       toast("Saved tomorrow");
@@ -833,6 +892,16 @@
     $("#nap1End").onchange = () => persistAndReflow(l => l.nap1.end = $("#nap1End").value || "");
     $("#nap2Start").onchange = () => persistAndReflow(l => l.nap2.start = $("#nap2Start").value || "");
     $("#nap2End").onchange = () => persistAndReflow(l => l.nap2.end = $("#nap2End").value || "");
+
+
+    // Caregiver availability (naps)
+    if ($("#cgKristyn")) {
+      $("#cgKristyn").onchange = () => persistAndReflow(l => { l.caregivers = normCaregivers(l.caregivers); l.caregivers.Kristyn = $("#cgKristyn").checked; });
+      $("#cgJulio").onchange = () => persistAndReflow(l => { l.caregivers = normCaregivers(l.caregivers); l.caregivers.Julio = $("#cgJulio").checked; });
+      $("#cgNanny").onchange = () => persistAndReflow(l => { l.caregivers = normCaregivers(l.caregivers); l.caregivers.Nanny = $("#cgNanny").checked; });
+      $("#cgKayden").onchange = () => persistAndReflow(l => { l.caregivers = normCaregivers(l.caregivers); l.caregivers.Kayden = $("#cgKayden").checked; });
+    }
+
 
     // Nap timers (Start/Stop)
     $("#nap1StartBtn").onclick = () => persistAndReflow(l => {
