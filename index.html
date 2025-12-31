@@ -122,7 +122,69 @@
                         <label class="control-label">Actual Wake Time</label>
                         <input type="time" id="actualWakeTime" class="time-input">
                     </div>
+                    
                     <div class="nap-grid">
+                        <div class="nap-control">
+                            <div class="nap-header">
+                                <label class="control-label">
+                                    <input type="checkbox" id="nap1Enabled" class="toggle-switch">
+                                    Nap 1
+                                </label>
+                            </div>
+                            <div id="nap1Controls" class="nap-controls" style="display: none;">
+                                <div class="nap-time-inputs">
+                                    <div class="time-input-group">
+                                        <label>Start Time</label>
+                                        <input type="time" id="nap1StartTime" class="time-input">
+                                    </div>
+                                    <div class="time-input-group">
+                                        <label>End Time</label>
+                                        <input type="time" id="nap1EndTime" class="time-input">
+                                    </div>
+                                </div>
+                                <div class="nap-buttons">
+                                    <button class="secondary-btn nap-btn start" data-nap="1">Start</button>
+                                    <button class="secondary-btn nap-btn stop" data-nap="1">Stop</button>
+                                    <button class="secondary-btn nap-btn" data-nap="1" id="updateNap1">Update</button>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="nap-control">
+                            <div class="nap-header">
+                                <label class="control-label">
+                                    <input type="checkbox" id="nap2Enabled" class="toggle-switch">
+                                    Nap 2
+                                </label>
+                            </div>
+                            <div id="nap2Controls" class="nap-controls" style="display: none;">
+                                <div class="nap-time-inputs">
+                                    <div class="time-input-group">
+                                        <label>Start Time</label>
+                                        <input type="time" id="nap2StartTime" class="time-input">
+                                    </div>
+                                    <div class="time-input-group">
+                                        <label>End Time</label>
+                                        <input type="time" id="nap2EndTime" class="time-input">
+                                    </div>
+                                </div>
+                                <div class="nap-buttons">
+                                    <button class="secondary-btn nap-btn start" data-nap="2">Start</button>
+                                    <button class="secondary-btn nap-btn stop" data-nap="2">Stop</button>
+                                    <button class="secondary-btn nap-btn" data-nap="2" id="updateNap2">Update</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Today's Tasks -->
+                <div id="todayTasksSection" class="control-card" style="display: none;">
+                    <h3 class="section-title">Today's Tasks</h3>
+                    <div id="todayTasksList" class="task-list"></div>
+                </div>
+                
+                <div class="schedule-container">
                         <div class="nap-card">
                             <div class="nap-header">
                                 <label class="switch">
@@ -439,8 +501,10 @@
 
                 <!-- Step 8: Review & Confirm -->
                 <div class="wizard-step" id="step8" style="display: none;">
-                    <h3>Review Tomorrow's Schedule</h3>
-                    <p class="step-desc">Here's your calculated schedule</p>
+                    <h3>Review Tomorrow's Plan</h3>
+                    <p class="step-desc">Check your schedule and tasks</p>
+                    
+                    <div id="tomorrowTasksPreview" class="tomorrow-tasks-preview"></div>
                     
                     <div id="schedulePreview" class="schedule-preview"></div>
                     

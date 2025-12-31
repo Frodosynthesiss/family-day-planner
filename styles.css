@@ -516,6 +516,80 @@ input:checked + .slider:before {
     cursor: not-allowed;
 }
 
+.nap-time-inputs {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.75rem;
+    margin-bottom: 0.75rem;
+}
+
+.time-input-group {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+.time-input-group label {
+    font-size: 0.8125rem;
+    color: var(--text-secondary);
+    font-weight: 500;
+}
+
+.nap-buttons {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 0.5rem;
+}
+
+.section-title {
+    font-size: 1.125rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 1rem;
+}
+
+.task-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.task-item {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.875rem;
+    background: var(--bg-base);
+    border: 1.5px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    transition: var(--transition-fast);
+}
+
+.task-item:hover {
+    border-color: var(--border-medium);
+}
+
+.task-item input[type="checkbox"] {
+    width: 20px;
+    height: 20px;
+    accent-color: var(--success);
+}
+
+.task-item.completed {
+    opacity: 0.6;
+}
+
+.task-item.completed label {
+    text-decoration: line-through;
+    color: var(--text-tertiary);
+}
+
+.task-item label {
+    flex: 1;
+    cursor: pointer;
+    font-size: 0.9375rem;
+}
+
 .nap-time {
     display: block;
     text-align: center;
@@ -1259,6 +1333,36 @@ input:checked + .slider:before {
 }
 
 /* Schedule Preview */
+/* Schedule Preview */
+.tomorrow-tasks-preview {
+    background: var(--bg-base);
+    border-radius: var(--radius-md);
+    padding: 1rem;
+    margin-bottom: 1rem;
+}
+
+.tomorrow-tasks-preview h4 {
+    font-size: 0.9375rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 0.75rem;
+}
+
+.tomorrow-tasks-preview .task-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.tomorrow-tasks-preview .task-preview-item {
+    padding: 0.625rem;
+    background: white;
+    border: 1.5px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    font-size: 0.875rem;
+    color: var(--text-primary);
+}
+
 .schedule-preview {
     background: var(--bg-base);
     border-radius: var(--radius-md);

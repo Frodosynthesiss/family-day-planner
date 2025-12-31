@@ -1188,6 +1188,26 @@ const wizard = {
         const schedule = this.calculateSchedule();
         const warnings = this.detectConflicts(schedule);
         
+        // Render tomorrow's tasks
+        const tasksContainer = document.getElementById('tomorrowTasksPreview');
+        const tomorrowTasks = state.tasks.filter(t => 
+            this.data.selectedTasks.includes(t.id)
+        );
+        
+        if (tomorrowTasks.length > 0) {
+            tasksContainer.innerHTML = `
+                <h4>Tomorrow's Tasks (${tomorrowTasks.length})</h4>
+                <div class="task-list">
+                    ${tomorrowTasks.map(task => `
+                        <div class="task-preview-item">✓ ${task.title}</div>
+                    `).join('')}
+                </div>
+            `;
+            tasksContainer.style.display = 'block';
+        } else {
+            tasksContainer.style.display = 'none';
+        }
+        
         // Render schedule
         const scheduleContainer = document.getElementById('schedulePreview');
         if (schedule.blocks.length === 0) {
@@ -1998,9 +2018,13 @@ function setupEventHandlers() {
                 log.naps[`nap${napNum}`].start = utils.getCurrentTime();
                 btn.disabled = true;
                 btn.nextElementSibling.disabled = false;
-            } else {
+                // Update input field
+                document.getElementById(`nap${napNum}StartTime`).value = log.naps[`nap${napNum}`].start;
+            } else if (btn.classList.contains('stop')) {
                 log.naps[`nap${napNum}`].end = utils.getCurrentTime();
                 btn.disabled = true;
+                // Update input field
+                document.getElementById(`nap${napNum}EndTime`).value = log.naps[`nap${napNum}`].end;
             }
             
             await db_ops.saveDayLog(date, log);
@@ -2008,6 +2032,69 @@ function setupEventHandlers() {
             await renderTodaySchedule();
         });
     });
+    
+    // Manual nap time update buttons
+    document.getElementById('updateNap1').addEventListener('click', async () => {
+        await updateManualNapTime(1);
+    });
+    
+    document.getElementById('updateNap2').addEventListener('click', async () => {
+        await updateManualNapTime(2);
+    });
+    
+    // Manual nap time inputs trigger update on change
+    ['nap1StartTime', 'nap1EndTime', 'nap2StartTime', 'nap2EndTime'].forEach(id => {
+        document.getElementById(id).addEventListener('change', async (e) => {
+            const napNum = id.includes('nap1') ? 1 : 2;
+            await updateManualNapTime(napNum);
+        });
+    });
+    
+    async function updateManualNapTime(napNum) {
+        const date = utils.getTodayString();
+        const startInput = document.getElementById(`nap${napNum}StartTime`);
+        const endInput = document.getElementById(`nap${napNum}EndTime`);
+        
+        const log = await db_ops.getDayLog(date) || {};
+        if (!log.naps) log.naps = {};
+        if (!log.naps[`nap${napNum}`]) log.naps[`nap${napNum}`] = {};
+        
+        if (startInput.value) {
+            log.naps[`nap${napNum}`].start = startInput.value;
+        }
+        if (endInput.value) {
+            log.naps[`nap${napNum}`].end = endInput.value;
+        }
+        
+        await db_ops.saveDayLog(date, log);
+        updateNapDisplay(napNum, log.naps[`nap${napNum}`]);
+        await renderTodaySchedule();
+        utils.showToast(`Nap ${napNum} time updated`, 'success');
+    }
+    
+    // Load nap times into inputs when page loads
+    async function loadNapTimes() {
+        const date = utils.getTodayString();
+        const log = await db_ops.getDayLog(date);
+        
+        if (log?.naps?.nap1) {
+            if (log.naps.nap1.start) {
+                document.getElementById('nap1StartTime').value = log.naps.nap1.start;
+            }
+            if (log.naps.nap1.end) {
+                document.getElementById('nap1EndTime').value = log.naps.nap1.end;
+            }
+        }
+        
+        if (log?.naps?.nap2) {
+            if (log.naps.nap2.start) {
+                document.getElementById('nap2StartTime').value = log.naps.nap2.start;
+            }
+            if (log.naps.nap2.end) {
+                document.getElementById('nap2EndTime').value = log.naps.nap2.end;
+            }
+        }
+    }
     
     // Tasks
     document.getElementById('addTaskBtn').addEventListener('click', async () => {
@@ -2028,7 +2115,7 @@ function setupEventHandlers() {
     
     // Task interactions (event delegation)
     document.addEventListener('click', async (e) => {
-        if (e.target.classList.contains('task-checkbox')) {
+        if (e.target.classList.contains('task-checkbox') || e.target.classList.contains('task-checkbox-today')) {
             const id = e.target.dataset.id;
             const checked = e.target.checked;
             
@@ -2036,6 +2123,11 @@ function setupEventHandlers() {
                 status: checked ? 'done' : 'open',
                 completedAt: checked ? firebase.firestore.FieldValue.serverTimestamp() : null
             });
+            
+            // Update UI
+            if (e.target.classList.contains('task-checkbox-today')) {
+                renderTodayTasks();
+            }
         }
         
         if (e.target.classList.contains('task-delete')) {
@@ -2158,10 +2250,35 @@ async function loadData() {
         renderSettings();
         await renderTodaySchedule();
         renderTomorrowPreview();
+        renderTodayTasks();
+        await loadNapTimes();
     } catch (error) {
         console.error('Error loading data:', error);
         utils.showToast('Failed to load data', 'error');
     }
+}
+
+function renderTodayTasks() {
+    const todayStr = utils.getTodayString();
+    const todayTasks = state.tasks.filter(t => t.assignedDate === todayStr);
+    const container = document.getElementById('todayTasksList');
+    const section = document.getElementById('todayTasksSection');
+    
+    if (todayTasks.length === 0) {
+        section.style.display = 'none';
+        return;
+    }
+    
+    section.style.display = 'block';
+    container.innerHTML = todayTasks.map(task => `
+        <div class="task-item ${task.status === 'done' ? 'completed' : ''}">
+            <input type="checkbox" 
+                   class="task-checkbox-today"
+                   data-id="${task.id}"
+                   ${task.status === 'done' ? 'checked' : ''}>
+            <label>${task.title}</label>
+        </div>
+    `).join('');
 }
 
 async function renderTodaySchedule() {
