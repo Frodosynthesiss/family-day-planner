@@ -3,13 +3,12 @@
 
 // Firebase Configuration
 const firebaseConfig = {
-  apiKey: "AIzaSyA2YSjOktRbinbKMjIy1pbd_Bkbwp3ruRY",
-  authDomain: "vega-payne-command-center.firebaseapp.com",
-  projectId: "vega-payne-command-center",
-  storageBucket: "vega-payne-command-center.firebasestorage.app",
-  messagingSenderId: "325061344708",
-  appId: "1:325061344708:web:397bff2f1776308a997891",
-  measurementId: "G-JHR2MYTHM1"
+    apiKey: "YOUR_FIREBASE_API_KEY",
+    authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
+    projectId: "YOUR_PROJECT_ID",
+    storageBucket: "YOUR_PROJECT_ID.appspot.com",
+    messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
+    appId: "YOUR_APP_ID"
 };
 
 // Initialize Firebase
@@ -53,13 +52,21 @@ const utils = {
     },
     
     getTodayString() {
-        return new Date().toISOString().split('T')[0];
+        const today = new Date();
+        // Get local date string in YYYY-MM-DD format
+        const year = today.getFullYear();
+        const month = String(today.getMonth() + 1).padStart(2, '0');
+        const day = String(today.getDate()).padStart(2, '0');
+        return `${year}-${month}-${day}`;
     },
     
     getTomorrowString() {
         const tomorrow = new Date();
         tomorrow.setDate(tomorrow.getDate() + 1);
-        return tomorrow.toISOString().split('T')[0];
+        const year = tomorrow.getFullYear();
+        const month = String(tomorrow.getMonth() + 1).padStart(2, '0');
+        const day = String(tomorrow.getDate()).padStart(2, '0');
+        return `${year}-${month}-${day}`;
     },
     
     getCurrentTime() {
@@ -112,12 +119,31 @@ const db_ops = {
     getDefaultSettings() {
         return {
             constraints: [
-                { name: 'Nap 1 Duration', value: '90 min' },
-                { name: 'Nap 2 Duration', value: '90 min' },
-                { name: 'Wake Window Before Nap 1', value: '2.5 hrs' },
-                { name: 'Wake Window Between Naps', value: '3 hrs' },
+                { name: 'Wake Window 1', value: '3-3.5 hrs' },
+                { name: 'Nap 1 Duration', value: '40-90 min' },
+                { name: 'Wake Window 2', value: '3.5-4 hrs' },
+                { name: 'Nap 2 Duration', value: '40-90 min' },
+                { name: 'Wake Window 3', value: '4-4.25 hrs' },
                 { name: 'Bedtime Target', value: '7:00 PM' }
             ],
+            routineBlocks: {
+                wakeUp: { duration: 5, title: 'Wake Up Time' },
+                familyCuddle: { duration: 10, title: 'Family Cuddle' },
+                getDressed: { duration: 10, title: 'Get Dressed' },
+                breakfastPrep: { duration: 10, title: 'Breakfast Prep' },
+                breakfast: { duration: 20, title: 'Breakfast' },
+                brushTeethMorning: { duration: 5, title: 'Brush Teeth' },
+                napRoutine: { duration: 10, title: 'Nap Time Routine' },
+                lunchPrep: { duration: 10, title: 'Lunch Prep' },
+                lunch: { duration: 20, title: 'Lunch' },
+                snackMilk: { duration: 10, title: 'Snack + Milk' },
+                dinnerPrep: { duration: 10, title: 'Dinner Prep' },
+                dinner: { duration: 20, title: 'Dinner' },
+                bath: { duration: 20, title: 'Bath Time' },
+                brushTeethEvening: { duration: 5, title: 'Brush Teeth' },
+                bedtimeRoutine: { duration: 15, title: 'Bedtime Routine' }
+            },
+            lastBathDate: null,
             googleCalendar: null
         };
     },
@@ -851,6 +877,7 @@ const wizard = {
                 break;
             case 4:
                 this.renderAppointments();
+                await this.checkBathReminder();
                 break;
             case 5:
                 await this.renderTodayTaskReview();
@@ -864,6 +891,30 @@ const wizard = {
             case 8:
                 this.renderSchedulePreview();
                 break;
+        }
+    },
+    
+    async checkBathReminder() {
+        const settings = state.settings || await db_ops.getSettings();
+        const lastBath = settings.lastBathDate;
+        const bathReminder = document.getElementById('bathReminder');
+        
+        if (!lastBath) {
+            // No bath record, show reminder
+            bathReminder.style.display = 'block';
+            document.getElementById('daysSinceBath').textContent = '?';
+            return;
+        }
+        
+        const lastBathDate = new Date(lastBath);
+        const today = new Date();
+        const daysSince = Math.floor((today - lastBathDate) / (1000 * 60 * 60 * 24));
+        
+        if (daysSince >= 3) {
+            bathReminder.style.display = 'block';
+            document.getElementById('daysSinceBath').textContent = daysSince;
+        } else {
+            bathReminder.style.display = 'none';
         }
     },
     
@@ -1288,6 +1339,10 @@ const wizard = {
     saveCurrentStep() {
         if (this.currentStep === 1) {
             this.data.wakeTarget = document.getElementById('wakeTarget').value;
+        } else if (this.currentStep === 4) {
+            // Save bath decision
+            const bathCheckbox = document.getElementById('scheduleBath');
+            this.data.includeBath = bathCheckbox ? bathCheckbox.checked : false;
         } else if (this.currentStep === 6) {
             this.data.brainDump = document.getElementById('brainDumpText').value;
         }
@@ -1306,6 +1361,13 @@ const wizard = {
         };
         await db_ops.saveDayPlan(tomorrow, planData);
         
+        // Update bath date if scheduled
+        if (this.data.includeBath) {
+            const updatedSettings = state.settings || await db_ops.getSettings();
+            updatedSettings.lastBathDate = tomorrow;
+            await db_ops.saveSettings(updatedSettings);
+        }
+        
         // Mark today's tasks as complete/incomplete
         for (const [taskId, completed] of Object.entries(this.data.todayTasksCompleted)) {
             if (completed) {
@@ -1316,13 +1378,25 @@ const wizard = {
             }
         }
         
-        // Add brain dump tasks
-        if (this.data.brainDump.trim()) {
+        // Add brain dump tasks FIRST (before assigning selected tasks)
+        if (this.data.brainDump && this.data.brainDump.trim()) {
             const tasks = this.data.brainDump.split('\n').filter(t => t.trim());
             for (const task of tasks) {
-                await db_ops.addTask(task.trim());
+                const newTask = await db_ops.addTask(task.trim());
+                // If this task was selected in step 7, it needs to be assigned
+                // Since we just created it, we need to track it
+                if (newTask && newTask.id) {
+                    // Check if task title was selected (this is a workaround)
+                    // We'll need to reload tasks after brain dump
+                }
             }
         }
+        
+        // Wait a moment for tasks to be created
+        await new Promise(resolve => setTimeout(resolve, 500));
+        
+        // Reload tasks to get the new brain dump tasks
+        state.tasks = await db_ops.getTasks();
         
         // Assign selected tasks to tomorrow
         for (const taskId of this.data.selectedTasks) {
@@ -1367,6 +1441,21 @@ function setupEventHandlers() {
     // Wizard
     document.getElementById('openWizardBtn').addEventListener('click', () => wizard.open());
     document.getElementById('closeWizard').addEventListener('click', () => wizard.close());
+    
+    document.getElementById('clearPlanBtn').addEventListener('click', async () => {
+        if (confirm('Clear tomorrow\'s plan? This cannot be undone.')) {
+            const tomorrow = utils.getTomorrowString();
+            try {
+                await db.collection('families').doc(FAMILY_ID)
+                    .collection('day_plans').doc(tomorrow).delete();
+                utils.showToast('Plan cleared', 'success');
+                await loadData();
+            } catch (error) {
+                console.error('Error clearing plan:', error);
+                utils.showToast('Failed to clear plan', 'error');
+            }
+        }
+    });
     
     document.querySelectorAll('.wizard-next').forEach(btn => {
         btn.addEventListener('click', () => wizard.next());
@@ -1418,8 +1507,10 @@ function setupEventHandlers() {
         const date = utils.getTodayString();
         const log = await db_ops.getDayLog(date) || {};
         log.actualWake = e.target.value;
+        log.date = date; // Ensure date is set
         await db_ops.saveDayLog(date, log);
         await renderTodaySchedule();
+        utils.showToast('Wake time updated - schedule adjusted', 'success');
     });
     
     // Nap toggles

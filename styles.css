@@ -1345,6 +1345,27 @@ input:checked + .slider:before {
     border-left-color: var(--info);
 }
 
+.bath-reminder {
+    padding: 1rem;
+    background: var(--bg-base);
+    border-radius: var(--radius-md);
+}
+
+.bath-toggle {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.75rem;
+    cursor: pointer;
+    font-size: 0.9375rem;
+}
+
+.bath-toggle input[type="checkbox"] {
+    width: 20px;
+    height: 20px;
+    accent-color: var(--info);
+}
+
 .empty-state-text {
     text-align: center;
     color: var(--text-tertiary);

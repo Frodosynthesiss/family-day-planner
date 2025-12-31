@@ -90,6 +90,9 @@
                             <polyline points="12 5 19 12 12 19"/>
                         </svg>
                     </button>
+                    <button id="clearPlanBtn" class="secondary-btn" style="margin-top: 0.75rem;">
+                        Clear Tomorrow's Plan
+                    </button>
                 </div>
                 <div id="tomorrowPreview" class="preview-section"></div>
             </div>
@@ -369,6 +372,18 @@
                     <p class="step-desc">Any appointments or fixed commitments?</p>
                     <div id="appointmentsList" class="appointments-list"></div>
                     <button class="secondary-btn full-width" id="addAppointment">+ Add Appointment</button>
+                    
+                    <!-- Bath Reminder -->
+                    <div class="bath-reminder" id="bathReminder" style="margin-top: 1.5rem; display: none;">
+                        <div class="warning-item warning">
+                            🛁 It's been <span id="daysSinceBath">3+</span> days since last bath. Schedule one tonight?
+                        </div>
+                        <label class="bath-toggle">
+                            <input type="checkbox" id="scheduleBath">
+                            <span>Yes, give bath tonight (needs both parents in evening)</span>
+                        </label>
+                    </div>
+                    
                     <div class="wizard-nav">
                         <button class="secondary-btn wizard-back">Back</button>
                         <button class="primary-btn wizard-next">Continue</button>
