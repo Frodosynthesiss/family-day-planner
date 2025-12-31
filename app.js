@@ -120,12 +120,11 @@ const db_ops = {
     getDefaultSettings() {
         return {
             constraints: [
-                { name: 'Wake Window 1', value: '3-3.5 hrs' },
-                { name: 'Nap 1 Duration', value: '40-90 min' },
-                { name: 'Wake Window 2', value: '3.5-4 hrs' },
-                { name: 'Nap 2 Duration', value: '40-90 min' },
-                { name: 'Wake Window 3', value: '4-4.25 hrs' },
-                { name: 'Bedtime Target', value: '7:00 PM' }
+                { name: 'Wake Window 1', value: '3.25 hrs' },
+                { name: 'Nap 1 Duration', value: '1 hr' },
+                { name: 'Wake Window 2', value: '3.5 hrs' },
+                { name: 'Nap 2 Duration', value: '1 hr' },
+                { name: 'Wake Window 3', value: '4 hrs' }
             ],
             routineBlocks: {
                 wakeUp: { duration: 5, title: 'Wake Up Time' },
@@ -1134,29 +1133,10 @@ const wizard = {
             return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
         };
         
-        const parseWakeWindow = (value) => {
-            // Parse ranges like "3-3.5 hrs" -> use middle value
-            const match = value.match(/([\d.]+)-([\d.]+)\s*hrs?/);
-            if (match) {
-                const min = parseFloat(match[1]);
-                const max = parseFloat(match[2]);
-                return ((min + max) / 2) * 60; // Return minutes
-            }
-            // Fallback to single value
-            const singleMatch = value.match(/([\d.]+)\s*hrs?/);
-            if (singleMatch) return parseFloat(singleMatch[1]) * 60;
-            return 0;
-        };
-        
-        const parseNapDuration = (value) => {
-            // Parse ranges like "40-90 min" -> use middle value
-            const match = value.match(/(\d+)-(\d+)\s*min/);
-            if (match) {
-                const min = parseInt(match[1]);
-                const max = parseInt(match[2]);
-                return (min + max) / 2;
-            }
-            return 65; // Default 65 min (middle of 40-90)
+        const minutesBetween = (start, end) => {
+            const [h1, m1] = start.split(':').map(Number);
+            const [h2, m2] = end.split(':').map(Number);
+            return (h2 * 60 + m2) - (h1 * 60 + m1);
         };
         
         const isTimeInRange = (time, start, end) => {
@@ -1208,21 +1188,17 @@ const wizard = {
             currentTime = addMinutes(currentTime, duration);
         };
         
-        // Get constraints
-        const constraints = this.data.constraints;
-        const wakeWindow1 = parseWakeWindow(constraints.find(c => c.name === 'Wake Window 1')?.value || '3-3.5 hrs');
-        const wakeWindow2 = parseWakeWindow(constraints.find(c => c.name === 'Wake Window 2')?.value || '3.5-4 hrs');
-        const wakeWindow3 = parseWakeWindow(constraints.find(c => c.name === 'Wake Window 3')?.value || '4-4.25 hrs');
-        const napDuration1 = parseNapDuration(constraints.find(c => c.name === 'Nap 1 Duration')?.value || '40-90 min');
-        const napDuration2 = parseNapDuration(constraints.find(c => c.name === 'Nap 2 Duration')?.value || '40-90 min');
-        const bedtime = constraints.find(c => c.name === 'Bedtime Target')?.value || '7:00 PM';
-        const bedtimeHour = bedtime.match(/(\d+)/)?.[1] || '19';
-        const bedtimeTime = `${bedtimeHour.padStart(2, '0')}:00`;
+        // Fixed durations (in minutes)
+        const WAKE_WINDOW_1 = 3.25 * 60; // 195 min
+        const WAKE_WINDOW_2 = 3.5 * 60;  // 210 min
+        const WAKE_WINDOW_3 = 4 * 60;    // 240 min
+        const NAP_DURATION = 60;         // 1 hour forecast
         
-        // ========== WAKE WINDOW 1 (3-3.5 hrs) ==========
+        // ========== WAKE WINDOW 1 (3.25 hours) ==========
         const ww1Start = currentTime;
+        const ww1End = addMinutes(ww1Start, WAKE_WINDOW_1);
         
-        // Morning routine blocks
+        // Fixed morning routine
         addRoutineBlock('Wake Up Time', 5);
         addRoutineBlock('Family Cuddle', 10);
         addRoutineBlock('Get Dressed', 10);
@@ -1230,28 +1206,31 @@ const wizard = {
         addRoutineBlock('Breakfast', 20, 'meal');
         addRoutineBlock('Brush Teeth', 5);
         
-        // Calculate when Nap 1 should start
-        const nap1RoutineStart = addMinutes(ww1Start, wakeWindow1 - 10); // 10 min before nap for routine
-        const nap1Start = addMinutes(nap1RoutineStart, 10);
-        const nap1End = addMinutes(nap1Start, napDuration1);
+        // Calculate when nap routine needs to start (10min before WW1 ends)
+        const napRoutine1Start = addMinutes(ww1End, -10);
         
-        // Fill with Open Time until nap routine
-        if (currentTime < nap1RoutineStart) {
+        // Fill with open time until nap routine
+        const openTime1Duration = minutesBetween(currentTime, napRoutine1Start);
+        if (openTime1Duration > 0) {
             blocks.push({
                 start: currentTime,
-                end: nap1RoutineStart,
+                end: napRoutine1Start,
                 title: 'Open Time',
                 type: 'open',
                 caregiver: 'Anyone'
             });
-            currentTime = nap1RoutineStart;
+            currentTime = napRoutine1Start;
         }
         
-        // Nap 1 routine and nap
+        // Nap Time Routine (right before nap)
         addRoutineBlock('Nap Time Routine', 10);
-        const nap1Caregiver = getAvailableCaregiver(currentTime, true);
+        
+        // Nap 1
+        const nap1Start = currentTime;
+        const nap1End = addMinutes(nap1Start, NAP_DURATION);
+        const nap1Caregiver = getAvailableCaregiver(nap1Start, true);
         blocks.push({
-            start: currentTime,
+            start: nap1Start,
             end: nap1End,
             title: 'Nap 1',
             type: 'nap',
@@ -1259,55 +1238,60 @@ const wizard = {
         });
         currentTime = nap1End;
         
-        // ========== WAKE WINDOW 2 (3.5-4 hrs) ==========
+        // ========== WAKE WINDOW 2 (3.5 hours) ==========
         const ww2Start = currentTime;
+        const ww2End = addMinutes(ww2Start, WAKE_WINDOW_2);
         
         addRoutineBlock('Wake Up Time', 5);
         
-        // Calculate when lunch should be (roughly 1/3 into wake window)
-        const lunchStart = addMinutes(ww2Start, Math.floor(wakeWindow2 / 3));
+        // Calculate when snack needs to start (20min before WW2 ends: 10min snack + 10min routine)
+        const snack2Start = addMinutes(ww2End, -20);
         
-        // Open time until lunch
-        if (currentTime < addMinutes(lunchStart, -10)) {
+        // We need to fit lunch somewhere in the middle
+        // Let's put lunch roughly 1/3 into the wake window
+        const lunchPrepStart = addMinutes(ww2Start, Math.floor(WAKE_WINDOW_2 / 3));
+        
+        // Open time before lunch
+        const openTime2aDuration = minutesBetween(currentTime, addMinutes(lunchPrepStart, -10));
+        if (openTime2aDuration > 0) {
             blocks.push({
                 start: currentTime,
-                end: addMinutes(lunchStart, -10),
+                end: addMinutes(lunchPrepStart, -10),
                 title: 'Open Time',
                 type: 'open',
                 caregiver: 'Anyone'
             });
-            currentTime = addMinutes(lunchStart, -10);
+            currentTime = addMinutes(lunchPrepStart, -10);
         }
         
         addRoutineBlock('Lunch Prep', 10);
         addRoutineBlock('Lunch', 20, 'meal');
         
-        // Calculate when Nap 2 should start
-        const nap2RoutineStart = addMinutes(ww2Start, wakeWindow2 - 10);
-        const nap2Start = addMinutes(nap2RoutineStart, 10);
-        const nap2End = addMinutes(nap2Start, napDuration2);
-        
-        // Calculate when snack should be (10 min before nap routine)
-        const snackTime = addMinutes(nap2RoutineStart, -10);
-        
-        // Open time until snack
-        if (currentTime < snackTime) {
+        // Open time after lunch until snack
+        const openTime2bDuration = minutesBetween(currentTime, snack2Start);
+        if (openTime2bDuration > 0) {
             blocks.push({
                 start: currentTime,
-                end: snackTime,
+                end: snack2Start,
                 title: 'Open Time',
                 type: 'open',
                 caregiver: 'Anyone'
             });
-            currentTime = snackTime;
+            currentTime = snack2Start;
         }
         
+        // Snack + Milk (right before nap routine)
         addRoutineBlock('Snack + Milk', 10, 'meal');
+        
+        // Nap Time Routine (right before nap)
         addRoutineBlock('Nap Time Routine', 10);
         
-        const nap2Caregiver = getAvailableCaregiver(currentTime, true);
+        // Nap 2
+        const nap2Start = currentTime;
+        const nap2End = addMinutes(nap2Start, NAP_DURATION);
+        const nap2Caregiver = getAvailableCaregiver(nap2Start, true);
         blocks.push({
-            start: currentTime,
+            start: nap2Start,
             end: nap2End,
             title: 'Nap 2',
             type: 'nap',
@@ -1315,83 +1299,63 @@ const wizard = {
         });
         currentTime = nap2End;
         
-        // ========== WAKE WINDOW 3 (4-4.25 hrs) ==========
+        // ========== WAKE WINDOW 3 (4 hours) ==========
         const ww3Start = currentTime;
+        const ww3End = addMinutes(ww3Start, WAKE_WINDOW_3);
+        const bedtime = ww3End; // Bedtime is calculated!
         
         addRoutineBlock('Wake Up Time', 5);
+        addRoutineBlock('Snack + Milk', 10, 'meal');
         
-        // Calculate when dinner should be (roughly 1/3 into wake window)
-        const dinnerStart = addMinutes(ww3Start, Math.floor(wakeWindow3 / 3));
-        
-        // Open time until dinner
-        if (currentTime < addMinutes(dinnerStart, -10)) {
-            blocks.push({
-                start: currentTime,
-                end: addMinutes(dinnerStart, -10),
-                title: 'Open Time',
-                type: 'open',
-                caregiver: 'Anyone'
-            });
-            currentTime = addMinutes(dinnerStart, -10);
-        }
+        // Fixed 40min open time
+        addRoutineBlock('Open Time', 40, 'open');
         
         addRoutineBlock('Dinner Prep', 10);
         addRoutineBlock('Dinner', 20, 'meal');
         
-        // Calculate bedtime routine start
-        const bedtimeRoutineStart = addMinutes(bedtimeTime, -15);
-        const brushTeethTime = addMinutes(bedtimeRoutineStart, -5);
-        const eveningSnackTime = addMinutes(brushTeethTime, -10);
+        // Calculate when bedtime routine needs to start
+        // Brush Teeth (5min) + Bedtime Routine (15min) = 20min before bedtime
+        // If bath scheduled, add 20min more = 40min before bedtime
+        const bedtimeRoutineStart = this.data.includeBath ? 
+            addMinutes(bedtime, -40) : 
+            addMinutes(bedtime, -20);
         
-        // Bath logic - needs both parents AND scheduled
-        let bathTime = null;
-        if (this.data.includeBath) {
-            // Place bath after dinner, before evening snack
-            bathTime = currentTime;
-            const bathEnd = addMinutes(bathTime, 20);
-            
-            // Check if both parents available
-            const bathCaregiver = areBothParentsAvailable(bathTime) ? 'Both Parents' : 'Both Parents (UNAVAILABLE!)';
-            
-            // Open time before bath if needed
-            if (currentTime < bathTime) {
-                blocks.push({
-                    start: currentTime,
-                    end: bathTime,
-                    title: 'Open Time',
-                    type: 'open',
-                    caregiver: 'Anyone'
-                });
-            }
-            
-            blocks.push({
-                start: bathTime,
-                end: bathEnd,
-                title: 'Bath Time',
-                type: 'bath',
-                caregiver: bathCaregiver
-            });
-            currentTime = bathEnd;
-        }
-        
-        // Open time until evening snack
-        if (currentTime < eveningSnackTime) {
+        // Flexible open time fills remaining space
+        const openTime3Duration = minutesBetween(currentTime, bedtimeRoutineStart);
+        if (openTime3Duration > 0) {
             blocks.push({
                 start: currentTime,
-                end: eveningSnackTime,
+                end: bedtimeRoutineStart,
                 title: 'Open Time',
                 type: 'open',
                 caregiver: 'Anyone'
             });
-            currentTime = eveningSnackTime;
+            currentTime = bedtimeRoutineStart;
         }
         
-        addRoutineBlock('Snack + Milk', 10, 'meal');
+        // Bath (if scheduled) - right before brush teeth
+        if (this.data.includeBath) {
+            const bathCaregiver = areBothParentsAvailable(currentTime) ? 
+                'Both Parents' : 
+                'Both Parents (UNAVAILABLE!)';
+            blocks.push({
+                start: currentTime,
+                end: addMinutes(currentTime, 20),
+                title: 'Bath Time',
+                type: 'bath',
+                caregiver: bathCaregiver
+            });
+            currentTime = addMinutes(currentTime, 20);
+        }
+        
+        // Brush Teeth (right before bedtime routine)
         addRoutineBlock('Brush Teeth', 5);
+        
+        // Bedtime Routine (right before bedtime)
         addRoutineBlock('Bedtime Routine', 15);
         
         // ========== INSERT APPOINTMENTS ==========
-        // Now intelligently insert appointments into the schedule
+        // Now intelligently insert appointments into open time blocks
         const sortedAppointments = [...this.data.appointments]
             .filter(apt => apt.start && apt.title)
             .sort((a, b) => a.start.localeCompare(b.start));
@@ -1400,11 +1364,14 @@ const wizard = {
             const aptStart = apt.start;
             const aptEnd = apt.end || addMinutes(aptStart, 60);
             
-            // Find where to insert this appointment
-            let insertIndex = blocks.findIndex(b => b.type === 'open' && aptStart >= b.start && aptStart < b.end);
+            // Find which open time block contains this appointment
+            let insertIndex = blocks.findIndex(b => 
+                b.type === 'open' && 
+                aptStart >= b.start && 
+                aptStart < b.end
+            );
             
             if (insertIndex !== -1) {
-                // Split the open time block
                 const openBlock = blocks[insertIndex];
                 const newBlocks = [];
                 
@@ -1428,7 +1395,7 @@ const wizard = {
                     caregiver: 'Family'
                 });
                 
-                // Open time after appointment (if any)
+                // Open time after appointment (if any remains)
                 if (aptEnd < openBlock.end) {
                     newBlocks.push({
                         start: aptEnd,
@@ -1439,15 +1406,20 @@ const wizard = {
                     });
                 }
                 
-                // Replace the open block with new blocks
+                // Replace the open block with split blocks
                 blocks.splice(insertIndex, 1, ...newBlocks);
             }
         }
         
-        // Sort blocks by start time
+        // Sort all blocks by start time
         blocks.sort((a, b) => a.start.localeCompare(b.start));
         
-        return { blocks, nap1Start, nap2Start };
+        return { 
+            blocks, 
+            nap1Start, 
+            nap2Start,
+            bedtime  // Return calculated bedtime
+        };
     },
     
     detectConflicts(schedule) {
