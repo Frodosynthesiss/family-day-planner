@@ -1,47 +1,40 @@
-/* Static-site PWA service worker (relative paths). Bump version to refresh. */
-const CACHE_NAME = "family-day-planner-v1.0.4-v2";
+const CACHE_NAME = "fdp-shared-v3";
 const ASSETS = [
   "./",
   "./index.html",
   "./styles.css",
   "./app.js",
   "./manifest.json",
-  "./icons/icon-192.png",
-  "./icons/icon-512.png"
+  "./icon-192.png",
+  "./icon-512.png"
 ];
 
-self.addEventListener("install", (e) => {
-  e.waitUntil((async () => {
-    const c = await caches.open(CACHE_NAME);
-    await c.addAll(ASSETS);
-    self.skipWaiting();
-  })());
+self.addEventListener("install", (event) => {
+  event.waitUntil(
+    caches.open(CACHE_NAME).then((cache) => cache.addAll(ASSETS)).then(() => self.skipWaiting())
+  );
 });
 
-self.addEventListener("activate", (e) => {
-  e.waitUntil((async () => {
-    const keys = await caches.keys();
-    await Promise.all(keys.map(k => (k === CACHE_NAME ? null : caches.delete(k))));
-    self.clients.claim();
-  })());
+self.addEventListener("activate", (event) => {
+  event.waitUntil(
+    caches.keys().then((keys) =>
+      Promise.all(keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k)))
+    ).then(() => self.clients.claim())
+  );
 });
 
-self.addEventListener("fetch", (e) => {
-  if (e.request.method !== "GET") return;
-  e.respondWith((async () => {
-    const url = new URL(e.request.url);
-    if (url.origin !== self.location.origin) return fetch(e.request);
+self.addEventListener("fetch", (event) => {
+  const req = event.request;
+  if (req.method !== "GET") return;
 
-    const c = await caches.open(CACHE_NAME);
-    const cached = await c.match(e.request, { ignoreSearch: true });
-    if (cached) return cached;
-
-    try{
-      const res = await fetch(e.request);
-      if (res && res.ok) c.put(e.request, res.clone());
-      return res;
-    }catch{
-      return (await c.match("./index.html")) || new Response("Offline", {status:200});
-    }
-  })());
+  event.respondWith(
+    caches.match(req).then((cached) => {
+      if (cached) return cached;
+      return fetch(req).then((resp) => {
+        const copy = resp.clone();
+        caches.open(CACHE_NAME).then((cache) => cache.put(req, copy)).catch(()=>{});
+        return resp;
+      }).catch(() => caches.match("./index.html"));
+    })
+  );
 });
