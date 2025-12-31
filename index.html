@@ -303,21 +303,70 @@
                     <div class="progress-bar">
                         <div class="progress-fill" id="wizardProgress"></div>
                     </div>
-                    <span class="progress-text" id="wizardProgressText">Step 1 of 5</span>
+                    <span class="progress-text" id="wizardProgressText">Step 1 of 8</span>
                 </div>
 
+                <!-- Step 1: Wake Time -->
                 <div class="wizard-step" id="step1">
-                    <h3>Wake Time Target</h3>
+                    <h3>Wake Time</h3>
                     <p class="step-desc" id="wizardDate"></p>
                     <div class="form-field">
-                        <label>Target Wake Time</label>
+                        <label>What time do you expect baby to wake up?</label>
                         <input type="time" id="wakeTarget" class="time-input">
                     </div>
                     <button class="primary-btn full-width wizard-next">Continue</button>
                 </div>
 
+                <!-- Step 2: Parent Availability -->
                 <div class="wizard-step" id="step2" style="display: none;">
+                    <h3>Parent Availability</h3>
+                    <p class="step-desc">When are parents unavailable tomorrow?</p>
+                    
+                    <div class="availability-section">
+                        <h4>Kristyn Unavailable</h4>
+                        <div id="kristynUnavailableList" class="time-block-list"></div>
+                        <button class="secondary-btn full-width" data-person="kristyn">+ Add Time Block</button>
+                    </div>
+                    
+                    <div class="availability-section">
+                        <h4>Julio Unavailable</h4>
+                        <div id="julioUnavailableList" class="time-block-list"></div>
+                        <button class="secondary-btn full-width" data-person="julio">+ Add Time Block</button>
+                    </div>
+
+                    <div class="wizard-nav">
+                        <button class="secondary-btn wizard-back">Back</button>
+                        <button class="primary-btn wizard-next">Continue</button>
+                    </div>
+                </div>
+
+                <!-- Step 3: Nanny & Kayden Availability -->
+                <div class="wizard-step" id="step3" style="display: none;">
+                    <h3>Nanny & Kayden</h3>
+                    <p class="step-desc">When are they available tomorrow?</p>
+                    
+                    <div class="availability-section">
+                        <h4>Nanny Available</h4>
+                        <div id="nannyAvailableList" class="time-block-list"></div>
+                        <button class="secondary-btn full-width" data-person="nanny">+ Add Time Block</button>
+                    </div>
+                    
+                    <div class="availability-section">
+                        <h4>Kayden Available</h4>
+                        <div id="kaydenAvailableList" class="time-block-list"></div>
+                        <button class="secondary-btn full-width" data-person="kayden">+ Add Time Block</button>
+                    </div>
+
+                    <div class="wizard-nav">
+                        <button class="secondary-btn wizard-back">Back</button>
+                        <button class="primary-btn wizard-next">Continue</button>
+                    </div>
+                </div>
+
+                <!-- Step 4: Appointments -->
+                <div class="wizard-step" id="step4" style="display: none;">
                     <h3>Appointments</h3>
+                    <p class="step-desc">Any appointments or fixed commitments?</p>
                     <div id="appointmentsList" class="appointments-list"></div>
                     <button class="secondary-btn full-width" id="addAppointment">+ Add Appointment</button>
                     <div class="wizard-nav">
@@ -326,32 +375,51 @@
                     </div>
                 </div>
 
-                <div class="wizard-step" id="step3" style="display: none;">
-                    <h3>Caregiver Availability</h3>
-                    <p class="step-desc">Who's available for naps?</p>
-                    <div id="caregiverAvailability" class="caregiver-grid"></div>
-                    <div class="wizard-nav">
-                        <button class="secondary-btn wizard-back">Back</button>
-                        <button class="primary-btn wizard-next">Continue</button>
-                    </div>
-                </div>
-
-                <div class="wizard-step" id="step4" style="display: none;">
-                    <h3>Constraints</h3>
-                    <div id="constraintsList" class="constraints-list"></div>
-                    <div class="wizard-nav">
-                        <button class="secondary-btn wizard-back">Back</button>
-                        <button class="primary-btn wizard-next">Continue</button>
-                    </div>
-                </div>
-
+                <!-- Step 5: Review Today's Tasks -->
                 <div class="wizard-step" id="step5" style="display: none;">
-                    <h3>Quick Tasks</h3>
-                    <p class="step-desc">Any tasks for tomorrow?</p>
-                    <textarea id="brainDumpText" class="textarea" placeholder="Enter tasks, one per line..."></textarea>
+                    <h3>Today's Tasks</h3>
+                    <p class="step-desc">Did you complete today's tasks?</p>
+                    <div id="todayTaskReview" class="task-review-list"></div>
                     <div class="wizard-nav">
                         <button class="secondary-btn wizard-back">Back</button>
-                        <button class="primary-btn" id="saveWizard">Save Plan</button>
+                        <button class="primary-btn wizard-next">Continue</button>
+                    </div>
+                </div>
+
+                <!-- Step 6: Brain Dump -->
+                <div class="wizard-step" id="step6" style="display: none;">
+                    <h3>Brain Dump</h3>
+                    <p class="step-desc">What's on your mind for tomorrow?</p>
+                    <textarea id="brainDumpText" class="textarea" placeholder="Add new tasks, one per line..."></textarea>
+                    <div class="wizard-nav">
+                        <button class="secondary-btn wizard-back">Back</button>
+                        <button class="primary-btn wizard-next">Continue</button>
+                    </div>
+                </div>
+
+                <!-- Step 7: Choose Tomorrow's Focus -->
+                <div class="wizard-step" id="step7" style="display: none;">
+                    <h3>Tomorrow's Focus</h3>
+                    <p class="step-desc">Which tasks do you want to focus on?</p>
+                    <div id="taskSelectionList" class="task-selection-list"></div>
+                    <div class="wizard-nav">
+                        <button class="secondary-btn wizard-back">Back</button>
+                        <button class="primary-btn wizard-next">Review Schedule</button>
+                    </div>
+                </div>
+
+                <!-- Step 8: Review & Confirm -->
+                <div class="wizard-step" id="step8" style="display: none;">
+                    <h3>Review Tomorrow's Schedule</h3>
+                    <p class="step-desc">Here's your calculated schedule</p>
+                    
+                    <div id="schedulePreview" class="schedule-preview"></div>
+                    
+                    <div id="scheduleWarnings" class="schedule-warnings"></div>
+                    
+                    <div class="wizard-nav">
+                        <button class="secondary-btn wizard-back">Back</button>
+                        <button class="primary-btn" id="saveWizard">✓ Confirm Plan</button>
                     </div>
                 </div>
             </div>

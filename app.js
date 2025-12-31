@@ -3,13 +3,12 @@
 
 // Firebase Configuration
 const firebaseConfig = {
-  apiKey: "AIzaSyA2YSjOktRbinbKMjIy1pbd_Bkbwp3ruRY",
-  authDomain: "vega-payne-command-center.firebaseapp.com",
-  projectId: "vega-payne-command-center",
-  storageBucket: "vega-payne-command-center.firebasestorage.app",
-  messagingSenderId: "325061344708",
-  appId: "1:325061344708:web:397bff2f1776308a997891",
-  measurementId: "G-JHR2MYTHM1"
+    apiKey: "YOUR_FIREBASE_API_KEY",
+    authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
+    projectId: "YOUR_PROJECT_ID",
+    storageBucket: "YOUR_PROJECT_ID.appspot.com",
+    messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
+    appId: "YOUR_APP_ID"
 };
 
 // Initialize Firebase
@@ -453,6 +452,150 @@ const scheduler = {
             { name: 'Wake Window Between Naps', value: '3 hrs' },
             { name: 'Bedtime Target', value: '7:00 PM' }
         ];
+    },
+    
+    adjustScheduleForActualWake(plan, actualWake, napData = {}) {
+        // Recalculate schedule based on actual wake time
+        const blocks = [];
+        let currentTime = actualWake;
+        
+        const addMinutes = (time, minutes) => {
+            const [h, m] = time.split(':').map(Number);
+            const date = new Date();
+            date.setHours(h, m + minutes);
+            return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+        };
+        
+        const parseDuration = (duration) => {
+            const match = duration.match(/(\d+\.?\d*)\s*(hr|min)/);
+            if (!match) return 0;
+            const value = parseFloat(match[1]);
+            return match[2] === 'hr' ? value * 60 : value;
+        };
+        
+        // Get constraints
+        const constraints = plan.constraints || this.getDefaultConstraints();
+        const wakeWindow1 = parseDuration(constraints.find(c => c.name === 'Wake Window Before Nap 1')?.value || '2.5 hrs');
+        const napDuration1 = parseDuration(constraints.find(c => c.name === 'Nap 1 Duration')?.value || '90 min');
+        const wakeWindow2 = parseDuration(constraints.find(c => c.name === 'Wake Window Between Naps')?.value || '3 hrs');
+        const napDuration2 = parseDuration(constraints.find(c => c.name === 'Nap 2 Duration')?.value || '90 min');
+        
+        // Wake block
+        blocks.push({
+            start: currentTime,
+            end: addMinutes(currentTime, 30),
+            title: 'Wake & Morning Routine',
+            type: 'routine',
+            caregiver: 'Available'
+        });
+        currentTime = addMinutes(currentTime, 30);
+        
+        // Nap 1 - use actual if tracked, otherwise calculate
+        const nap1Start = napData?.nap1?.start || addMinutes(currentTime, wakeWindow1 - 30);
+        const nap1End = napData?.nap1?.end || addMinutes(nap1Start, napDuration1);
+        
+        // Find original nap 1 caregiver from plan
+        const originalNap1 = plan.calculatedSchedule?.find(b => b.title === 'Nap 1');
+        const nap1Caregiver = originalNap1?.caregiver || 'Available';
+        
+        if (currentTime < nap1Start) {
+            blocks.push({
+                start: currentTime,
+                end: nap1Start,
+                title: 'Open Time',
+                type: 'open',
+                caregiver: 'Anyone'
+            });
+        }
+        
+        blocks.push({
+            start: nap1Start,
+            end: nap1End,
+            title: 'Nap 1',
+            type: 'nap',
+            caregiver: nap1Caregiver
+        });
+        currentTime = nap1End;
+        
+        // Insert original appointments (they don't change)
+        const appointments = plan.appointments || [];
+        const sortedAppointments = appointments
+            .filter(apt => apt.start && apt.title)
+            .sort((a, b) => a.start.localeCompare(b.start));
+        
+        for (const apt of sortedAppointments) {
+            const aptEnd = apt.end || addMinutes(apt.start, 60);
+            
+            if (currentTime < apt.start) {
+                blocks.push({
+                    start: currentTime,
+                    end: apt.start,
+                    title: 'Open Time',
+                    type: 'open',
+                    caregiver: 'Anyone'
+                });
+            }
+            
+            blocks.push({
+                start: apt.start,
+                end: aptEnd,
+                title: apt.title,
+                type: 'appointment',
+                caregiver: 'Family'
+            });
+            currentTime = aptEnd;
+        }
+        
+        // Nap 2 - use actual if tracked, otherwise calculate
+        const nap2Start = napData?.nap2?.start || addMinutes(currentTime, wakeWindow2);
+        const nap2End = napData?.nap2?.end || addMinutes(nap2Start, napDuration2);
+        
+        const originalNap2 = plan.calculatedSchedule?.find(b => b.title === 'Nap 2');
+        const nap2Caregiver = originalNap2?.caregiver || 'Available';
+        
+        if (currentTime < nap2Start) {
+            blocks.push({
+                start: currentTime,
+                end: nap2Start,
+                title: 'Open Time',
+                type: 'open',
+                caregiver: 'Anyone'
+            });
+        }
+        
+        blocks.push({
+            start: nap2Start,
+            end: nap2End,
+            title: 'Nap 2',
+            type: 'nap',
+            caregiver: nap2Caregiver
+        });
+        currentTime = nap2End;
+        
+        // Evening & Bedtime
+        const bedtime = constraints.find(c => c.name === 'Bedtime Target')?.value || '19:00';
+        const bedtimeHour = bedtime.match(/(\d+)/)?.[1] || '19';
+        const bedtimeTime = `${bedtimeHour.padStart(2, '0')}:00`;
+        
+        if (currentTime < addMinutes(bedtimeTime, -30)) {
+            blocks.push({
+                start: currentTime,
+                end: addMinutes(bedtimeTime, -30),
+                title: 'Open Time',
+                type: 'open',
+                caregiver: 'Anyone'
+            });
+        }
+        
+        blocks.push({
+            start: addMinutes(bedtimeTime, -30),
+            end: bedtimeTime,
+            title: 'Bedtime Routine',
+            type: 'routine',
+            caregiver: 'Available'
+        });
+        
+        return blocks;
     }
 };
 
@@ -640,9 +783,10 @@ function renderSettings() {
     }
 }
 
-// Evening Wizard
+// Evening Wizard - Comprehensive 8-step planning
 const wizard = {
     currentStep: 1,
+    totalSteps: 8,
     data: {},
     
     open() {
@@ -650,8 +794,18 @@ const wizard = {
         this.currentStep = 1;
         this.data = {
             wakeTarget: '07:00',
+            parentUnavailable: {
+                kristyn: [],
+                julio: []
+            },
+            helpersAvailable: {
+                nanny: [],
+                kayden: []
+            },
             appointments: [],
-            caregiverAvailability: { nap1: [], nap2: [] },
+            todayTasksCompleted: {},
+            brainDump: '',
+            selectedTasks: [],
             constraints: state.settings?.constraints || scheduler.getDefaultConstraints()
         };
         this.renderStep();
@@ -663,29 +817,103 @@ const wizard = {
     
     renderStep() {
         // Hide all steps
-        for (let i = 1; i <= 5; i++) {
-            document.getElementById(`step${i}`).style.display = 'none';
+        for (let i = 1; i <= this.totalSteps; i++) {
+            const step = document.getElementById(`step${i}`);
+            if (step) step.style.display = 'none';
         }
         
         // Show current step
-        document.getElementById(`step${this.currentStep}`).style.display = 'block';
+        const currentStepEl = document.getElementById(`step${this.currentStep}`);
+        if (currentStepEl) currentStepEl.style.display = 'block';
         
         // Update progress
         const progressFill = document.getElementById('wizardProgress');
         const progressText = document.getElementById('wizardProgressText');
-        progressFill.style.width = `${(this.currentStep / 5) * 100}%`;
-        progressText.textContent = `Step ${this.currentStep} of 5`;
+        progressFill.style.width = `${(this.currentStep / this.totalSteps) * 100}%`;
+        progressText.textContent = `Step ${this.currentStep} of ${this.totalSteps}`;
         
-        // Render step content
-        if (this.currentStep === 1) {
-            document.getElementById('wizardDate').textContent = utils.formatDate(utils.getTomorrowString());
-            document.getElementById('wakeTarget').value = this.data.wakeTarget;
-        } else if (this.currentStep === 2) {
-            this.renderAppointments();
-        } else if (this.currentStep === 3) {
-            this.renderCaregivers();
-        } else if (this.currentStep === 4) {
-            this.renderConstraints();
+        // Render step-specific content
+        this.renderStepContent();
+    },
+    
+    async renderStepContent() {
+        switch(this.currentStep) {
+            case 1:
+                document.getElementById('wizardDate').textContent = utils.formatDate(utils.getTomorrowString());
+                document.getElementById('wakeTarget').value = this.data.wakeTarget;
+                break;
+            case 2:
+                this.renderAvailability();
+                break;
+            case 3:
+                this.renderHelperAvailability();
+                break;
+            case 4:
+                this.renderAppointments();
+                break;
+            case 5:
+                await this.renderTodayTaskReview();
+                break;
+            case 6:
+                document.getElementById('brainDumpText').value = this.data.brainDump || '';
+                break;
+            case 7:
+                await this.renderTaskSelection();
+                break;
+            case 8:
+                this.renderSchedulePreview();
+                break;
+        }
+    },
+    
+    renderAvailability() {
+        this.renderTimeBlocks('kristyn', 'kristynUnavailableList');
+        this.renderTimeBlocks('julio', 'julioUnavailableList');
+    },
+    
+    renderHelperAvailability() {
+        this.renderTimeBlocks('nanny', 'nannyAvailableList', true);
+        this.renderTimeBlocks('kayden', 'kaydenAvailableList', true);
+    },
+    
+    renderTimeBlocks(person, containerId, isHelper = false) {
+        const container = document.getElementById(containerId);
+        const blocks = isHelper ? 
+            this.data.helpersAvailable[person] : 
+            this.data.parentUnavailable[person];
+        
+        if (blocks.length === 0) {
+            container.innerHTML = '<p class="empty-state-text">No time blocks added</p>';
+            return;
+        }
+        
+        container.innerHTML = blocks.map((block, idx) => `
+            <div class="time-block-item">
+                <input type="time" value="${block.start}" data-person="${person}" data-idx="${idx}" data-field="start" data-helper="${isHelper}">
+                <input type="time" value="${block.end}" data-person="${person}" data-idx="${idx}" data-field="end" data-helper="${isHelper}">
+                <button onclick="wizard.removeTimeBlock('${person}', ${idx}, ${isHelper})">×</button>
+            </div>
+        `).join('');
+    },
+    
+    addTimeBlock(person, isHelper = false) {
+        const block = { start: '09:00', end: '12:00' };
+        if (isHelper) {
+            this.data.helpersAvailable[person].push(block);
+            this.renderTimeBlocks(person, `${person}AvailableList`, true);
+        } else {
+            this.data.parentUnavailable[person].push(block);
+            this.renderTimeBlocks(person, `${person}UnavailableList`);
+        }
+    },
+    
+    removeTimeBlock(person, idx, isHelper = false) {
+        if (isHelper) {
+            this.data.helpersAvailable[person].splice(idx, 1);
+            this.renderHelperAvailability();
+        } else {
+            this.data.parentUnavailable[person].splice(idx, 1);
+            this.renderAvailability();
         }
     },
     
@@ -700,59 +928,350 @@ const wizard = {
         container.innerHTML = this.data.appointments.map((apt, idx) => `
             <div class="appointment-item">
                 <input type="text" placeholder="Title" value="${apt.title || ''}" 
-                       data-idx="${idx}" data-field="title">
+                       data-idx="${idx}" data-field="title" class="appointment-input">
                 <input type="time" value="${apt.start || ''}" 
-                       data-idx="${idx}" data-field="start">
+                       data-idx="${idx}" data-field="start" class="appointment-input">
                 <input type="time" placeholder="End (optional)" value="${apt.end || ''}" 
-                       data-idx="${idx}" data-field="end">
+                       data-idx="${idx}" data-field="end" class="appointment-input">
                 <button class="secondary-btn full-width" onclick="wizard.removeAppointment(${idx})">Remove</button>
             </div>
         `).join('');
     },
     
-    renderCaregivers() {
-        const container = document.getElementById('caregiverAvailability');
-        const availableUsers = USERS.filter(u => u !== 'Kayden');
-        
-        container.innerHTML = `
-            <div class="caregiver-section">
-                <h4>Nap 1</h4>
-                ${availableUsers.map(user => `
-                    <div class="caregiver-option">
-                        <input type="checkbox" value="${user}" id="nap1-${user}"
-                               ${this.data.caregiverAvailability.nap1.includes(user) ? 'checked' : ''}
-                               data-nap="nap1">
-                        <label for="nap1-${user}">${user}</label>
-                    </div>
-                `).join('')}
-            </div>
-            <div class="caregiver-section">
-                <h4>Nap 2</h4>
-                ${availableUsers.map(user => `
-                    <div class="caregiver-option">
-                        <input type="checkbox" value="${user}" id="nap2-${user}"
-                               ${this.data.caregiverAvailability.nap2.includes(user) ? 'checked' : ''}
-                               data-nap="nap2">
-                        <label for="nap2-${user}">${user}</label>
-                    </div>
-                `).join('')}
-            </div>
-        `;
+    addAppointment() {
+        this.data.appointments.push({ title: '', start: '', end: '' });
+        this.renderAppointments();
     },
     
-    renderConstraints() {
-        const container = document.getElementById('constraintsList');
-        container.innerHTML = this.data.constraints.map((c, idx) => `
-            <div class="constraint-item">
-                <span class="constraint-name">${c.name}</span>
-                <input type="text" class="time-input" value="${c.value}" data-idx="${idx}">
+    removeAppointment(idx) {
+        this.data.appointments.splice(idx, 1);
+        this.renderAppointments();
+    },
+    
+    async renderTodayTaskReview() {
+        const todayStr = utils.getTodayString();
+        const todayTasks = state.tasks.filter(t => t.assignedDate === todayStr && t.status === 'open');
+        const container = document.getElementById('todayTaskReview');
+        
+        if (todayTasks.length === 0) {
+            container.innerHTML = '<p class="empty-state-text">No tasks were planned for today</p>';
+            return;
+        }
+        
+        container.innerHTML = todayTasks.map(task => `
+            <div class="task-review-item ${this.data.todayTasksCompleted[task.id] ? 'completed' : ''}">
+                <input type="checkbox" 
+                       id="review-${task.id}" 
+                       data-task-id="${task.id}"
+                       ${this.data.todayTasksCompleted[task.id] ? 'checked' : ''}
+                       onchange="wizard.toggleTaskCompletion('${task.id}', this.checked)">
+                <label for="review-${task.id}">${task.title}</label>
             </div>
         `).join('');
     },
     
+    toggleTaskCompletion(taskId, completed) {
+        this.data.todayTasksCompleted[taskId] = completed;
+        this.renderTodayTaskReview();
+    },
+    
+    async renderTaskSelection() {
+        // Get all open tasks (brain dump + existing)
+        const allTasks = state.tasks.filter(t => t.status === 'open' && !t.assignedDate);
+        const container = document.getElementById('taskSelectionList');
+        
+        if (allTasks.length === 0) {
+            container.innerHTML = '<p class="empty-state-text">No tasks available. Add some in the brain dump!</p>';
+            return;
+        }
+        
+        container.innerHTML = allTasks.map(task => `
+            <div class="task-selection-item ${this.data.selectedTasks.includes(task.id) ? 'selected' : ''}">
+                <input type="checkbox" 
+                       id="select-${task.id}" 
+                       data-task-id="${task.id}"
+                       ${this.data.selectedTasks.includes(task.id) ? 'checked' : ''}
+                       onchange="wizard.toggleTaskSelection('${task.id}', this.checked)">
+                <label for="select-${task.id}">${task.title}</label>
+            </div>
+        `).join('');
+    },
+    
+    toggleTaskSelection(taskId, selected) {
+        if (selected) {
+            if (!this.data.selectedTasks.includes(taskId)) {
+                this.data.selectedTasks.push(taskId);
+            }
+        } else {
+            this.data.selectedTasks = this.data.selectedTasks.filter(id => id !== taskId);
+        }
+        document.querySelector(`#select-${taskId}`).closest('.task-selection-item').classList.toggle('selected', selected);
+    },
+    
+    renderSchedulePreview() {
+        const schedule = this.calculateSchedule();
+        const warnings = this.detectConflicts(schedule);
+        
+        // Render schedule
+        const scheduleContainer = document.getElementById('schedulePreview');
+        if (schedule.blocks.length === 0) {
+            scheduleContainer.innerHTML = '<p class="empty-state-text">No schedule generated</p>';
+        } else {
+            scheduleContainer.innerHTML = schedule.blocks.map(block => `
+                <div class="preview-block">
+                    <div class="preview-time">
+                        ${utils.formatTime(block.start)}<br>
+                        ${utils.formatTime(block.end)}
+                    </div>
+                    <div class="preview-content">
+                        <div class="preview-title">${block.title}</div>
+                        <div class="preview-caregiver">${block.caregiver}</div>
+                    </div>
+                    <span class="preview-badge ${block.type}">${block.type}</span>
+                </div>
+            `).join('');
+        }
+        
+        // Render warnings
+        const warningsContainer = document.getElementById('scheduleWarnings');
+        if (warnings.length === 0) {
+            warningsContainer.innerHTML = '<div class="warning-item info">✓ No conflicts detected</div>';
+        } else {
+            warningsContainer.innerHTML = warnings.map(warning => `
+                <div class="warning-item ${warning.severity}">
+                    ${warning.severity === 'error' ? '⚠️' : 'ℹ️'} ${warning.message}
+                </div>
+            `).join('');
+        }
+    },
+    
+    calculateSchedule() {
+        const blocks = [];
+        let currentTime = this.data.wakeTarget;
+        const tomorrow = utils.getTomorrowString();
+        
+        // Helper functions
+        const addMinutes = (time, minutes) => {
+            const [h, m] = time.split(':').map(Number);
+            const date = new Date();
+            date.setHours(h, m + minutes);
+            return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+        };
+        
+        const parseDuration = (duration) => {
+            const match = duration.match(/(\d+\.?\d*)\s*(hr|min)/);
+            if (!match) return 0;
+            const value = parseFloat(match[1]);
+            return match[2] === 'hr' ? value * 60 : value;
+        };
+        
+        const isTimeInRange = (time, start, end) => {
+            return time >= start && time < end;
+        };
+        
+        const getAvailableCaregiver = (time, forNap = false) => {
+            // Never Kayden for naps
+            if (forNap) {
+                // Priority: Parents first, then Nanny
+                const parents = ['Kristyn', 'Julio'];
+                for (const parent of parents) {
+                    const personKey = parent.toLowerCase();
+                    const isUnavailable = this.data.parentUnavailable[personKey].some(block => 
+                        isTimeInRange(time, block.start, block.end)
+                    );
+                    if (!isUnavailable) return parent;
+                }
+                
+                // Check Nanny
+                const nannyAvailable = this.data.helpersAvailable.nanny.some(block =>
+                    isTimeInRange(time, block.start, block.end)
+                );
+                if (nannyAvailable) return 'Nanny';
+                
+                return 'No one available!';
+            } else {
+                return 'Anyone';
+            }
+        };
+        
+        // Get constraints
+        const constraints = this.data.constraints;
+        const wakeWindow1 = parseDuration(constraints.find(c => c.name === 'Wake Window Before Nap 1')?.value || '2.5 hrs');
+        const napDuration1 = parseDuration(constraints.find(c => c.name === 'Nap 1 Duration')?.value || '90 min');
+        const wakeWindow2 = parseDuration(constraints.find(c => c.name === 'Wake Window Between Naps')?.value || '3 hrs');
+        const napDuration2 = parseDuration(constraints.find(c => c.name === 'Nap 2 Duration')?.value || '90 min');
+        
+        // Wake block
+        blocks.push({
+            start: currentTime,
+            end: addMinutes(currentTime, 30),
+            title: 'Wake & Morning Routine',
+            type: 'routine',
+            caregiver: 'Available'
+        });
+        currentTime = addMinutes(currentTime, 30);
+        
+        // Nap 1
+        const nap1Start = addMinutes(currentTime, wakeWindow1 - 30);
+        const nap1End = addMinutes(nap1Start, napDuration1);
+        const nap1Caregiver = getAvailableCaregiver(nap1Start, true);
+        
+        if (currentTime < nap1Start) {
+            blocks.push({
+                start: currentTime,
+                end: nap1Start,
+                title: 'Open Time',
+                type: 'open',
+                caregiver: 'Anyone'
+            });
+        }
+        
+        blocks.push({
+            start: nap1Start,
+            end: nap1End,
+            title: 'Nap 1',
+            type: 'nap',
+            caregiver: nap1Caregiver
+        });
+        currentTime = nap1End;
+        
+        // Insert appointments
+        const sortedAppointments = [...this.data.appointments]
+            .filter(apt => apt.start && apt.title)
+            .sort((a, b) => a.start.localeCompare(b.start));
+        
+        for (const apt of sortedAppointments) {
+            const aptEnd = apt.end || addMinutes(apt.start, 60);
+            
+            if (currentTime < apt.start) {
+                blocks.push({
+                    start: currentTime,
+                    end: apt.start,
+                    title: 'Open Time',
+                    type: 'open',
+                    caregiver: 'Anyone'
+                });
+            }
+            
+            blocks.push({
+                start: apt.start,
+                end: aptEnd,
+                title: apt.title,
+                type: 'appointment',
+                caregiver: 'Family'
+            });
+            currentTime = aptEnd;
+        }
+        
+        // Nap 2
+        const nap2Start = addMinutes(currentTime, wakeWindow2);
+        const nap2End = addMinutes(nap2Start, napDuration2);
+        const nap2Caregiver = getAvailableCaregiver(nap2Start, true);
+        
+        if (currentTime < nap2Start) {
+            blocks.push({
+                start: currentTime,
+                end: nap2Start,
+                title: 'Open Time',
+                type: 'open',
+                caregiver: 'Anyone'
+            });
+        }
+        
+        blocks.push({
+            start: nap2Start,
+            end: nap2End,
+            title: 'Nap 2',
+            type: 'nap',
+            caregiver: nap2Caregiver
+        });
+        currentTime = nap2End;
+        
+        // Evening & Bedtime
+        const bedtime = constraints.find(c => c.name === 'Bedtime Target')?.value || '19:00';
+        const bedtimeHour = bedtime.match(/(\d+)/)?.[1] || '19';
+        const bedtimeTime = `${bedtimeHour.padStart(2, '0')}:00`;
+        
+        if (currentTime < addMinutes(bedtimeTime, -30)) {
+            blocks.push({
+                start: currentTime,
+                end: addMinutes(bedtimeTime, -30),
+                title: 'Open Time',
+                type: 'open',
+                caregiver: 'Anyone'
+            });
+        }
+        
+        blocks.push({
+            start: addMinutes(bedtimeTime, -30),
+            end: bedtimeTime,
+            title: 'Bedtime Routine',
+            type: 'routine',
+            caregiver: 'Available'
+        });
+        
+        return { blocks, nap1Start, nap2Start };
+    },
+    
+    detectConflicts(schedule) {
+        const warnings = [];
+        
+        // Check for unassigned naps
+        schedule.blocks.forEach(block => {
+            if (block.type === 'nap' && block.caregiver === 'No one available!') {
+                warnings.push({
+                    severity: 'error',
+                    message: `${block.title}: No caregiver available at ${utils.formatTime(block.start)}`
+                });
+            }
+        });
+        
+        // Check for appointment conflicts with naps
+        const naps = schedule.blocks.filter(b => b.type === 'nap');
+        const appointments = this.data.appointments.filter(apt => apt.start && apt.title);
+        
+        appointments.forEach(apt => {
+            naps.forEach(nap => {
+                const aptEnd = apt.end || addMinutes(apt.start, 60);
+                const hasConflict = (apt.start >= nap.start && apt.start < nap.end) ||
+                                   (aptEnd > nap.start && aptEnd <= nap.end);
+                
+                if (hasConflict) {
+                    warnings.push({
+                        severity: 'warning',
+                        message: `"${apt.title}" overlaps with ${nap.title}`
+                    });
+                }
+            });
+        });
+        
+        // Check meal times (common times)
+        const mealTimes = [
+            { name: 'Lunch', start: '12:00', end: '13:00' },
+            { name: 'Dinner', start: '17:30', end: '18:30' }
+        ];
+        
+        appointments.forEach(apt => {
+            mealTimes.forEach(meal => {
+                const aptEnd = apt.end || addMinutes(apt.start, 60);
+                const hasConflict = (apt.start >= meal.start && apt.start < meal.end) ||
+                                   (aptEnd > meal.start && aptEnd <= meal.end);
+                
+                if (hasConflict) {
+                    warnings.push({
+                        severity: 'info',
+                        message: `"${apt.title}" during typical ${meal.name} time`
+                    });
+                }
+            });
+        });
+        
+        return warnings;
+    },
+    
     next() {
         this.saveCurrentStep();
-        if (this.currentStep < 5) {
+        if (this.currentStep < this.totalSteps) {
             this.currentStep++;
             this.renderStep();
         }
@@ -768,37 +1287,51 @@ const wizard = {
     saveCurrentStep() {
         if (this.currentStep === 1) {
             this.data.wakeTarget = document.getElementById('wakeTarget').value;
+        } else if (this.currentStep === 6) {
+            this.data.brainDump = document.getElementById('brainDumpText').value;
         }
-    },
-    
-    addAppointment() {
-        this.data.appointments.push({ title: '', start: '', end: '' });
-        this.renderAppointments();
-    },
-    
-    removeAppointment(idx) {
-        this.data.appointments.splice(idx, 1);
-        this.renderAppointments();
     },
     
     async save() {
-        const brainDump = document.getElementById('brainDumpText').value;
-        
         const tomorrow = utils.getTomorrowString();
-        await db_ops.saveDayPlan(tomorrow, this.data);
         
-        if (brainDump.trim()) {
-            const tasks = brainDump.split('\n').filter(t => t.trim());
-            for (const task of tasks) {
-                await db_ops.addTask(task.trim(), tomorrow);
+        // Save day plan
+        const schedule = this.calculateSchedule();
+        const planData = {
+            ...this.data,
+            calculatedSchedule: schedule.blocks,
+            nap1Time: schedule.nap1Start,
+            nap2Time: schedule.nap2Start
+        };
+        await db_ops.saveDayPlan(tomorrow, planData);
+        
+        // Mark today's tasks as complete/incomplete
+        for (const [taskId, completed] of Object.entries(this.data.todayTasksCompleted)) {
+            if (completed) {
+                await db_ops.updateTask(taskId, {
+                    status: 'done',
+                    completedAt: firebase.firestore.FieldValue.serverTimestamp()
+                });
             }
         }
         
-        utils.showToast('Tomorrow planned!', 'success');
+        // Add brain dump tasks
+        if (this.data.brainDump.trim()) {
+            const tasks = this.data.brainDump.split('\n').filter(t => t.trim());
+            for (const task of tasks) {
+                await db_ops.addTask(task.trim());
+            }
+        }
+        
+        // Assign selected tasks to tomorrow
+        for (const taskId of this.data.selectedTasks) {
+            await db_ops.updateTask(taskId, { assignedDate: tomorrow });
+        }
+        
+        utils.showToast('Tomorrow planned! 🎉', 'success');
         this.close();
         
         await loadData();
-        renderTomorrowPreview();
     }
 };
 
@@ -845,7 +1378,41 @@ function setupEventHandlers() {
     document.getElementById('saveWizard').addEventListener('click', () => wizard.save());
     document.getElementById('addAppointment').addEventListener('click', () => wizard.addAppointment());
     
-    // Today tab - wake time
+    // Time block add buttons (event delegation)
+    document.addEventListener('click', (e) => {
+        if (e.target.dataset.person && e.target.textContent.includes('Add Time Block')) {
+            const person = e.target.dataset.person;
+            const isHelper = ['nanny', 'kayden'].includes(person);
+            wizard.addTimeBlock(person, isHelper);
+        }
+    });
+    
+    // Wizard input delegation for time blocks and appointments
+    document.addEventListener('input', (e) => {
+        // Time blocks
+        if (e.target.dataset.person && e.target.dataset.idx !== undefined) {
+            const person = e.target.dataset.person;
+            const idx = parseInt(e.target.dataset.idx);
+            const field = e.target.dataset.field;
+            const isHelper = e.target.dataset.helper === 'true';
+            
+            if (isHelper) {
+                wizard.data.helpersAvailable[person][idx][field] = e.target.value;
+            } else {
+                wizard.data.parentUnavailable[person][idx][field] = e.target.value;
+            }
+        }
+        
+        // Appointments
+        if (e.target.classList.contains('appointment-input')) {
+            const idx = parseInt(e.target.dataset.idx);
+            const field = e.target.dataset.field;
+            if (wizard.data.appointments[idx]) {
+                wizard.data.appointments[idx][field] = e.target.value;
+            }
+        }
+    });
+    
     document.getElementById('actualWakeTime').addEventListener('change', async (e) => {
         const date = utils.getTodayString();
         const log = await db_ops.getDayLog(date) || {};
@@ -1044,25 +1611,23 @@ async function renderTodaySchedule() {
     const date = utils.getTodayString();
     const log = await db_ops.getDayLog(date);
     
-    if (!state.todayPlan) {
+    if (!state.todayPlan || !state.todayPlan.calculatedSchedule) {
         ui.renderSchedule([]);
         return;
     }
     
-    const blocks = scheduler.generateSchedule(
-        state.todayPlan,
-        log?.actualWake,
-        {
-            enabled: document.getElementById('nap1Enabled').checked,
-            start: log?.naps?.nap1?.start,
-            end: log?.naps?.nap1?.end
-        },
-        {
-            enabled: document.getElementById('nap2Enabled').checked,
-            start: log?.naps?.nap2?.start,
-            end: log?.naps?.nap2?.end
-        }
-    );
+    // Use the pre-calculated schedule from wizard
+    let blocks = [...state.todayPlan.calculatedSchedule];
+    
+    // Apply dynamic adjustments based on actual tracking
+    if (log?.actualWake) {
+        // Recalculate based on actual wake time
+        blocks = scheduler.adjustScheduleForActualWake(
+            state.todayPlan,
+            log.actualWake,
+            log.naps
+        );
+    }
     
     ui.renderSchedule(blocks);
 }
@@ -1075,11 +1640,16 @@ function renderTomorrowPreview() {
         return;
     }
     
+    const schedule = state.tomorrowPlan.calculatedSchedule || [];
+    const naps = schedule.filter(b => b.type === 'nap');
+    const appointments = state.tomorrowPlan.appointments || [];
+    
     container.innerHTML = `
         <div class="control-card">
-            <h4>Tomorrow's Details</h4>
-            <p>Wake target: ${utils.formatTime(state.tomorrowPlan.wakeTarget)}</p>
-            <p>Appointments: ${state.tomorrowPlan.appointments?.length || 0}</p>
+            <h4>Tomorrow's Plan</h4>
+            <p><strong>Wake:</strong> ${utils.formatTime(state.tomorrowPlan.wakeTarget)}</p>
+            <p><strong>Naps:</strong> ${naps.length} scheduled</p>
+            <p><strong>Appointments:</strong> ${appointments.filter(a => a.title).length}</p>
         </div>
     `;
 }
