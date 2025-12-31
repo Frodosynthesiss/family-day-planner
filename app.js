@@ -3,13 +3,12 @@
 
 // Firebase Configuration
 const firebaseConfig = {
-  apiKey: "AIzaSyA2YSjOktRbinbKMjIy1pbd_Bkbwp3ruRY",
-  authDomain: "vega-payne-command-center.firebaseapp.com",
-  projectId: "vega-payne-command-center",
-  storageBucket: "vega-payne-command-center.firebasestorage.app",
-  messagingSenderId: "325061344708",
-  appId: "1:325061344708:web:397bff2f1776308a997891",
-  measurementId: "G-JHR2MYTHM1"
+    apiKey: "YOUR_FIREBASE_API_KEY",
+    authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
+    projectId: "YOUR_PROJECT_ID",
+    storageBucket: "YOUR_PROJECT_ID.appspot.com",
+    messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
+    appId: "YOUR_APP_ID"
 };
 
 // Initialize Firebase
@@ -1101,7 +1100,6 @@ const wizard = {
     calculateSchedule() {
         const blocks = [];
         let currentTime = this.data.wakeTarget;
-        const tomorrow = utils.getTomorrowString();
         
         // Helper functions
         const addMinutes = (time, minutes) => {
@@ -1111,11 +1109,29 @@ const wizard = {
             return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
         };
         
-        const parseDuration = (duration) => {
-            const match = duration.match(/(\d+\.?\d*)\s*(hr|min)/);
-            if (!match) return 0;
-            const value = parseFloat(match[1]);
-            return match[2] === 'hr' ? value * 60 : value;
+        const parseWakeWindow = (value) => {
+            // Parse ranges like "3-3.5 hrs" -> use middle value
+            const match = value.match(/([\d.]+)-([\d.]+)\s*hrs?/);
+            if (match) {
+                const min = parseFloat(match[1]);
+                const max = parseFloat(match[2]);
+                return ((min + max) / 2) * 60; // Return minutes
+            }
+            // Fallback to single value
+            const singleMatch = value.match(/([\d.]+)\s*hrs?/);
+            if (singleMatch) return parseFloat(singleMatch[1]) * 60;
+            return 0;
+        };
+        
+        const parseNapDuration = (value) => {
+            // Parse ranges like "40-90 min" -> use middle value
+            const match = value.match(/(\d+)-(\d+)\s*min/);
+            if (match) {
+                const min = parseInt(match[1]);
+                const max = parseInt(match[2]);
+                return (min + max) / 2;
+            }
+            return 65; // Default 65 min (middle of 40-90)
         };
         
         const isTimeInRange = (time, start, end) => {
@@ -1123,9 +1139,8 @@ const wizard = {
         };
         
         const getAvailableCaregiver = (time, forNap = false) => {
-            // Never Kayden for naps
             if (forNap) {
-                // Priority: Parents first, then Nanny
+                // Priority: Parents first, then Nanny, never Kayden
                 const parents = ['Kristyn', 'Julio'];
                 for (const parent of parents) {
                     const personKey = parent.toLowerCase();
@@ -1147,40 +1162,71 @@ const wizard = {
             }
         };
         
-        // Get constraints
-        const constraints = this.data.constraints;
-        const wakeWindow1 = parseDuration(constraints.find(c => c.name === 'Wake Window Before Nap 1')?.value || '2.5 hrs');
-        const napDuration1 = parseDuration(constraints.find(c => c.name === 'Nap 1 Duration')?.value || '90 min');
-        const wakeWindow2 = parseDuration(constraints.find(c => c.name === 'Wake Window Between Naps')?.value || '3 hrs');
-        const napDuration2 = parseDuration(constraints.find(c => c.name === 'Nap 2 Duration')?.value || '90 min');
+        const areBothParentsAvailable = (time) => {
+            const kristynAvailable = !this.data.parentUnavailable.kristyn.some(block =>
+                isTimeInRange(time, block.start, block.end)
+            );
+            const julioAvailable = !this.data.parentUnavailable.julio.some(block =>
+                isTimeInRange(time, block.start, block.end)
+            );
+            return kristynAvailable && julioAvailable;
+        };
         
-        // Wake block
-        blocks.push({
-            start: currentTime,
-            end: addMinutes(currentTime, 30),
-            title: 'Wake & Morning Routine',
-            type: 'routine',
-            caregiver: 'Available'
-        });
-        currentTime = addMinutes(currentTime, 30);
-        
-        // Nap 1
-        const nap1Start = addMinutes(currentTime, wakeWindow1 - 30);
-        const nap1End = addMinutes(nap1Start, napDuration1);
-        const nap1Caregiver = getAvailableCaregiver(nap1Start, true);
-        
-        if (currentTime < nap1Start) {
+        const addRoutineBlock = (title, duration, type = 'routine') => {
             blocks.push({
                 start: currentTime,
-                end: nap1Start,
+                end: addMinutes(currentTime, duration),
+                title,
+                type,
+                caregiver: 'Available'
+            });
+            currentTime = addMinutes(currentTime, duration);
+        };
+        
+        // Get constraints
+        const constraints = this.data.constraints;
+        const wakeWindow1 = parseWakeWindow(constraints.find(c => c.name === 'Wake Window 1')?.value || '3-3.5 hrs');
+        const wakeWindow2 = parseWakeWindow(constraints.find(c => c.name === 'Wake Window 2')?.value || '3.5-4 hrs');
+        const wakeWindow3 = parseWakeWindow(constraints.find(c => c.name === 'Wake Window 3')?.value || '4-4.25 hrs');
+        const napDuration1 = parseNapDuration(constraints.find(c => c.name === 'Nap 1 Duration')?.value || '40-90 min');
+        const napDuration2 = parseNapDuration(constraints.find(c => c.name === 'Nap 2 Duration')?.value || '40-90 min');
+        const bedtime = constraints.find(c => c.name === 'Bedtime Target')?.value || '7:00 PM';
+        const bedtimeHour = bedtime.match(/(\d+)/)?.[1] || '19';
+        const bedtimeTime = `${bedtimeHour.padStart(2, '0')}:00`;
+        
+        // ========== WAKE WINDOW 1 (3-3.5 hrs) ==========
+        const ww1Start = currentTime;
+        
+        // Morning routine blocks
+        addRoutineBlock('Wake Up Time', 5);
+        addRoutineBlock('Family Cuddle', 10);
+        addRoutineBlock('Get Dressed', 10);
+        addRoutineBlock('Breakfast Prep', 10);
+        addRoutineBlock('Breakfast', 20, 'meal');
+        addRoutineBlock('Brush Teeth', 5);
+        
+        // Calculate when Nap 1 should start
+        const nap1RoutineStart = addMinutes(ww1Start, wakeWindow1 - 10); // 10 min before nap for routine
+        const nap1Start = addMinutes(nap1RoutineStart, 10);
+        const nap1End = addMinutes(nap1Start, napDuration1);
+        
+        // Fill with Open Time until nap routine
+        if (currentTime < nap1RoutineStart) {
+            blocks.push({
+                start: currentTime,
+                end: nap1RoutineStart,
                 title: 'Open Time',
                 type: 'open',
                 caregiver: 'Anyone'
             });
+            currentTime = nap1RoutineStart;
         }
         
+        // Nap 1 routine and nap
+        addRoutineBlock('Nap Time Routine', 10);
+        const nap1Caregiver = getAvailableCaregiver(currentTime, true);
         blocks.push({
-            start: nap1Start,
+            start: currentTime,
             end: nap1End,
             title: 'Nap 1',
             type: 'nap',
@@ -1188,51 +1234,55 @@ const wizard = {
         });
         currentTime = nap1End;
         
-        // Insert appointments
-        const sortedAppointments = [...this.data.appointments]
-            .filter(apt => apt.start && apt.title)
-            .sort((a, b) => a.start.localeCompare(b.start));
+        // ========== WAKE WINDOW 2 (3.5-4 hrs) ==========
+        const ww2Start = currentTime;
         
-        for (const apt of sortedAppointments) {
-            const aptEnd = apt.end || addMinutes(apt.start, 60);
-            
-            if (currentTime < apt.start) {
-                blocks.push({
-                    start: currentTime,
-                    end: apt.start,
-                    title: 'Open Time',
-                    type: 'open',
-                    caregiver: 'Anyone'
-                });
-            }
-            
-            blocks.push({
-                start: apt.start,
-                end: aptEnd,
-                title: apt.title,
-                type: 'appointment',
-                caregiver: 'Family'
-            });
-            currentTime = aptEnd;
-        }
+        addRoutineBlock('Wake Up Time', 5);
         
-        // Nap 2
-        const nap2Start = addMinutes(currentTime, wakeWindow2);
-        const nap2End = addMinutes(nap2Start, napDuration2);
-        const nap2Caregiver = getAvailableCaregiver(nap2Start, true);
+        // Calculate when lunch should be (roughly 1/3 into wake window)
+        const lunchStart = addMinutes(ww2Start, Math.floor(wakeWindow2 / 3));
         
-        if (currentTime < nap2Start) {
+        // Open time until lunch
+        if (currentTime < addMinutes(lunchStart, -10)) {
             blocks.push({
                 start: currentTime,
-                end: nap2Start,
+                end: addMinutes(lunchStart, -10),
                 title: 'Open Time',
                 type: 'open',
                 caregiver: 'Anyone'
             });
+            currentTime = addMinutes(lunchStart, -10);
         }
         
+        addRoutineBlock('Lunch Prep', 10);
+        addRoutineBlock('Lunch', 20, 'meal');
+        
+        // Calculate when Nap 2 should start
+        const nap2RoutineStart = addMinutes(ww2Start, wakeWindow2 - 10);
+        const nap2Start = addMinutes(nap2RoutineStart, 10);
+        const nap2End = addMinutes(nap2Start, napDuration2);
+        
+        // Calculate when snack should be (10 min before nap routine)
+        const snackTime = addMinutes(nap2RoutineStart, -10);
+        
+        // Open time until snack
+        if (currentTime < snackTime) {
+            blocks.push({
+                start: currentTime,
+                end: snackTime,
+                title: 'Open Time',
+                type: 'open',
+                caregiver: 'Anyone'
+            });
+            currentTime = snackTime;
+        }
+        
+        addRoutineBlock('Snack + Milk', 10, 'meal');
+        addRoutineBlock('Nap Time Routine', 10);
+        
+        const nap2Caregiver = getAvailableCaregiver(currentTime, true);
         blocks.push({
-            start: nap2Start,
+            start: currentTime,
             end: nap2End,
             title: 'Nap 2',
             type: 'nap',
@@ -1240,34 +1290,150 @@ const wizard = {
         });
         currentTime = nap2End;
         
-        // Evening & Bedtime
-        const bedtime = constraints.find(c => c.name === 'Bedtime Target')?.value || '19:00';
-        const bedtimeHour = bedtime.match(/(\d+)/)?.[1] || '19';
-        const bedtimeTime = `${bedtimeHour.padStart(2, '0')}:00`;
+        // ========== WAKE WINDOW 3 (4-4.25 hrs) ==========
+        const ww3Start = currentTime;
         
-        if (currentTime < addMinutes(bedtimeTime, -30)) {
+        addRoutineBlock('Wake Up Time', 5);
+        
+        // Calculate when dinner should be (roughly 1/3 into wake window)
+        const dinnerStart = addMinutes(ww3Start, Math.floor(wakeWindow3 / 3));
+        
+        // Open time until dinner
+        if (currentTime < addMinutes(dinnerStart, -10)) {
             blocks.push({
                 start: currentTime,
-                end: addMinutes(bedtimeTime, -30),
+                end: addMinutes(dinnerStart, -10),
                 title: 'Open Time',
                 type: 'open',
                 caregiver: 'Anyone'
             });
+            currentTime = addMinutes(dinnerStart, -10);
         }
         
-        blocks.push({
-            start: addMinutes(bedtimeTime, -30),
-            end: bedtimeTime,
-            title: 'Bedtime Routine',
-            type: 'routine',
-            caregiver: 'Available'
-        });
+        addRoutineBlock('Dinner Prep', 10);
+        addRoutineBlock('Dinner', 20, 'meal');
+        
+        // Calculate bedtime routine start
+        const bedtimeRoutineStart = addMinutes(bedtimeTime, -15);
+        const brushTeethTime = addMinutes(bedtimeRoutineStart, -5);
+        const eveningSnackTime = addMinutes(brushTeethTime, -10);
+        
+        // Bath logic - needs both parents AND scheduled
+        let bathTime = null;
+        if (this.data.includeBath) {
+            // Place bath after dinner, before evening snack
+            bathTime = currentTime;
+            const bathEnd = addMinutes(bathTime, 20);
+            
+            // Check if both parents available
+            const bathCaregiver = areBothParentsAvailable(bathTime) ? 'Both Parents' : 'Both Parents (UNAVAILABLE!)';
+            
+            // Open time before bath if needed
+            if (currentTime < bathTime) {
+                blocks.push({
+                    start: currentTime,
+                    end: bathTime,
+                    title: 'Open Time',
+                    type: 'open',
+                    caregiver: 'Anyone'
+                });
+            }
+            
+            blocks.push({
+                start: bathTime,
+                end: bathEnd,
+                title: 'Bath Time',
+                type: 'bath',
+                caregiver: bathCaregiver
+            });
+            currentTime = bathEnd;
+        }
+        
+        // Open time until evening snack
+        if (currentTime < eveningSnackTime) {
+            blocks.push({
+                start: currentTime,
+                end: eveningSnackTime,
+                title: 'Open Time',
+                type: 'open',
+                caregiver: 'Anyone'
+            });
+            currentTime = eveningSnackTime;
+        }
+        
+        addRoutineBlock('Snack + Milk', 10, 'meal');
+        addRoutineBlock('Brush Teeth', 5);
+        addRoutineBlock('Bedtime Routine', 15);
+        
+        // ========== INSERT APPOINTMENTS ==========
+        // Now intelligently insert appointments into the schedule
+        const sortedAppointments = [...this.data.appointments]
+            .filter(apt => apt.start && apt.title)
+            .sort((a, b) => a.start.localeCompare(b.start));
+        
+        for (const apt of sortedAppointments) {
+            const aptStart = apt.start;
+            const aptEnd = apt.end || addMinutes(aptStart, 60);
+            
+            // Find where to insert this appointment
+            let insertIndex = blocks.findIndex(b => b.type === 'open' && aptStart >= b.start && aptStart < b.end);
+            
+            if (insertIndex !== -1) {
+                // Split the open time block
+                const openBlock = blocks[insertIndex];
+                const newBlocks = [];
+                
+                // Open time before appointment
+                if (openBlock.start < aptStart) {
+                    newBlocks.push({
+                        start: openBlock.start,
+                        end: aptStart,
+                        title: 'Open Time',
+                        type: 'open',
+                        caregiver: 'Anyone'
+                    });
+                }
+                
+                // Appointment
+                newBlocks.push({
+                    start: aptStart,
+                    end: aptEnd,
+                    title: apt.title,
+                    type: 'appointment',
+                    caregiver: 'Family'
+                });
+                
+                // Open time after appointment (if any)
+                if (aptEnd < openBlock.end) {
+                    newBlocks.push({
+                        start: aptEnd,
+                        end: openBlock.end,
+                        title: 'Open Time',
+                        type: 'open',
+                        caregiver: 'Anyone'
+                    });
+                }
+                
+                // Replace the open block with new blocks
+                blocks.splice(insertIndex, 1, ...newBlocks);
+            }
+        }
+        
+        // Sort blocks by start time
+        blocks.sort((a, b) => a.start.localeCompare(b.start));
         
         return { blocks, nap1Start, nap2Start };
     },
     
     detectConflicts(schedule) {
         const warnings = [];
+        
+        const addMinutes = (time, minutes) => {
+            const [h, m] = time.split(':').map(Number);
+            const date = new Date();
+            date.setHours(h, m + minutes);
+            return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+        };
         
         // Check for unassigned naps
         schedule.blocks.forEach(block => {
@@ -1279,15 +1445,33 @@ const wizard = {
             }
         });
         
-        // Check for appointment conflicts with naps
+        // Check for bath without both parents
+        schedule.blocks.forEach(block => {
+            if (block.type === 'bath' && block.caregiver.includes('UNAVAILABLE')) {
+                warnings.push({
+                    severity: 'error',
+                    message: `Bath scheduled at ${utils.formatTime(block.start)} but both parents not available`
+                });
+            }
+        });
+        
+        // Get all meal and nap blocks
+        const meals = schedule.blocks.filter(b => b.type === 'meal');
         const naps = schedule.blocks.filter(b => b.type === 'nap');
+        const bath = schedule.blocks.find(b => b.type === 'bath');
+        
+        // Check if appointments overlap with important blocks
         const appointments = this.data.appointments.filter(apt => apt.start && apt.title);
         
         appointments.forEach(apt => {
+            const aptStart = apt.start;
+            const aptEnd = apt.end || addMinutes(aptStart, 60);
+            
+            // Check nap conflicts
             naps.forEach(nap => {
-                const aptEnd = apt.end || addMinutes(apt.start, 60);
-                const hasConflict = (apt.start >= nap.start && apt.start < nap.end) ||
-                                   (aptEnd > nap.start && aptEnd <= nap.end);
+                const hasConflict = (aptStart >= nap.start && aptStart < nap.end) ||
+                                   (aptEnd > nap.start && aptEnd <= nap.end) ||
+                                   (aptStart <= nap.start && aptEnd >= nap.end);
                 
                 if (hasConflict) {
                     warnings.push({
@@ -1296,9 +1480,38 @@ const wizard = {
                     });
                 }
             });
+            
+            // Check meal conflicts
+            meals.forEach(meal => {
+                const hasConflict = (aptStart >= meal.start && aptStart < meal.end) ||
+                                   (aptEnd > meal.start && aptEnd <= meal.end) ||
+                                   (aptStart <= meal.start && aptEnd >= meal.end);
+                
+                if (hasConflict) {
+                    warnings.push({
+                        severity: 'info',
+                        message: `"${apt.title}" during ${meal.title} time`
+                    });
+                }
+            });
+            
+            // Check bath conflict
+            if (bath) {
+                const hasConflict = (aptStart >= bath.start && aptStart < bath.end) ||
+                                   (aptEnd > bath.start && aptEnd <= bath.end) ||
+                                   (aptStart <= bath.start && aptEnd >= bath.end);
+                
+                if (hasConflict) {
+                    warnings.push({
+                        severity: 'warning',
+                        message: `"${apt.title}" conflicts with Bath Time`
+                    });
+                }
+            }
         });
         
-        // Check meal times (common times)
+        return warnings;
+    },
         const mealTimes = [
             { name: 'Lunch', start: '12:00', end: '13:00' },
             { name: 'Dinner', start: '17:30', end: '18:30' }
