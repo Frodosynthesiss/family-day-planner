@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="theme-color" content="#8B7355">
+    <title>Family Day Planner</title>
+    <link rel="manifest" href="manifest.json">
+    <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+    <link rel="apple-touch-icon" href="icon-192.png">
+    <link rel="stylesheet" href="styles.css">
+    <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Karla:wght@300;400;500;600&display=swap" rel="stylesheet">
+</head>
+<body>
+    <!-- Password Gate -->
+    <div id="passwordGate" class="password-gate">
+        <div class="password-container">
+            <div class="password-header">
+                <div class="logo-mark">🏡</div>
+                <h1>Family Day Planner</h1>
+                <p>Your family's shared space</p>
+            </div>
+            <form id="passwordForm">
+                <input 
+                    type="password" 
+                    id="passwordInput" 
+                    placeholder="Enter password"
+                    autocomplete="off"
+                    aria-label="Password"
+                >
+                <button type="submit">Unlock</button>
+            </form>
+            <div id="passwordError" class="error-message"></div>
+        </div>
+    </div>
+
+    <!-- Main App -->
+    <div id="app" class="app-container" style="display: none;">
+        <!-- Header -->
+        <header class="app-header">
+            <div class="header-content">
+                <div class="header-title">
+                    <span class="header-icon">🏡</span>
+                    <span id="headerText">Family Planner</span>
+                </div>
+                <div class="header-actions">
+                    <button id="lockBtn" class="icon-btn" aria-label="Lock app">🔒</button>
+                </div>
+            </div>
+        </header>
+
+        <!-- Tab Content -->
+        <main class="tab-content">
+            <!-- Evening Tab -->
+            <div id="eveningTab" class="tab-pane active">
+                <div class="tab-header">
+                    <h2>Evening Planning</h2>
+                    <p>Prepare for tomorrow</p>
+                </div>
+                <div class="planning-card">
+                    <div class="card-icon">✨</div>
+                    <h3>Tomorrow's Plan</h3>
+                    <p class="tomorrow-date" id="tomorrowDate"></p>
+                    <button id="openWizardBtn" class="primary-btn">Start Planning Wizard</button>
+                </div>
+                <div id="tomorrowPreview" class="preview-section"></div>
+            </div>
+
+            <!-- Today Tab -->
+            <div id="todayTab" class="tab-pane">
+                <div class="tab-header">
+                    <h2>Today's Schedule</h2>
+                    <p id="todayDate"></p>
+                </div>
+                <div class="tracking-controls">
+                    <div class="control-group">
+                        <label>Actual Wake Time</label>
+                        <input type="time" id="actualWakeTime" class="time-input">
+                    </div>
+                    <div class="nap-controls">
+                        <div class="nap-section">
+                            <div class="nap-header">
+                                <label class="toggle-label">
+                                    <input type="checkbox" id="nap1Enabled">
+                                    <span>Nap 1</span>
+                                </label>
+                            </div>
+                            <div class="nap-buttons" id="nap1Buttons" style="display: none;">
+                                <button class="nap-btn start" data-nap="1">Start</button>
+                                <button class="nap-btn stop" data-nap="1" disabled>Stop</button>
+                                <span class="nap-time" id="nap1Time"></span>
+                            </div>
+                        </div>
+                        <div class="nap-section">
+                            <div class="nap-header">
+                                <label class="toggle-label">
+                                    <input type="checkbox" id="nap2Enabled">
+                                    <span>Nap 2</span>
+                                </label>
+                            </div>
+                            <div class="nap-buttons" id="nap2Buttons" style="display: none;">
+                                <button class="nap-btn start" data-nap="2">Start</button>
+                                <button class="nap-btn stop" data-nap="2" disabled>Stop</button>
+                                <span class="nap-time" id="nap2Time"></span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div id="todaySchedule" class="schedule-view"></div>
+                <div class="export-section">
+                    <button id="exportTodayBtn" class="secondary-btn">📅 Export Today to Google Calendar</button>
+                </div>
+            </div>
+
+            <!-- Tasks Tab -->
+            <div id="tasksTab" class="tab-pane">
+                <div class="tab-header">
+                    <h2>Task Manager</h2>
+                    <p>Brain dump & daily focus</p>
+                </div>
+                <div class="task-input-section">
+                    <input 
+                        type="text" 
+                        id="newTaskInput" 
+                        placeholder="Add a new task..."
+                        class="task-input"
+                    >
+                    <button id="addTaskBtn" class="add-btn">+</button>
+                </div>
+                <div class="task-sections">
+                    <div class="task-section">
+                        <h3>Today's Focus</h3>
+                        <div id="todayTasks" class="task-list"></div>
+                    </div>
+                    <div class="task-section">
+                        <h3>Brain Dump</h3>
+                        <div id="brainDumpTasks" class="task-list"></div>
+                    </div>
+                    <div class="task-section">
+                        <h3>Completed</h3>
+                        <div id="completedTasks" class="task-list"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- History Tab -->
+            <div id="historyTab" class="tab-pane">
+                <div class="tab-header">
+                    <h2>Day Logs</h2>
+                    <p>View past schedules</p>
+                </div>
+                <div id="historyList" class="history-list"></div>
+            </div>
+
+            <!-- Settings Tab -->
+            <div id="settingsTab" class="tab-pane">
+                <div class="tab-header">
+                    <h2>Settings</h2>
+                    <p>Configure your planner</p>
+                </div>
+                
+                <div class="settings-section">
+                    <h3>Default Schedule Constraints</h3>
+                    <div class="constraint-list" id="defaultConstraints"></div>
+                </div>
+
+                <div class="settings-section">
+                    <h3>Google Calendar</h3>
+                    <div id="calendarStatus" class="calendar-status">
+                        <p>Not connected</p>
+                    </div>
+                    <button id="connectCalendarBtn" class="secondary-btn">Connect Google Calendar</button>
+                    <button id="disconnectCalendarBtn" class="secondary-btn" style="display: none;">Disconnect</button>
+                </div>
+
+                <div class="settings-section">
+                    <h3>Data Management</h3>
+                    <button id="clearDataBtn" class="danger-btn">Clear All Data</button>
+                </div>
+            </div>
+        </main>
+
+        <!-- Bottom Navigation -->
+        <nav class="bottom-nav">
+            <button class="nav-item active" data-tab="evening">
+                <span class="nav-icon">🌙</span>
+                <span class="nav-label">Evening</span>
+            </button>
+            <button class="nav-item" data-tab="today">
+                <span class="nav-icon">☀️</span>
+                <span class="nav-label">Today</span>
+            </button>
+            <button class="nav-item" data-tab="tasks">
+                <span class="nav-icon">✓</span>
+                <span class="nav-label">Tasks</span>
+            </button>
+            <button class="nav-item" data-tab="history">
+                <span class="nav-icon">📖</span>
+                <span class="nav-label">History</span>
+            </button>
+            <button class="nav-item" data-tab="settings">
+                <span class="nav-icon">⚙️</span>
+                <span class="nav-label">Settings</span>
+            </button>
+        </nav>
+    </div>
+
+    <!-- Planning Wizard Modal -->
+    <div id="wizardModal" class="modal">
+        <div class="modal-content wizard-content">
+            <div class="wizard-header">
+                <h2>Plan Tomorrow</h2>
+                <button class="close-btn" id="closeWizard">&times;</button>
+            </div>
+            <div class="wizard-body">
+                <div class="wizard-step" id="step1">
+                    <h3>Step 1: Wake Time Target</h3>
+                    <p class="step-date" id="wizardDate"></p>
+                    <div class="form-group">
+                        <label>Target Wake Time</label>
+                        <input type="time" id="wakeTarget" class="time-input">
+                    </div>
+                    <button class="primary-btn wizard-next">Next</button>
+                </div>
+
+                <div class="wizard-step" id="step2" style="display: none;">
+                    <h3>Step 2: Appointments</h3>
+                    <div id="appointmentsList"></div>
+                    <button class="secondary-btn" id="addAppointment">+ Add Appointment</button>
+                    <div class="wizard-nav">
+                        <button class="secondary-btn wizard-back">Back</button>
+                        <button class="primary-btn wizard-next">Next</button>
+                    </div>
+                </div>
+
+                <div class="wizard-step" id="step3" style="display: none;">
+                    <h3>Step 3: Caregiver Availability</h3>
+                    <p>Who is available for naps?</p>
+                    <div class="caregiver-grid" id="caregiverAvailability"></div>
+                    <div class="wizard-nav">
+                        <button class="secondary-btn wizard-back">Back</button>
+                        <button class="primary-btn wizard-next">Next</button>
+                    </div>
+                </div>
+
+                <div class="wizard-step" id="step4" style="display: none;">
+                    <h3>Step 4: Constraints</h3>
+                    <div id="constraintsList"></div>
+                    <div class="wizard-nav">
+                        <button class="secondary-btn wizard-back">Back</button>
+                        <button class="primary-btn wizard-next">Next</button>
+                    </div>
+                </div>
+
+                <div class="wizard-step" id="step5" style="display: none;">
+                    <h3>Step 5: Brain Dump</h3>
+                    <p>Any tasks for tomorrow?</p>
+                    <textarea id="brainDumpText" class="brain-dump-input" placeholder="Quick tasks for tomorrow..."></textarea>
+                    <div class="wizard-nav">
+                        <button class="secondary-btn wizard-back">Back</button>
+                        <button class="primary-btn" id="saveWizard">Save Plan</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast Notifications -->
+    <div id="toastContainer" class="toast-container"></div>
+
+    <script src="app.js"></script>
+</body>
+</html>
