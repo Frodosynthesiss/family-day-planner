@@ -1,46 +1,27 @@
-# Family Day Planner (Shared Password + Supabase)
+# Family Day Planner — Setup Guide (Shared / No-Auth)
 
-This is a static PWA meant to be hosted on GitHub Pages.
-It uses Supabase as a shared backend (no individual user accounts).
+This is a private, mobile-friendly PWA (“family intranet”) that runs as a static GitHub Pages site and syncs across devices using Supabase.
 
-## 1) Create a Supabase project
-- Create a new Supabase project in the Supabase dashboard.
+## Access
+- No individual accounts.
+- One shared password gate:
+  - Password: `JuneR0cks!`
 
-## 2) Run the SQL
-In the Supabase project:
-- Open **SQL Editor**
-- Run `supabase.sql` (included in this repo)
+## Supabase
+1) Create a Supabase project
+2) In `app.js`, set:
+- `SUPABASE_URL`
+- `SUPABASE_KEY` (Publishable key, starts with `sb_publishable_...`)
 
-This creates:
-- `settings`
-- `tasks`
-- `day_plans`
-- `day_logs`
+3) Run the SQL in `supabase-shared-noauth.sql` in Supabase SQL Editor.
 
-All data is shared under `space_id = 'default'`.
+## Local run
+Use a local web server (service workers won’t work from file://):
+- VS Code Live Server, or
+- `python -m http.server 8080`
 
-## 3) CORS
-In Supabase:
-- Project Settings → API → CORS
-- Add your GitHub Pages origin(s), e.g.:
-  - https://YOURUSER.github.io
-  - https://YOURUSER.github.io/YOURREPO
+## GitHub Pages
+Upload the folder contents to a repo root and enable Pages (main branch / root).
 
-## 4) Deploy to GitHub Pages
-Upload these files to your repo root:
-- index.html
-- app.js
-- styles.css
-- manifest.json
-- service-worker.js
-- icon-192.png
-- icon-512.png
-
-Enable Pages:
-- Settings → Pages → Deploy from branch → root
-
-## 5) If you see old behavior after updating
-PWAs cache aggressively. Do ONE of these after deploying:
-- Hard refresh: Ctrl+Shift+R
-- DevTools → Application → Service Workers → Unregister
-- Clear site data
+## Google Calendar export
+In Settings, paste your Apps Script Web App URL + Calendar ID + a shared API key.
