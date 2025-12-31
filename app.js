@@ -1872,15 +1872,25 @@ function setupEventHandlers() {
     document.querySelectorAll('.nav-item').forEach(btn => {
         btn.addEventListener('click', () => {
             const tab = btn.dataset.tab;
+            console.log('Tab clicked:', tab);
             
             document.querySelectorAll('.nav-item').forEach(b => b.classList.remove('active'));
             btn.classList.add('active');
             
             document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
-            document.getElementById(`${tab}Tab`).classList.add('active');
+            const tabPane = document.getElementById(`${tab}Tab`);
+            if (tabPane) {
+                tabPane.classList.add('active');
+                console.log('Activated tab pane:', `${tab}Tab`);
+            } else {
+                console.error('Tab pane not found:', `${tab}Tab`);
+            }
             
             if (tab === 'history') {
                 ui.renderHistory();
+            } else if (tab === 'tasks') {
+                // Render tasks when switching to tasks tab
+                ui.renderTasks(state.tasks);
             }
         });
     });
