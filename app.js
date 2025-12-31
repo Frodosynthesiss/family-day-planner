@@ -3,12 +3,13 @@
 
 // Firebase Configuration
 const firebaseConfig = {
-    apiKey: "YOUR_FIREBASE_API_KEY",
-    authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
-    projectId: "YOUR_PROJECT_ID",
-    storageBucket: "YOUR_PROJECT_ID.appspot.com",
-    messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
-    appId: "YOUR_APP_ID"
+  apiKey: "AIzaSyA2YSjOktRbinbKMjIy1pbd_Bkbwp3ruRY",
+  authDomain: "vega-payne-command-center.firebaseapp.com",
+  projectId: "vega-payne-command-center",
+  storageBucket: "vega-payne-command-center.firebasestorage.app",
+  messagingSenderId: "325061344708",
+  appId: "1:325061344708:web:397bff2f1776308a997891",
+  measurementId: "G-JHR2MYTHM1"
 };
 
 // Initialize Firebase
