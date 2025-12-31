@@ -482,7 +482,7 @@ const scheduler = {
     },
     
     adjustScheduleForActualWake(plan, actualWake, napData = {}) {
-        // Recalculate schedule based on actual wake time
+        // Use the same detailed routine logic as wizard, but with actual data
         const blocks = [];
         let currentTime = actualWake;
         
@@ -493,72 +493,76 @@ const scheduler = {
             return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
         };
         
-        const parseDuration = (duration) => {
-            const match = duration.match(/(\d+\.?\d*)\s*(hr|min)/);
-            if (!match) return 0;
-            const value = parseFloat(match[1]);
-            return match[2] === 'hr' ? value * 60 : value;
+        const minutesBetween = (start, end) => {
+            const [h1, m1] = start.split(':').map(Number);
+            const [h2, m2] = end.split(':').map(Number);
+            return (h2 * 60 + m2) - (h1 * 60 + m1);
         };
         
-        // Get constraints
-        const constraints = plan.constraints || this.getDefaultConstraints();
-        
-        // Parse wake windows and nap durations
-        const parseWakeWindow = (value) => {
-            const match = value.match(/([\d.]+)-([\d.]+)\s*hrs?/);
-            if (match) {
-                const min = parseFloat(match[1]);
-                const max = parseFloat(match[2]);
-                return ((min + max) / 2) * 60;
-            }
-            const singleMatch = value.match(/([\d.]+)\s*hrs?/);
-            if (singleMatch) return parseFloat(singleMatch[1]) * 60;
-            return 195; // Default 3.25 hrs
-        };
-        
-        const parseNapDuration = (value) => {
-            const match = value.match(/(\d+)-(\d+)\s*min/);
-            if (match) {
-                const min = parseInt(match[1]);
-                const max = parseInt(match[2]);
-                return (min + max) / 2;
-            }
-            return 65; // Default
-        };
-        
-        const wakeWindow1 = parseWakeWindow(constraints.find(c => c.name === 'Wake Window 1')?.value || '3-3.5 hrs');
-        const napDuration1 = parseNapDuration(constraints.find(c => c.name === 'Nap 1 Duration')?.value || '40-90 min');
-        const wakeWindow2 = parseWakeWindow(constraints.find(c => c.name === 'Wake Window 2')?.value || '3.5-4 hrs');
-        const napDuration2 = parseNapDuration(constraints.find(c => c.name === 'Nap 2 Duration')?.value || '40-90 min');
-        
-        // Wake block
-        blocks.push({
-            start: currentTime,
-            end: addMinutes(currentTime, 30),
-            title: 'Wake & Morning Routine',
-            type: 'routine',
-            caregiver: 'Available'
-        });
-        currentTime = addMinutes(currentTime, 30);
-        
-        // Nap 1 - use actual if tracked, otherwise calculate
-        const nap1Start = napData?.nap1?.start || addMinutes(currentTime, wakeWindow1 - 30);
-        const nap1End = napData?.nap1?.end || addMinutes(nap1Start, napDuration1);
-        
-        // Find original nap 1 caregiver from plan
-        const originalNap1 = plan.calculatedSchedule?.find(b => b.title === 'Nap 1');
-        const nap1Caregiver = originalNap1?.caregiver || 'Available';
-        
-        if (currentTime < nap1Start) {
+        const addRoutineBlock = (title, duration, type = 'routine') => {
             blocks.push({
                 start: currentTime,
-                end: nap1Start,
+                end: addMinutes(currentTime, duration),
+                title,
+                type,
+                caregiver: 'Available'
+            });
+            currentTime = addMinutes(currentTime, duration);
+        };
+        
+        // Fixed durations (in minutes) - same as wizard
+        const WAKE_WINDOW_1 = 3.25 * 60; // 195 min
+        const WAKE_WINDOW_2 = 3.5 * 60;  // 210 min
+        const WAKE_WINDOW_3 = 4 * 60;    // 240 min
+        
+        // Get actual nap durations if logged, otherwise use 1 hour
+        const nap1Duration = napData?.nap1?.start && napData?.nap1?.end ? 
+            minutesBetween(napData.nap1.start, napData.nap1.end) : 60;
+        const nap2Duration = napData?.nap2?.start && napData?.nap2?.end ?
+            minutesBetween(napData.nap2.start, napData.nap2.end) : 60;
+        
+        // Find original caregivers from plan
+        const originalNap1 = plan.calculatedSchedule?.find(b => b.title === 'Nap 1');
+        const nap1Caregiver = originalNap1?.caregiver || 'Available';
+        const originalNap2 = plan.calculatedSchedule?.find(b => b.title === 'Nap 2');
+        const nap2Caregiver = originalNap2?.caregiver || 'Available';
+        
+        // ========== WAKE WINDOW 1 (3.25 hours) ==========
+        const ww1Start = currentTime;
+        const ww1End = addMinutes(ww1Start, WAKE_WINDOW_1);
+        
+        // Fixed morning routine
+        addRoutineBlock('Wake Up Time', 5);
+        addRoutineBlock('Family Cuddle', 10);
+        addRoutineBlock('Get Dressed', 10);
+        addRoutineBlock('Breakfast Prep', 10);
+        addRoutineBlock('Breakfast', 20, 'meal');
+        addRoutineBlock('Brush Teeth', 5);
+        
+        // Nap routine starts 10min before WW1 ends (or at actual logged time)
+        const napRoutine1Start = napData?.nap1?.start ? 
+            addMinutes(napData.nap1.start, -10) : 
+            addMinutes(ww1End, -10);
+        
+        // Fill with open time until nap routine
+        const openTime1Duration = minutesBetween(currentTime, napRoutine1Start);
+        if (openTime1Duration > 0) {
+            blocks.push({
+                start: currentTime,
+                end: napRoutine1Start,
                 title: 'Open Time',
                 type: 'open',
                 caregiver: 'Anyone'
             });
+            currentTime = napRoutine1Start;
         }
         
+        // Nap Time Routine (right before nap)
+        addRoutineBlock('Nap Time Routine', 10);
+        
+        // Nap 1 - use actual times if logged
+        const nap1Start = napData?.nap1?.start || currentTime;
+        const nap1End = napData?.nap1?.end || addMinutes(nap1Start, 60);
         blocks.push({
             start: nap1Start,
             end: nap1End,
@@ -568,52 +572,58 @@ const scheduler = {
         });
         currentTime = nap1End;
         
-        // Insert original appointments (they don't change)
-        const appointments = plan.appointments || [];
-        const sortedAppointments = appointments
-            .filter(apt => apt.start && apt.title)
-            .sort((a, b) => a.start.localeCompare(b.start));
+        // ========== WAKE WINDOW 2 (3.5 hours) ==========
+        const ww2Start = currentTime;
+        const ww2End = addMinutes(ww2Start, WAKE_WINDOW_2);
         
-        for (const apt of sortedAppointments) {
-            const aptEnd = apt.end || addMinutes(apt.start, 60);
-            
-            if (currentTime < apt.start) {
-                blocks.push({
-                    start: currentTime,
-                    end: apt.start,
-                    title: 'Open Time',
-                    type: 'open',
-                    caregiver: 'Anyone'
-                });
-            }
-            
-            blocks.push({
-                start: apt.start,
-                end: aptEnd,
-                title: apt.title,
-                type: 'appointment',
-                caregiver: 'Family'
-            });
-            currentTime = aptEnd;
-        }
+        addRoutineBlock('Wake Up Time', 5);
         
-        // Nap 2 - use actual if tracked, otherwise calculate
-        const nap2Start = napData?.nap2?.start || addMinutes(currentTime, wakeWindow2);
-        const nap2End = napData?.nap2?.end || addMinutes(nap2Start, napDuration2);
+        // Snack needs to start 20min before WW2 ends (or before actual nap 2)
+        const snack2Start = napData?.nap2?.start ?
+            addMinutes(napData.nap2.start, -20) :
+            addMinutes(ww2End, -20);
         
-        const originalNap2 = plan.calculatedSchedule?.find(b => b.title === 'Nap 2');
-        const nap2Caregiver = originalNap2?.caregiver || 'Available';
+        // Lunch roughly 1/3 into wake window
+        const lunchPrepStart = addMinutes(ww2Start, Math.floor(WAKE_WINDOW_2 / 3));
         
-        if (currentTime < nap2Start) {
+        // Open time before lunch
+        const openTime2aDuration = minutesBetween(currentTime, addMinutes(lunchPrepStart, -10));
+        if (openTime2aDuration > 0) {
             blocks.push({
                 start: currentTime,
-                end: nap2Start,
+                end: addMinutes(lunchPrepStart, -10),
                 title: 'Open Time',
                 type: 'open',
                 caregiver: 'Anyone'
             });
+            currentTime = addMinutes(lunchPrepStart, -10);
         }
         
+        addRoutineBlock('Lunch Prep', 10);
+        addRoutineBlock('Lunch', 20, 'meal');
+        
+        // Open time after lunch until snack
+        const openTime2bDuration = minutesBetween(currentTime, snack2Start);
+        if (openTime2bDuration > 0) {
+            blocks.push({
+                start: currentTime,
+                end: snack2Start,
+                title: 'Open Time',
+                type: 'open',
+                caregiver: 'Anyone'
+            });
+            currentTime = snack2Start;
+        }
+        
+        // Snack + Milk (right before nap routine)
+        addRoutineBlock('Snack + Milk', 10, 'meal');
+        
+        // Nap Time Routine (right before nap)
+        addRoutineBlock('Nap Time Routine', 10);
+        
+        // Nap 2 - use actual times if logged
+        const nap2Start = napData?.nap2?.start || currentTime;
+        const nap2End = napData?.nap2?.end || addMinutes(nap2Start, 60);
         blocks.push({
             start: nap2Start,
             end: nap2End,
@@ -623,28 +633,118 @@ const scheduler = {
         });
         currentTime = nap2End;
         
-        // Evening & Bedtime
-        const bedtime = constraints.find(c => c.name === 'Bedtime Target')?.value || '19:00';
-        const bedtimeHour = bedtime.match(/(\d+)/)?.[1] || '19';
-        const bedtimeTime = `${bedtimeHour.padStart(2, '0')}:00`;
+        // ========== WAKE WINDOW 3 (4 hours) ==========
+        const ww3Start = currentTime;
+        const ww3End = addMinutes(ww3Start, WAKE_WINDOW_3);
+        const bedtime = ww3End; // Calculated bedtime
         
-        if (currentTime < addMinutes(bedtimeTime, -30)) {
+        addRoutineBlock('Wake Up Time', 5);
+        addRoutineBlock('Snack + Milk', 10, 'meal');
+        
+        // Fixed 40min open time
+        addRoutineBlock('Open Time', 40, 'open');
+        
+        addRoutineBlock('Dinner Prep', 10);
+        addRoutineBlock('Dinner', 20, 'meal');
+        
+        // Get bath info from plan
+        const includeBath = plan.includeBath || false;
+        
+        // Calculate when bedtime routine needs to start
+        const bedtimeRoutineStart = includeBath ? 
+            addMinutes(bedtime, -40) : 
+            addMinutes(bedtime, -20);
+        
+        // Flexible open time fills remaining space
+        const openTime3Duration = minutesBetween(currentTime, bedtimeRoutineStart);
+        if (openTime3Duration > 0) {
             blocks.push({
                 start: currentTime,
-                end: addMinutes(bedtimeTime, -30),
+                end: bedtimeRoutineStart,
                 title: 'Open Time',
                 type: 'open',
                 caregiver: 'Anyone'
             });
+            currentTime = bedtimeRoutineStart;
         }
         
-        blocks.push({
-            start: addMinutes(bedtimeTime, -30),
-            end: bedtimeTime,
-            title: 'Bedtime Routine',
-            type: 'routine',
-            caregiver: 'Available'
-        });
+        // Bath (if scheduled in plan)
+        if (includeBath) {
+            const originalBath = plan.calculatedSchedule?.find(b => b.type === 'bath');
+            blocks.push({
+                start: currentTime,
+                end: addMinutes(currentTime, 20),
+                title: 'Bath Time',
+                type: 'bath',
+                caregiver: originalBath?.caregiver || 'Both Parents'
+            });
+            currentTime = addMinutes(currentTime, 20);
+        }
+        
+        // Brush Teeth (right before bedtime routine)
+        addRoutineBlock('Brush Teeth', 5);
+        
+        // Bedtime Routine (right before bedtime)
+        addRoutineBlock('Bedtime Routine', 15);
+        
+        // ========== INSERT APPOINTMENTS ==========
+        const appointments = plan.appointments || [];
+        const sortedAppointments = appointments
+            .filter(apt => apt.start && apt.title)
+            .sort((a, b) => a.start.localeCompare(b.start));
+        
+        for (const apt of sortedAppointments) {
+            const aptStart = apt.start;
+            const aptEnd = apt.end || addMinutes(aptStart, 60);
+            
+            // Find which open time block contains this appointment
+            let insertIndex = blocks.findIndex(b => 
+                b.type === 'open' && 
+                aptStart >= b.start && 
+                aptStart < b.end
+            );
+            
+            if (insertIndex !== -1) {
+                const openBlock = blocks[insertIndex];
+                const newBlocks = [];
+                
+                // Open time before appointment
+                if (openBlock.start < aptStart) {
+                    newBlocks.push({
+                        start: openBlock.start,
+                        end: aptStart,
+                        title: 'Open Time',
+                        type: 'open',
+                        caregiver: 'Anyone'
+                    });
+                }
+                
+                // Appointment
+                newBlocks.push({
+                    start: aptStart,
+                    end: aptEnd,
+                    title: apt.title,
+                    type: 'appointment',
+                    caregiver: 'Family'
+                });
+                
+                // Open time after appointment
+                if (aptEnd < openBlock.end) {
+                    newBlocks.push({
+                        start: aptEnd,
+                        end: openBlock.end,
+                        title: 'Open Time',
+                        type: 'open',
+                        caregiver: 'Anyone'
+                    });
+                }
+                
+                blocks.splice(insertIndex, 1, ...newBlocks);
+            }
+        }
+        
+        // Sort all blocks by start time
+        blocks.sort((a, b) => a.start.localeCompare(b.start));
         
         return blocks;
     }
@@ -2068,6 +2168,9 @@ async function renderTodaySchedule() {
     const date = utils.getTodayString();
     const log = await db_ops.getDayLog(date);
     
+    // Render availability summary if plan exists
+    renderAvailabilitySummary();
+    
     // If we have a plan with calculated schedule, use it
     if (state.todayPlan && state.todayPlan.calculatedSchedule) {
         let blocks = [...state.todayPlan.calculatedSchedule];
@@ -2110,6 +2213,107 @@ async function renderTodaySchedule() {
     
     // No plan and no wake time - show empty
     ui.renderSchedule([]);
+}
+
+function renderAvailabilitySummary() {
+    const container = document.getElementById('availabilitySummary');
+    
+    if (!state.todayPlan) {
+        container.style.display = 'none';
+        return;
+    }
+    
+    const plan = state.todayPlan;
+    const parentUnavailable = plan.parentUnavailable || { kristyn: [], julio: [] };
+    const helpersAvailable = plan.helpersAvailable || { nanny: [], kayden: [] };
+    
+    // Check if there's any availability info to show
+    const hasAvailability = 
+        parentUnavailable.kristyn?.length > 0 ||
+        parentUnavailable.julio?.length > 0 ||
+        helpersAvailable.nanny?.length > 0 ||
+        helpersAvailable.kayden?.length > 0;
+    
+    if (!hasAvailability) {
+        container.style.display = 'none';
+        return;
+    }
+    
+    const formatTimeRange = (block) => `${utils.formatTime(block.start)}-${utils.formatTime(block.end)}`;
+    
+    let html = '<h4>Today\'s Availability</h4><div class="availability-grid">';
+    
+    // Kristyn Unavailable
+    if (parentUnavailable.kristyn?.length > 0) {
+        html += `
+            <div class="availability-person">
+                <div class="availability-icon unavailable">👩</div>
+                <div class="availability-details">
+                    <div class="availability-name">Kristyn Unavailable</div>
+                    <div class="availability-times">
+                        ${parentUnavailable.kristyn.map(block => 
+                            `<span class="availability-badge unavailable">${formatTimeRange(block)}</span>`
+                        ).join('')}
+                    </div>
+                </div>
+            </div>
+        `;
+    }
+    
+    // Julio Unavailable
+    if (parentUnavailable.julio?.length > 0) {
+        html += `
+            <div class="availability-person">
+                <div class="availability-icon unavailable">👨</div>
+                <div class="availability-details">
+                    <div class="availability-name">Julio Unavailable</div>
+                    <div class="availability-times">
+                        ${parentUnavailable.julio.map(block => 
+                            `<span class="availability-badge unavailable">${formatTimeRange(block)}</span>`
+                        ).join('')}
+                    </div>
+                </div>
+            </div>
+        `;
+    }
+    
+    // Nanny Available
+    if (helpersAvailable.nanny?.length > 0) {
+        html += `
+            <div class="availability-person">
+                <div class="availability-icon available">👶</div>
+                <div class="availability-details">
+                    <div class="availability-name">Nanny Available</div>
+                    <div class="availability-times">
+                        ${helpersAvailable.nanny.map(block => 
+                            `<span class="availability-badge available">${formatTimeRange(block)}</span>`
+                        ).join('')}
+                    </div>
+                </div>
+            </div>
+        `;
+    }
+    
+    // Kayden Available
+    if (helpersAvailable.kayden?.length > 0) {
+        html += `
+            <div class="availability-person">
+                <div class="availability-icon available">👧</div>
+                <div class="availability-details">
+                    <div class="availability-name">Kayden Available</div>
+                    <div class="availability-times">
+                        ${helpersAvailable.kayden.map(block => 
+                            `<span class="availability-badge available">${formatTimeRange(block)}</span>`
+                        ).join('')}
+                    </div>
+                </div>
+            </div>
+        `;
+    }
+    
+    html += '</div>';
+    container.innerHTML = html;
+    container.style.display = 'block';
 }
 
 function renderTomorrowPreview() {
