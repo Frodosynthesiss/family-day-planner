@@ -20,7 +20,7 @@
     </div>
     <div class="topbarActions">
       <button class="btn btnGhost" id="btnExport">Export</button>
-      <button class="btn btnGhost" id="btnSignOut">Lock</button>
+      <button class="btn btnGhost" id="btnLock">Lock</button>
     </div>
   </header>
 
@@ -64,47 +64,7 @@
           </div>
 
           <div class="logGrid">
-            <div class="logRow">
-              <div class="logLabel">Actual wake</div>
-              <div class="logControls">
-                <button class="btn btnTiny" id="btnWakeNow">Set now</button>
-                <input class="input inputTime" id="wakeTime" type="time" />
-              </div>
-            </div>
-
-            <div class="logRow">
-              <div class="logLabel">Nap 1</div>
-              <div class="logControls">
-                <label class="toggle"><input type="checkbox" id="nap1Enabled"> <span>Track</span></label>
-                <button class="chipBtn" id="btnNap1Start" type="button">Start</button>
-                <button class="chipBtn" id="btnNap1Stop" type="button">Stop</button>
-                <input class="input inputTime" id="nap1Start" type="time" disabled />
-                <span class="muted">to</span>
-                <input class="input inputTime" id="nap1End" type="time" disabled />
-              </div>
-            </div>
-
-            <div class="logRow">
-              <div class="logLabel">Nap 2</div>
-              <div class="logControls">
-                <label class="toggle"><input type="checkbox" id="nap2Enabled"> <span>Track</span></label>
-                <button class="chipBtn" id="btnNap2Start" type="button">Start</button>
-                <button class="chipBtn" id="btnNap2Stop" type="button">Stop</button>
-                <input class="input inputTime" id="nap2Start" type="time" disabled />
-                <span class="muted">to</span>
-                <input class="input inputTime" id="nap2End" type="time" disabled />
-              </div>
-            </div>
-
-            <div class="logRow">
-              <div class="logLabel">Bedtime (tracking)</div>
-              <div class="logControls">
-                <input class="input inputTime" id="bedtime" type="time" />
-              </div>
-            </div>
-          </div>
-
-          <div class="timelineTop">
+<div class="timelineTop">
             <div class="timelineTitle">Timeline</div>
             <div class="muted" id="todayMeta">—</div>
           </div>
@@ -215,7 +175,7 @@
         <div class="row">
           <button class="btn" id="btnSaveSettings">Save settings</button>
         </div>
-      </div>
+</div>
     </section>
   </main>
 
@@ -227,31 +187,6 @@
     <button class="tab" data-tab="Settings">⚙︎<span>Settings</span></button>
   </nav>
 
-  <!-- AUTH -->
-
-
-  <!-- Unlock (shared password gate) -->
-  <div class="modal hidden" id="unlockModal" aria-hidden="true" inert>
-    <div class="scrim" id="unlockScrim"></div>
-    <div class="panel" role="dialog" aria-modal="true" aria-label="Unlock">
-      <div class="panelHead">
-        <h3>Enter password</h3>
-        <div class="muted small">Anyone with the link + password can access.</div>
-      </div>
-      <div class="panelBody">
-        <label class="field">
-          <span>Password</span>
-          <input class="input" id="unlockPass" type="password" placeholder="JuneR0cks!" autocomplete="current-password" />
-        </label>
-        <div class="row" style="justify-content:flex-end; gap:10px;">
-          <button class="btn" id="btnUnlock" type="button">Unlock</button>
-        </div>
-      </div>
-    </div>
-  </div>
-
-    </div>
-  </div>
 
   <!-- WIZARD -->
   <div class="modal hidden" id="wizardModal" aria-hidden="true">
@@ -386,5 +321,28 @@ Text nanny about Friday"></textarea>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="./app.js"></script>
+
+  <!-- UNLOCK GATE -->
+  <div class="modal" id="unlockModal" aria-hidden="true">
+    <div class="scrim"></div>
+    <div class="panel" role="dialog" aria-modal="true">
+      <div class="panelHead">
+        <div>
+          <h3>Enter password</h3>
+          <div class="muted small">Anyone with the link + password can access this shared family dashboard.</div>
+        </div>
+      </div>
+      <div class="panelBody">
+        <label class="field">
+          <span>Password</span>
+          <input class="input" id="unlockPass" type="password" placeholder="JuneR0cks!" />
+        </label>
+        <div class="row">
+          <button class="btn" id="unlockBtn">Unlock</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
 </body>
 </html>

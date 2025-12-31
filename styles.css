@@ -216,21 +216,3 @@ h2,h3,h4{margin:0}
 .event.tiny .eventMeta{display:none}
 
 #btnSignOut.hidden{display:none}
-
-
-/* Small in-row buttons (used for nap Start/Stop) */
-.chipBtn{
-  appearance:none;
-  border:1px solid var(--line);
-  background: rgba(255,255,255,.75);
-  padding:8px 10px;
-  border-radius:999px;
-  font-weight:800;
-  font-size:12px;
-  line-height:1;
-  cursor:pointer;
-}
-.chipBtn:disabled{
-  opacity:.45;
-  cursor:not-allowed;
-}
