@@ -957,7 +957,8 @@ const wizard = {
             todayTasksCompleted: {},
             brainDump: '',
             selectedTasks: [],
-            constraints: state.settings?.constraints || scheduler.getDefaultConstraints()
+            constraints: state.settings?.constraints || scheduler.getDefaultConstraints(),
+            includeBath: false  // FIX: Initialize bath checkbox state
         };
         this.renderStep();
     },
@@ -1002,6 +1003,11 @@ const wizard = {
             case 4:
                 this.renderAppointments();
                 await this.checkBathReminder();
+                // FIX: Restore bath checkbox state when returning to this step
+                const bathCheckbox = document.getElementById('scheduleBath');
+                if (bathCheckbox) {
+                    bathCheckbox.checked = this.data.includeBath || false;
+                }
                 break;
             case 5:
                 await this.renderTodayTaskReview();
@@ -1030,8 +1036,10 @@ const wizard = {
             return;
         }
         
-        const lastBathDate = new Date(lastBath);
+        // FIX: Properly handle date timezone issues
+        const lastBathDate = new Date(lastBath + 'T00:00:00');  // Force local time
         const today = new Date();
+        today.setHours(0, 0, 0, 0);  // Start of today, no time component
         const daysSince = Math.floor((today - lastBathDate) / (1000 * 60 * 60 * 24));
         
         if (daysSince >= 3) {
@@ -1241,6 +1249,13 @@ const wizard = {
         }
     },
     
+    /**
+     * Get appointment end time, defaulting to 1 hour after start if not specified
+     */
+    getAppointmentEnd(appointment, addMinutesFunc) {
+        return appointment.end || addMinutesFunc(appointment.start, 60);
+    },
+    
     calculateSchedule() {
         const blocks = [];
         let currentTime = this.data.wakeTarget;
@@ -1309,14 +1324,14 @@ const wizard = {
         };
         
         // Fixed durations (in minutes)
-        const WAKE_WINDOW_1 = 3.25 * 60; // 195 min
-        const WAKE_WINDOW_2 = 3.5 * 60;  // 210 min
-        const WAKE_WINDOW_3 = 4 * 60;    // 240 min
-        const NAP_DURATION = 60;         // 1 hour forecast
+        const WAKE_WINDOW_1 = 3.25 * 60; // 195 min of AWAKE time
+        const WAKE_WINDOW_2 = 3.5 * 60;  // 210 min of AWAKE time
+        const WAKE_WINDOW_3 = 4 * 60;    // 240 min of AWAKE time
+        const NAP_DURATION = 60;         // 1 hour OUTSIDE wake window
+        const NAP_ROUTINE = 10;          // 10 min - INSIDE wake window (last thing before nap)
         
         // ========== WAKE WINDOW 1 (3.25 hours) ==========
         const ww1Start = currentTime;
-        const ww1End = addMinutes(ww1Start, WAKE_WINDOW_1);
         
         // Fixed morning routine
         addRoutineBlock('Wake Up Time', 5);
@@ -1326,8 +1341,8 @@ const wizard = {
         addRoutineBlock('Breakfast', 20, 'meal');
         addRoutineBlock('Brush Teeth', 5);
         
-        // Calculate when nap routine needs to start (10min before WW1 ends)
-        const napRoutine1Start = addMinutes(ww1End, -10);
+        // Calculate when nap routine should start - last 10min of wake window
+        const napRoutine1Start = addMinutes(ww1Start, WAKE_WINDOW_1 - NAP_ROUTINE);
         
         // Fill with open time until nap routine
         const openTime1Duration = minutesBetween(currentTime, napRoutine1Start);
@@ -1342,10 +1357,10 @@ const wizard = {
             currentTime = napRoutine1Start;
         }
         
-        // Nap Time Routine (right before nap)
-        addRoutineBlock('Nap Time Routine', 10);
+        // Nap Time Routine (last thing in WW1)
+        addRoutineBlock('Nap Time Routine', NAP_ROUTINE);
         
-        // Nap 1
+        // Now we're at the END of WW1, NAP is OUTSIDE the wake window
         const nap1Start = currentTime;
         const nap1End = addMinutes(nap1Start, NAP_DURATION);
         const nap1Caregiver = getAvailableCaregiver(nap1Start, true);
@@ -1360,28 +1375,29 @@ const wizard = {
         
         // ========== WAKE WINDOW 2 (3.5 hours) ==========
         const ww2Start = currentTime;
-        const ww2End = addMinutes(ww2Start, WAKE_WINDOW_2);
         
         addRoutineBlock('Wake Up Time', 5);
         
-        // Calculate when snack needs to start (20min before WW2 ends: 10min snack + 10min routine)
-        const snack2Start = addMinutes(ww2End, -20);
+        // Nap routine is last 10min of WW2, then nap is OUTSIDE
+        const napRoutine2Start = addMinutes(ww2Start, WAKE_WINDOW_2 - NAP_ROUTINE);
         
-        // We need to fit lunch somewhere in the middle
-        // Let's put lunch roughly 1/3 into the wake window
-        const lunchPrepStart = addMinutes(ww2Start, Math.floor(WAKE_WINDOW_2 / 3));
+        // Snack is 10min before nap routine
+        const snack2Start = addMinutes(napRoutine2Start, -10);
+        
+        // Put lunch roughly 1/3 into wake window
+        const lunchPrepStart = addMinutes(ww2Start, 5 + 60);
         
         // Open time before lunch
-        const openTime2aDuration = minutesBetween(currentTime, addMinutes(lunchPrepStart, -10));
+        const openTime2aDuration = minutesBetween(currentTime, lunchPrepStart);
         if (openTime2aDuration > 0) {
             blocks.push({
                 start: currentTime,
-                end: addMinutes(lunchPrepStart, -10),
+                end: lunchPrepStart,
                 title: 'Open Time',
                 type: 'open',
                 caregiver: 'Anyone'
             });
-            currentTime = addMinutes(lunchPrepStart, -10);
+            currentTime = lunchPrepStart;
         }
         
         addRoutineBlock('Lunch Prep', 10);
@@ -1403,10 +1419,10 @@ const wizard = {
         // Snack + Milk (right before nap routine)
         addRoutineBlock('Snack + Milk', 10, 'meal');
         
-        // Nap Time Routine (right before nap)
-        addRoutineBlock('Nap Time Routine', 10);
+        // Nap Time Routine (last thing in WW2)
+        addRoutineBlock('Nap Time Routine', NAP_ROUTINE);
         
-        // Nap 2
+        // Nap 2 is OUTSIDE wake window
         const nap2Start = currentTime;
         const nap2End = addMinutes(nap2Start, NAP_DURATION);
         const nap2Caregiver = getAvailableCaregiver(nap2Start, true);
@@ -1482,7 +1498,7 @@ const wizard = {
         
         for (const apt of sortedAppointments) {
             const aptStart = apt.start;
-            const aptEnd = apt.end || addMinutes(aptStart, 60);
+            const aptEnd = this.getAppointmentEnd(apt, addMinutes);  // FIX: Use DRY helper
             
             // Find which open time block contains this appointment
             let insertIndex = blocks.findIndex(b => 
@@ -1582,7 +1598,7 @@ const wizard = {
         
         appointments.forEach(apt => {
             const aptStart = apt.start;
-            const aptEnd = apt.end || addMinutes(aptStart, 60);
+            const aptEnd = this.getAppointmentEnd(apt, addMinutes);  // FIX: Use DRY helper
             
             // Check nap conflicts
             naps.forEach(nap => {
@@ -1645,17 +1661,15 @@ const wizard = {
     },
     
     async processBrainDump() {
-        // Create tasks from brain dump immediately so they show in step 7
+        // FIX: Wait for actual task creation instead of arbitrary timeout
         if (this.data.brainDump && this.data.brainDump.trim()) {
             const tasks = this.data.brainDump.split('\n').filter(t => t.trim());
-            for (const task of tasks) {
-                await db_ops.addTask(task.trim());
-            }
             
-            // Wait a moment for tasks to be created
-            await new Promise(resolve => setTimeout(resolve, 300));
+            // Create all tasks in parallel and wait for ALL to complete
+            const taskPromises = tasks.map(task => db_ops.addTask(task.trim()));
+            await Promise.all(taskPromises);
             
-            // Reload tasks so they appear in step 7
+            // Now reload tasks - they're definitely all created
             state.tasks = await db_ops.getTasks();
         }
     },
@@ -1922,12 +1936,21 @@ function setupEventHandlers() {
     });
     
     document.getElementById('clearPlanBtn').addEventListener('click', async () => {
-        if (confirm('Clear tomorrow\'s plan? This cannot be undone.')) {
+        // FIX: Better confirmation message
+        const message = '⚠️ Clear Tomorrow\'s Plan?\n\n' +
+                       'This will delete:\n' +
+                       '• All appointments\n' +
+                       '• Task assignments\n' +
+                       '• Bath scheduling\n' +
+                       '• Time blocks\n\n' +
+                       'This action cannot be undone.';
+        
+        if (confirm(message)) {
             const tomorrow = utils.getTomorrowString();
             try {
                 await db.collection('families').doc(FAMILY_ID)
                     .collection('day_plans').doc(tomorrow).delete();
-                utils.showToast('Plan cleared', 'success');
+                utils.showToast('Tomorrow\'s plan cleared', 'success');
                 await loadData();
             } catch (error) {
                 console.error('Error clearing plan:', error);
@@ -1984,23 +2007,24 @@ function setupEventHandlers() {
     
     document.getElementById('actualWakeTime').addEventListener('change', async (e) => {
         const date = utils.getTodayString();
-        const log = await db_ops.getDayLog(date) || {};
-        log.actualWake = e.target.value;
-        log.date = date; // Ensure date is set
-        await db_ops.saveDayLog(date, log);
-        await renderTodaySchedule();
-        utils.showToast('Wake time updated - schedule adjusted', 'success');
-    });
-    
-    // Nap toggles
-    document.getElementById('nap1Enabled').addEventListener('change', (e) => {
-        document.getElementById('nap1Controls').style.display = e.target.checked ? 'flex' : 'none';
-        renderTodaySchedule();
-    });
-    
-    document.getElementById('nap2Enabled').addEventListener('change', (e) => {
-        document.getElementById('nap2Controls').style.display = e.target.checked ? 'flex' : 'none';
-        renderTodaySchedule();
+        
+        try {
+            // FIX: Add error handling for database operations
+            const log = await db_ops.getDayLog(date) || {};
+            log.actualWake = e.target.value;
+            log.date = date; // Ensure date is set
+            await db_ops.saveDayLog(date, log);
+            await renderTodaySchedule();
+            utils.showToast('Wake time updated - schedule adjusted', 'success');
+        } catch (error) {
+            console.error('Failed to update wake time:', error);
+            utils.showToast('Failed to save wake time. Please try again.', 'error');
+            // Revert the input to previous value
+            const currentLog = await db_ops.getDayLog(date);
+            if (currentLog && currentLog.actualWake) {
+                e.target.value = currentLog.actualWake;
+            }
+        }
     });
     
     // Nap buttons
@@ -2049,52 +2073,6 @@ function setupEventHandlers() {
             await updateManualNapTime(napNum);
         });
     });
-    
-    async function updateManualNapTime(napNum) {
-        const date = utils.getTodayString();
-        const startInput = document.getElementById(`nap${napNum}StartTime`);
-        const endInput = document.getElementById(`nap${napNum}EndTime`);
-        
-        const log = await db_ops.getDayLog(date) || {};
-        if (!log.naps) log.naps = {};
-        if (!log.naps[`nap${napNum}`]) log.naps[`nap${napNum}`] = {};
-        
-        if (startInput.value) {
-            log.naps[`nap${napNum}`].start = startInput.value;
-        }
-        if (endInput.value) {
-            log.naps[`nap${napNum}`].end = endInput.value;
-        }
-        
-        await db_ops.saveDayLog(date, log);
-        updateNapDisplay(napNum, log.naps[`nap${napNum}`]);
-        await renderTodaySchedule();
-        utils.showToast(`Nap ${napNum} time updated`, 'success');
-    }
-    
-    // Load nap times into inputs when page loads
-    async function loadNapTimes() {
-        const date = utils.getTodayString();
-        const log = await db_ops.getDayLog(date);
-        
-        if (log?.naps?.nap1) {
-            if (log.naps.nap1.start) {
-                document.getElementById('nap1StartTime').value = log.naps.nap1.start;
-            }
-            if (log.naps.nap1.end) {
-                document.getElementById('nap1EndTime').value = log.naps.nap1.end;
-            }
-        }
-        
-        if (log?.naps?.nap2) {
-            if (log.naps.nap2.start) {
-                document.getElementById('nap2StartTime').value = log.naps.nap2.start;
-            }
-            if (log.naps.nap2.end) {
-                document.getElementById('nap2EndTime').value = log.naps.nap2.end;
-            }
-        }
-    }
     
     // Tasks
     document.getElementById('addTaskBtn').addEventListener('click', async () => {
@@ -2229,6 +2207,52 @@ function setupEventHandlers() {
             }
         }
     });
+}
+
+// Helper Functions
+async function updateManualNapTime(napNum) {
+    const date = utils.getTodayString();
+    const startInput = document.getElementById(`nap${napNum}StartTime`);
+    const endInput = document.getElementById(`nap${napNum}EndTime`);
+    
+    const log = await db_ops.getDayLog(date) || {};
+    if (!log.naps) log.naps = {};
+    if (!log.naps[`nap${napNum}`]) log.naps[`nap${napNum}`] = {};
+    
+    if (startInput.value) {
+        log.naps[`nap${napNum}`].start = startInput.value;
+    }
+    if (endInput.value) {
+        log.naps[`nap${napNum}`].end = endInput.value;
+    }
+    
+    await db_ops.saveDayLog(date, log);
+    updateNapDisplay(napNum, log.naps[`nap${napNum}`]);
+    await renderTodaySchedule();
+    utils.showToast(`Nap ${napNum} time updated`, 'success');
+}
+
+async function loadNapTimes() {
+    const date = utils.getTodayString();
+    const log = await db_ops.getDayLog(date);
+    
+    if (log?.naps?.nap1) {
+        if (log.naps.nap1.start) {
+            document.getElementById('nap1StartTime').value = log.naps.nap1.start;
+        }
+        if (log.naps.nap1.end) {
+            document.getElementById('nap1EndTime').value = log.naps.nap1.end;
+        }
+    }
+    
+    if (log?.naps?.nap2) {
+        if (log.naps.nap2.start) {
+            document.getElementById('nap2StartTime').value = log.naps.nap2.start;
+        }
+        if (log.naps.nap2.end) {
+            document.getElementById('nap2EndTime').value = log.naps.nap2.end;
+        }
+    }
 }
 
 // Data Loading

@@ -516,6 +516,13 @@ input:checked + .slider:before {
     cursor: not-allowed;
 }
 
+.nap-title {
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 0.75rem;
+}
+
 .nap-time-inputs {
     display: grid;
     grid-template-columns: 1fr 1fr;

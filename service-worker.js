@@ -1,14 +1,11 @@
-const CACHE_NAME = 'family-planner-v1';
+const CACHE_NAME = 'family-planner-v8';
 const urlsToCache = [
   './',
   './index.html',
   './styles.css',
   './app.js',
   './manifest.json',
-  './icon-192.png',
-  './icon-512.png',
-  'https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Karla:wght@300;400;500;600&display=swap',
-  'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2'
+  'https://fonts.googleapis.com/css2?family=Clash+Display:wght@400;500;600;700&family=Inter:wght@300;400;500;600&display=swap'
 ];
 
 // Install event - cache resources
