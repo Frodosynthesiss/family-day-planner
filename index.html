@@ -165,8 +165,17 @@
                 </div>
                 
                 <!-- Today's Tasks -->
-                <div id="todayTasksSection" class="control-card" style="display: none;">
-                    <h3 class="section-title">Today's Tasks</h3>
+                <div id="todayTasksSection" class="control-card">
+                    <h3 class="section-title">Today's Focus Tasks</h3>
+                    <div class="quick-add-task">
+                        <input type="text" id="quickAddTaskInput" placeholder="Add a focus task for today..." class="task-input">
+                        <button id="quickAddTaskBtn" class="primary-btn">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <line x1="12" y1="5" x2="12" y2="19"/>
+                                <line x1="5" y1="12" x2="19" y2="12"/>
+                            </svg>
+                        </button>
+                    </div>
                     <div id="todayTasksList" class="task-list"></div>
                 </div>
                 
@@ -216,6 +225,32 @@
                         <div id="completedTasks" class="task-list"></div>
                     </div>
                 </div>
+            </div>
+
+            <!-- Meals Tab -->
+            <div id="mealsTab" class="tab-pane">
+                <div class="tab-header">
+                    <h2>Meal Plan</h2>
+                    <p class="tab-subtitle">Plan your meals</p>
+                </div>
+                
+                <div class="meal-input-container">
+                    <textarea 
+                        id="newMealInput" 
+                        placeholder="Add a meal or note (e.g., Monday Dinner: Tacos with rice and beans)..."
+                        class="meal-textarea"
+                        rows="3"
+                    ></textarea>
+                    <button id="addMealBtn" class="primary-btn full-width">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <line x1="12" y1="5" x2="12" y2="19"/>
+                            <line x1="5" y1="12" x2="19" y2="12"/>
+                        </svg>
+                        Add Meal
+                    </button>
+                </div>
+                
+                <div id="mealsList" class="meals-list"></div>
             </div>
 
             <!-- History Tab -->
@@ -282,6 +317,16 @@
                 </svg>
                 <span>Tasks</span>
             </button>
+            <button class="nav-item" data-tab="meals">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M18 8h1a4 4 0 0 1 0 8h-1"/>
+                    <path d="M2 8h16v9a4 4 0 0 1-4 4H6a4 4 0 0 1-4-4V8z"/>
+                    <line x1="6" y1="1" x2="6" y2="4"/>
+                    <line x1="10" y1="1" x2="10" y2="4"/>
+                    <line x1="14" y1="1" x2="14" y2="4"/>
+                </svg>
+                <span>Meals</span>
+            </button>
             <button class="nav-item" data-tab="history">
                 <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M3 3v5h5"/>
@@ -317,22 +362,33 @@
                     <div class="progress-bar">
                         <div class="progress-fill" id="wizardProgress"></div>
                     </div>
-                    <span class="progress-text" id="wizardProgressText">Step 1 of 8</span>
+                    <span class="progress-text" id="wizardProgressText">Step 1 of 9</span>
                 </div>
 
-                <!-- Step 1: Wake Time -->
+                <!-- Step 1: Evening Checklist -->
                 <div class="wizard-step" id="step1">
+                    <h3>Evening Check-In</h3>
+                    <p class="step-desc">Let's review a few things before planning tomorrow</p>
+                    <div id="eveningChecklistItems" class="checklist-container"></div>
+                    <button class="primary-btn full-width wizard-next">Continue</button>
+                </div>
+
+                <!-- Step 2: Wake Time -->
+                <div class="wizard-step" id="step2" style="display: none;">
                     <h3>Wake Time</h3>
                     <p class="step-desc" id="wizardDate"></p>
                     <div class="form-field">
                         <label>What time do you expect baby to wake up?</label>
                         <input type="time" id="wakeTarget" class="time-input">
                     </div>
-                    <button class="primary-btn full-width wizard-next">Continue</button>
+                    <div class="wizard-nav">
+                        <button class="secondary-btn wizard-back">Back</button>
+                        <button class="primary-btn wizard-next">Continue</button>
+                    </div>
                 </div>
 
-                <!-- Step 2: Parent Availability -->
-                <div class="wizard-step" id="step2" style="display: none;">
+                <!-- Step 3: Parent Availability -->
+                <div class="wizard-step" id="step3" style="display: none;">
                     <h3>Parent Availability</h3>
                     <p class="step-desc">When are parents unavailable tomorrow?</p>
                     
@@ -354,8 +410,8 @@
                     </div>
                 </div>
 
-                <!-- Step 3: Nanny & Kayden Availability -->
-                <div class="wizard-step" id="step3" style="display: none;">
+                <!-- Step 4: Nanny & Kayden Availability -->
+                <div class="wizard-step" id="step4" style="display: none;">
                     <h3>Nanny & Kayden</h3>
                     <p class="step-desc">When are they available tomorrow?</p>
                     
@@ -377,8 +433,8 @@
                     </div>
                 </div>
 
-                <!-- Step 4: Appointments -->
-                <div class="wizard-step" id="step4" style="display: none;">
+                <!-- Step 5: Appointments -->
+                <div class="wizard-step" id="step5" style="display: none;">
                     <h3>Appointments</h3>
                     <p class="step-desc">Any appointments or fixed commitments?</p>
                     <div id="appointmentsList" class="appointments-list"></div>
@@ -401,8 +457,8 @@
                     </div>
                 </div>
 
-                <!-- Step 5: Review Today's Tasks -->
-                <div class="wizard-step" id="step5" style="display: none;">
+                <!-- Step 6: Review Today's Tasks -->
+                <div class="wizard-step" id="step6" style="display: none;">
                     <h3>Today's Tasks</h3>
                     <p class="step-desc">Did you complete today's tasks?</p>
                     <div id="todayTaskReview" class="task-review-list"></div>
@@ -412,8 +468,8 @@
                     </div>
                 </div>
 
-                <!-- Step 6: Brain Dump -->
-                <div class="wizard-step" id="step6" style="display: none;">
+                <!-- Step 7: Brain Dump -->
+                <div class="wizard-step" id="step7" style="display: none;">
                     <h3>Brain Dump</h3>
                     <p class="step-desc">What's on your mind for tomorrow?</p>
                     <textarea id="brainDumpText" class="textarea" placeholder="Add new tasks, one per line..."></textarea>
@@ -423,8 +479,8 @@
                     </div>
                 </div>
 
-                <!-- Step 7: Choose Tomorrow's Focus -->
-                <div class="wizard-step" id="step7" style="display: none;">
+                <!-- Step 8: Choose Tomorrow's Focus -->
+                <div class="wizard-step" id="step8" style="display: none;">
                     <h3>Tomorrow's Focus</h3>
                     <p class="step-desc">Which tasks do you want to focus on?</p>
                     <div id="taskSelectionList" class="task-selection-list"></div>
@@ -434,8 +490,8 @@
                     </div>
                 </div>
 
-                <!-- Step 8: Review & Confirm -->
-                <div class="wizard-step" id="step8" style="display: none;">
+                <!-- Step 9: Review & Confirm -->
+                <div class="wizard-step" id="step9" style="display: none;">
                     <h3>Review Tomorrow's Plan</h3>
                     <p class="step-desc">Check your schedule and tasks</p>
                     

@@ -1724,3 +1724,166 @@ input:checked + .slider:before {
 @keyframes spin {
     to { transform: rotate(360deg); }
 }
+
+/* Quick Add Task */
+.quick-add-task {
+    display: flex;
+    gap: 0.5rem;
+    margin-bottom: 1rem;
+}
+
+.quick-add-task .task-input {
+    flex: 1;
+}
+
+.quick-add-task .primary-btn {
+    padding: 0.75rem;
+    min-width: auto;
+}
+
+/* Evening Checklist */
+.checklist-container {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    margin: 1.5rem 0;
+}
+
+.checklist-item {
+    background: var(--surface);
+    border-radius: 12px;
+    padding: 1rem;
+    border: 1px solid var(--border-subtle);
+}
+
+.checklist-label {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.75rem;
+    cursor: pointer;
+    font-size: 0.95rem;
+    line-height: 1.5;
+}
+
+.checklist-label input[type="checkbox"] {
+    width: 22px;
+    height: 22px;
+    margin-top: 2px;
+    accent-color: var(--primary);
+    cursor: pointer;
+    flex-shrink: 0;
+}
+
+.checklist-label span {
+    color: var(--text-primary);
+}
+
+/* Task delete button in today tasks */
+.task-item .task-delete {
+    opacity: 0;
+    transition: opacity 0.2s ease;
+}
+
+.task-item:hover .task-delete {
+    opacity: 1;
+}
+
+/* Meals Tab */
+.meal-input-container {
+    margin-bottom: 1.5rem;
+}
+
+.meal-textarea {
+    width: 100%;
+    padding: 1rem;
+    border: 1px solid var(--border-subtle);
+    border-radius: 12px;
+    font-family: var(--font-body);
+    font-size: 0.95rem;
+    background: var(--surface);
+    color: var(--text-primary);
+    resize: vertical;
+    margin-bottom: 0.75rem;
+    min-height: 80px;
+}
+
+.meal-textarea:focus {
+    outline: none;
+    border-color: var(--primary);
+    box-shadow: 0 0 0 3px rgba(139, 115, 85, 0.1);
+}
+
+.meals-list {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.meal-card {
+    background: var(--surface);
+    border: 1px solid var(--border-subtle);
+    border-radius: 12px;
+    padding: 1rem;
+    position: relative;
+}
+
+.meal-content {
+    font-size: 0.95rem;
+    line-height: 1.6;
+    color: var(--text-primary);
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.meal-actions {
+    display: flex;
+    gap: 0.5rem;
+    margin-top: 0.75rem;
+    justify-content: flex-end;
+}
+
+.meal-edit-btn,
+.meal-delete-btn {
+    background: transparent;
+    border: 1px solid var(--border-subtle);
+    border-radius: 8px;
+    padding: 0.5rem;
+    cursor: pointer;
+    color: var(--text-secondary);
+    transition: all 0.2s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.meal-edit-btn:hover {
+    background: var(--primary);
+    border-color: var(--primary);
+    color: white;
+}
+
+.meal-delete-btn:hover {
+    background: #dc3545;
+    border-color: #dc3545;
+    color: white;
+}
+
+.meal-edit-form {
+    margin-top: 0.75rem;
+}
+
+.meal-edit-form .meal-textarea {
+    margin-bottom: 0.75rem;
+}
+
+.meal-edit-actions {
+    display: flex;
+    gap: 0.5rem;
+    justify-content: flex-end;
+}
+
+.meal-edit-actions .secondary-btn,
+.meal-edit-actions .primary-btn {
+    padding: 0.5rem 1rem;
+    font-size: 0.85rem;
+}

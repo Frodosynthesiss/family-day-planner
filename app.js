@@ -27,6 +27,7 @@ const state = {
     todayPlan: null,
     tomorrowPlan: null,
     tasks: [],
+    meals: [],
     wizardStep: 1,
     wizardData: {},
     unsubscribers: []
@@ -35,6 +36,16 @@ const state = {
 // Utility Functions
 const utils = {
     formatDate(date) {
+        // If it's a YYYY-MM-DD string, parse it correctly to avoid timezone issues
+        if (typeof date === 'string' && date.match(/^\d{4}-\d{2}-\d{2}$/)) {
+            const [year, month, day] = date.split('-').map(Number);
+            const d = new Date(year, month - 1, day); // month is 0-indexed
+            return d.toLocaleDateString('en-US', { 
+                month: 'short', 
+                day: 'numeric', 
+                year: 'numeric' 
+            });
+        }
         const d = typeof date === 'string' ? new Date(date) : date;
         return d.toLocaleDateString('en-US', { 
             month: 'short', 
@@ -120,14 +131,14 @@ const db_ops = {
     getDefaultSettings() {
         return {
             constraints: [
-                { name: 'Wake Window 1', value: '3.25 hrs' },
+                { name: 'Wake Window 1', value: '3 hrs' },
                 { name: 'Nap 1 Duration', value: '1 hr' },
                 { name: 'Wake Window 2', value: '3.5 hrs' },
                 { name: 'Nap 2 Duration', value: '1 hr' },
                 { name: 'Wake Window 3', value: '4 hrs' }
             ],
             routineBlocks: {
-                wakeUp: { duration: 5, title: 'Wake Up Time' },
+                wakeUp: { duration: 10, title: 'Wake Up Time' },
                 familyCuddle: { duration: 10, title: 'Family Cuddle' },
                 getDressed: { duration: 10, title: 'Get Dressed' },
                 breakfastPrep: { duration: 10, title: 'Breakfast Prep' },
@@ -141,7 +152,8 @@ const db_ops = {
                 dinner: { duration: 20, title: 'Dinner' },
                 bath: { duration: 20, title: 'Bath Time' },
                 brushTeethEvening: { duration: 5, title: 'Brush Teeth' },
-                bedtimeRoutine: { duration: 15, title: 'Bedtime Routine' }
+                bedtimeRoutine: { duration: 15, title: 'Bedtime Routine' },
+                buffer: { duration: 5, title: 'Buffer' }
             },
             lastBathDate: null,
             googleCalendar: null
@@ -241,7 +253,7 @@ const db_ops = {
                     createdAt: firebase.firestore.FieldValue.serverTimestamp(),
                     completedAt: null
                 });
-            return { id: docRef.id, title, status: 'open', assignedDate };
+            return docRef.id;
         } catch (error) {
             console.error('Error adding task:', error);
             utils.showToast('Failed to add task', 'error');
@@ -272,6 +284,77 @@ const db_ops = {
             console.error('Error deleting task:', error);
             return false;
         }
+    },
+    
+    // Meals
+    async getMeals() {
+        try {
+            const snapshot = await db.collection('families').doc(FAMILY_ID)
+                .collection('meals')
+                .orderBy('createdAt', 'desc')
+                .get();
+            return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        } catch (error) {
+            console.error('Error getting meals:', error);
+            return [];
+        }
+    },
+    
+    async addMeal(content) {
+        try {
+            const docRef = await db.collection('families').doc(FAMILY_ID)
+                .collection('meals').add({
+                    content,
+                    createdBy: currentUser.uid,
+                    createdAt: firebase.firestore.FieldValue.serverTimestamp()
+                });
+            return docRef.id;
+        } catch (error) {
+            console.error('Error adding meal:', error);
+            utils.showToast('Failed to add meal', 'error');
+            return null;
+        }
+    },
+    
+    async updateMeal(id, content) {
+        try {
+            await db.collection('families').doc(FAMILY_ID)
+                .collection('meals').doc(id).update({
+                    content,
+                    updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+                });
+            return true;
+        } catch (error) {
+            console.error('Error updating meal:', error);
+            return false;
+        }
+    },
+    
+    async deleteMeal(id) {
+        try {
+            await db.collection('families').doc(FAMILY_ID)
+                .collection('meals').doc(id).delete();
+            return true;
+        } catch (error) {
+            console.error('Error deleting meal:', error);
+            return false;
+        }
+    },
+    
+    listenToMeals(callback) {
+        const unsubscribe = db.collection('families').doc(FAMILY_ID)
+            .collection('meals')
+            .orderBy('createdAt', 'desc')
+            .onSnapshot(snapshot => {
+                const meals = snapshot.docs.map(doc => ({ 
+                    id: doc.id, 
+                    ...doc.data() 
+                }));
+                callback(meals);
+            }, error => {
+                console.error('Error listening to meals:', error);
+            });
+        return unsubscribe;
     },
     
     // History
@@ -510,10 +593,14 @@ const scheduler = {
             currentTime = addMinutes(currentTime, duration);
         };
         
-        // Fixed durations (in minutes) - same as wizard
-        const WAKE_WINDOW_1 = 3.25 * 60; // 195 min
-        const WAKE_WINDOW_2 = 3.5 * 60;  // 210 min
-        const WAKE_WINDOW_3 = 4 * 60;    // 240 min
+        const addBuffer = () => {
+            currentTime = addMinutes(currentTime, 5); // 5 minute buffer between tasks
+        };
+        
+        // Fixed durations (in minutes) - updated wake windows
+        const WAKE_WINDOW_1 = 3 * 60;    // 180 min (3 hours max)
+        const WAKE_WINDOW_2 = 3.5 * 60;  // 210 min (3.5 hours max)
+        const WAKE_WINDOW_3 = 4 * 60;    // 240 min (4 hours max)
         
         // Get actual nap durations if logged, otherwise use 1 hour
         const nap1Duration = napData?.nap1?.start && napData?.nap1?.end ? 
@@ -527,17 +614,23 @@ const scheduler = {
         const originalNap2 = plan.calculatedSchedule?.find(b => b.title === 'Nap 2');
         const nap2Caregiver = originalNap2?.caregiver || 'Available';
         
-        // ========== WAKE WINDOW 1 (3.25 hours) ==========
+        // ========== WAKE WINDOW 1 (3 hours) ==========
         const ww1Start = currentTime;
         const ww1End = addMinutes(ww1Start, WAKE_WINDOW_1);
         
-        // Fixed morning routine
-        addRoutineBlock('Wake Up Time', 5);
+        // Fixed morning routine with buffers
+        addRoutineBlock('Wake Up Time', 10);
+        addBuffer();
         addRoutineBlock('Family Cuddle', 10);
+        addBuffer();
         addRoutineBlock('Get Dressed', 10);
+        addBuffer();
         addRoutineBlock('Breakfast Prep', 10);
+        addBuffer();
         addRoutineBlock('Breakfast', 20, 'meal');
+        addBuffer();
         addRoutineBlock('Brush Teeth', 5);
+        addBuffer();
         
         // Nap routine starts 10min before WW1 ends (or at actual logged time)
         const napRoutine1Start = napData?.nap1?.start ? 
@@ -576,7 +669,8 @@ const scheduler = {
         const ww2Start = currentTime;
         const ww2End = addMinutes(ww2Start, WAKE_WINDOW_2);
         
-        addRoutineBlock('Wake Up Time', 5);
+        addRoutineBlock('Wake Up Time', 10);
+        addBuffer();
         
         // Snack needs to start 20min before WW2 ends (or before actual nap 2)
         const snack2Start = napData?.nap2?.start ?
@@ -600,7 +694,9 @@ const scheduler = {
         }
         
         addRoutineBlock('Lunch Prep', 10);
+        addBuffer();
         addRoutineBlock('Lunch', 20, 'meal');
+        addBuffer();
         
         // Open time after lunch until snack
         const openTime2bDuration = minutesBetween(currentTime, snack2Start);
@@ -617,9 +713,11 @@ const scheduler = {
         
         // Snack + Milk (right before nap routine)
         addRoutineBlock('Snack + Milk', 10, 'meal');
+        addBuffer();
         
         // Nap Time Routine (right before nap)
         addRoutineBlock('Nap Time Routine', 10);
+        addBuffer();
         
         // Nap 2 - use actual times if logged
         const nap2Start = napData?.nap2?.start || currentTime;
@@ -638,14 +736,19 @@ const scheduler = {
         const ww3End = addMinutes(ww3Start, WAKE_WINDOW_3);
         const bedtime = ww3End; // Calculated bedtime
         
-        addRoutineBlock('Wake Up Time', 5);
+        addRoutineBlock('Wake Up Time', 10);
+        addBuffer();
         addRoutineBlock('Snack + Milk', 10, 'meal');
+        addBuffer();
         
         // Fixed 40min open time
         addRoutineBlock('Open Time', 40, 'open');
+        addBuffer();
         
         addRoutineBlock('Dinner Prep', 10);
+        addBuffer();
         addRoutineBlock('Dinner', 20, 'meal');
+        addBuffer();
         
         // Get bath info from plan
         const includeBath = plan.includeBath || false;
@@ -679,10 +782,12 @@ const scheduler = {
                 caregiver: originalBath?.caregiver || 'Both Parents'
             });
             currentTime = addMinutes(currentTime, 20);
+            addBuffer();
         }
         
         // Brush Teeth (right before bedtime routine)
         addRoutineBlock('Brush Teeth', 5);
+        addBuffer();
         
         // Bedtime Routine (right before bedtime)
         addRoutineBlock('Bedtime Routine', 15);
@@ -903,6 +1008,47 @@ const ui = {
                 </div>
             </div>
         `).join('');
+    },
+    
+    renderMeals(meals) {
+        const container = document.getElementById('mealsList');
+        
+        if (meals.length === 0) {
+            container.innerHTML = `
+                <div class="empty-state">
+                    <div class="empty-state-icon">🍽️</div>
+                    <div class="empty-state-text">No meals planned yet</div>
+                </div>
+            `;
+            return;
+        }
+        
+        container.innerHTML = meals.map(meal => `
+            <div class="meal-card" data-id="${meal.id}">
+                <div class="meal-content" id="meal-content-${meal.id}">${meal.content}</div>
+                <div class="meal-actions">
+                    <button class="meal-edit-btn" data-id="${meal.id}">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+                            <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                        </svg>
+                    </button>
+                    <button class="meal-delete-btn" data-id="${meal.id}">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <polyline points="3 6 5 6 21 6"/>
+                            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+                        </svg>
+                    </button>
+                </div>
+                <div class="meal-edit-form" id="meal-edit-${meal.id}" style="display: none;">
+                    <textarea class="meal-textarea" rows="3">${meal.content}</textarea>
+                    <div class="meal-edit-actions">
+                        <button class="secondary-btn meal-cancel-btn" data-id="${meal.id}">Cancel</button>
+                        <button class="primary-btn meal-save-btn" data-id="${meal.id}">Save</button>
+                    </div>
+                </div>
+            </div>
+        `).join('');
     }
 };
 
@@ -934,16 +1080,21 @@ function renderSettings() {
     }
 }
 
-// Evening Wizard - Comprehensive 8-step planning
+// Evening Wizard - Comprehensive 9-step planning
 const wizard = {
     currentStep: 1,
-    totalSteps: 8,
+    totalSteps: 9,
     data: {},
     
     open() {
         document.getElementById('wizardModal').classList.add('active');
         this.currentStep = 1;
         this.data = {
+            eveningChecklist: {
+                skylightCalendar: false,
+                juneGoals: false,
+                householdChores: false
+            },
             wakeTarget: '07:00',
             parentUnavailable: {
                 kristyn: [],
@@ -990,32 +1141,73 @@ const wizard = {
     async renderStepContent() {
         switch(this.currentStep) {
             case 1:
+                // Evening Checklist - new first step
+                this.renderEveningChecklist();
+                break;
+            case 2:
                 document.getElementById('wizardDate').textContent = utils.formatDate(utils.getTomorrowString());
                 document.getElementById('wakeTarget').value = this.data.wakeTarget;
                 break;
-            case 2:
+            case 3:
                 this.renderAvailability();
                 break;
-            case 3:
+            case 4:
                 this.renderHelperAvailability();
                 break;
-            case 4:
+            case 5:
                 this.renderAppointments();
                 await this.checkBathReminder();
                 break;
-            case 5:
+            case 6:
                 await this.renderTodayTaskReview();
                 break;
-            case 6:
+            case 7:
                 document.getElementById('brainDumpText').value = this.data.brainDump || '';
                 break;
-            case 7:
+            case 8:
                 await this.renderTaskSelection();
                 break;
-            case 8:
+            case 9:
                 this.renderSchedulePreview();
                 break;
         }
+    },
+    
+    renderEveningChecklist() {
+        const container = document.getElementById('eveningChecklistItems');
+        const checklist = this.data.eveningChecklist;
+        
+        container.innerHTML = `
+            <div class="checklist-item">
+                <label class="checklist-label">
+                    <input type="checkbox" id="checkSkylight" ${checklist.skylightCalendar ? 'checked' : ''}>
+                    <span>Is everything up to date on the Skylight calendar?</span>
+                </label>
+            </div>
+            <div class="checklist-item">
+                <label class="checklist-label">
+                    <input type="checkbox" id="checkJuneGoals" ${checklist.juneGoals ? 'checked' : ''}>
+                    <span>What is the status on our goals for June?</span>
+                </label>
+            </div>
+            <div class="checklist-item">
+                <label class="checklist-label">
+                    <input type="checkbox" id="checkHousehold" ${checklist.householdChores ? 'checked' : ''}>
+                    <span>What are the outstanding household chores?</span>
+                </label>
+            </div>
+        `;
+        
+        // Add event listeners
+        document.getElementById('checkSkylight').addEventListener('change', (e) => {
+            this.data.eveningChecklist.skylightCalendar = e.target.checked;
+        });
+        document.getElementById('checkJuneGoals').addEventListener('change', (e) => {
+            this.data.eveningChecklist.juneGoals = e.target.checked;
+        });
+        document.getElementById('checkHousehold').addEventListener('change', (e) => {
+            this.data.eveningChecklist.householdChores = e.target.checked;
+        });
     },
     
     async checkBathReminder() {
@@ -1308,23 +1500,33 @@ const wizard = {
             currentTime = addMinutes(currentTime, duration);
         };
         
-        // Fixed durations (in minutes)
-        const WAKE_WINDOW_1 = 3.25 * 60; // 195 min of AWAKE time
-        const WAKE_WINDOW_2 = 3.5 * 60;  // 210 min of AWAKE time
-        const WAKE_WINDOW_3 = 4 * 60;    // 240 min of AWAKE time
+        const addBuffer = () => {
+            currentTime = addMinutes(currentTime, 5); // 5 minute buffer between tasks
+        };
+        
+        // Fixed durations (in minutes) - updated wake windows
+        const WAKE_WINDOW_1 = 3 * 60;    // 180 min (3 hours max)
+        const WAKE_WINDOW_2 = 3.5 * 60;  // 210 min (3.5 hours max)
+        const WAKE_WINDOW_3 = 4 * 60;    // 240 min (4 hours max)
         const NAP_DURATION = 60;         // 1 hour OUTSIDE wake window
         const NAP_ROUTINE = 10;          // 10 min - INSIDE wake window (last thing before nap)
         
-        // ========== WAKE WINDOW 1 (3.25 hours) ==========
+        // ========== WAKE WINDOW 1 (3 hours) ==========
         const ww1Start = currentTime;
         
-        // Fixed morning routine
-        addRoutineBlock('Wake Up Time', 5);
+        // Fixed morning routine with buffers
+        addRoutineBlock('Wake Up Time', 10);
+        addBuffer();
         addRoutineBlock('Family Cuddle', 10);
+        addBuffer();
         addRoutineBlock('Get Dressed', 10);
+        addBuffer();
         addRoutineBlock('Breakfast Prep', 10);
+        addBuffer();
         addRoutineBlock('Breakfast', 20, 'meal');
+        addBuffer();
         addRoutineBlock('Brush Teeth', 5);
+        addBuffer();
         
         // Calculate when nap routine should start - last 10min of wake window
         const napRoutine1Start = addMinutes(ww1Start, WAKE_WINDOW_1 - NAP_ROUTINE);
@@ -1361,7 +1563,8 @@ const wizard = {
         // ========== WAKE WINDOW 2 (3.5 hours) ==========
         const ww2Start = currentTime;
         
-        addRoutineBlock('Wake Up Time', 5);
+        addRoutineBlock('Wake Up Time', 10);
+        addBuffer();
         
         // Nap routine is last 10min of WW2, then nap is OUTSIDE
         const napRoutine2Start = addMinutes(ww2Start, WAKE_WINDOW_2 - NAP_ROUTINE);
@@ -1370,7 +1573,7 @@ const wizard = {
         const snack2Start = addMinutes(napRoutine2Start, -10);
         
         // Put lunch roughly 1/3 into wake window
-        const lunchPrepStart = addMinutes(ww2Start, 5 + 60);
+        const lunchPrepStart = addMinutes(ww2Start, 10 + 5 + 60); // Wake Up (10) + buffer (5) + 60
         
         // Open time before lunch
         const openTime2aDuration = minutesBetween(currentTime, lunchPrepStart);
@@ -1386,7 +1589,9 @@ const wizard = {
         }
         
         addRoutineBlock('Lunch Prep', 10);
+        addBuffer();
         addRoutineBlock('Lunch', 20, 'meal');
+        addBuffer();
         
         // Open time after lunch until snack
         const openTime2bDuration = minutesBetween(currentTime, snack2Start);
@@ -1403,9 +1608,11 @@ const wizard = {
         
         // Snack + Milk (right before nap routine)
         addRoutineBlock('Snack + Milk', 10, 'meal');
+        addBuffer();
         
         // Nap Time Routine (last thing in WW2)
         addRoutineBlock('Nap Time Routine', NAP_ROUTINE);
+        addBuffer();
         
         // Nap 2 is OUTSIDE wake window
         const nap2Start = currentTime;
@@ -1425,14 +1632,19 @@ const wizard = {
         const ww3End = addMinutes(ww3Start, WAKE_WINDOW_3);
         const bedtime = ww3End; // Bedtime is calculated!
         
-        addRoutineBlock('Wake Up Time', 5);
+        addRoutineBlock('Wake Up Time', 10);
+        addBuffer();
         addRoutineBlock('Snack + Milk', 10, 'meal');
+        addBuffer();
         
         // Fixed 40min open time
         addRoutineBlock('Open Time', 40, 'open');
+        addBuffer();
         
         addRoutineBlock('Dinner Prep', 10);
+        addBuffer();
         addRoutineBlock('Dinner', 20, 'meal');
+        addBuffer();
         
         // Calculate when bedtime routine needs to start
         // Brush Teeth (5min) + Bedtime Routine (15min) = 20min before bedtime
@@ -1467,10 +1679,12 @@ const wizard = {
                 caregiver: bathCaregiver
             });
             currentTime = addMinutes(currentTime, 20);
+            addBuffer();
         }
         
         // Brush Teeth (right before bedtime routine)
         addRoutineBlock('Brush Teeth', 5);
+        addBuffer();
         
         // Bedtime Routine (right before bedtime)
         addRoutineBlock('Bedtime Routine', 15);
@@ -2036,13 +2250,10 @@ function setupEventHandlers() {
             
             if (isStart) {
                 log.naps[`nap${napNum}`].start = utils.getCurrentTime();
-                btn.disabled = true;
-                btn.nextElementSibling.disabled = false;
                 // Update input field
                 document.getElementById(`nap${napNum}StartTime`).value = log.naps[`nap${napNum}`].start;
             } else if (btn.classList.contains('stop')) {
                 log.naps[`nap${napNum}`].end = utils.getCurrentTime();
-                btn.disabled = true;
                 // Update input field
                 document.getElementById(`nap${napNum}EndTime`).value = log.naps[`nap${napNum}`].end;
             }
@@ -2050,6 +2261,7 @@ function setupEventHandlers() {
             await db_ops.saveDayLog(date, log);
             updateNapDisplay(napNum, log.naps[`nap${napNum}`]);
             await renderTodaySchedule();
+            utils.showToast(`Nap ${napNum} ${isStart ? 'started' : 'stopped'}`, 'success');
         });
     });
     
@@ -2081,9 +2293,107 @@ function setupEventHandlers() {
         }
     });
     
+    // Quick Add Focus Task for Today
+    document.getElementById('quickAddTaskBtn').addEventListener('click', async () => {
+        const input = document.getElementById('quickAddTaskInput');
+        const title = input.value.trim();
+        
+        if (title) {
+            const todayStr = utils.getTodayString();
+            // Add task and assign to today
+            const taskId = await db_ops.addTask(title, todayStr);
+            input.value = '';
+            
+            // Also update today's plan to include this task
+            if (state.todayPlan) {
+                if (!state.todayPlan.selectedTasks) {
+                    state.todayPlan.selectedTasks = [];
+                }
+                if (taskId && !state.todayPlan.selectedTasks.includes(taskId)) {
+                    state.todayPlan.selectedTasks.push(taskId);
+                    await db_ops.saveDayPlan(todayStr, state.todayPlan);
+                }
+            }
+            
+            utils.showToast('Focus task added for today', 'success');
+            renderTodayTasks();
+        }
+    });
+    
+    document.getElementById('quickAddTaskInput').addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') {
+            document.getElementById('quickAddTaskBtn').click();
+        }
+    });
+    
     document.getElementById('newTaskInput').addEventListener('keypress', (e) => {
         if (e.key === 'Enter') {
             document.getElementById('addTaskBtn').click();
+        }
+    });
+    
+    // Meals
+    document.getElementById('addMealBtn').addEventListener('click', async () => {
+        const input = document.getElementById('newMealInput');
+        const content = input.value.trim();
+        
+        if (content) {
+            await db_ops.addMeal(content);
+            input.value = '';
+            utils.showToast('Meal added', 'success');
+        }
+    });
+    
+    // Meal interactions (event delegation)
+    document.addEventListener('click', async (e) => {
+        // Edit button
+        if (e.target.closest('.meal-edit-btn')) {
+            const btn = e.target.closest('.meal-edit-btn');
+            const id = btn.dataset.id;
+            const contentEl = document.getElementById(`meal-content-${id}`);
+            const editForm = document.getElementById(`meal-edit-${id}`);
+            
+            contentEl.style.display = 'none';
+            btn.parentElement.style.display = 'none';
+            editForm.style.display = 'block';
+        }
+        
+        // Cancel edit button
+        if (e.target.closest('.meal-cancel-btn')) {
+            const btn = e.target.closest('.meal-cancel-btn');
+            const id = btn.dataset.id;
+            const contentEl = document.getElementById(`meal-content-${id}`);
+            const editForm = document.getElementById(`meal-edit-${id}`);
+            const actionsEl = contentEl.parentElement.querySelector('.meal-actions');
+            
+            contentEl.style.display = 'block';
+            actionsEl.style.display = 'flex';
+            editForm.style.display = 'none';
+        }
+        
+        // Save edit button
+        if (e.target.closest('.meal-save-btn')) {
+            const btn = e.target.closest('.meal-save-btn');
+            const id = btn.dataset.id;
+            const editForm = document.getElementById(`meal-edit-${id}`);
+            const textarea = editForm.querySelector('textarea');
+            const newContent = textarea.value.trim();
+            
+            if (newContent) {
+                await db_ops.updateMeal(id, newContent);
+                utils.showToast('Meal updated', 'success');
+            }
+        }
+        
+        // Delete button
+        if (e.target.closest('.meal-delete-btn')) {
+            const btn = e.target.closest('.meal-delete-btn');
+            const id = btn.dataset.id;
+            
+            if (confirm('Delete this meal?')) {
+                await db_ops.deleteMeal(id);
+                utils.showToast('Meal deleted', 'success');
+            }
         }
     });
     
@@ -2282,14 +2592,12 @@ function renderTodayTasks() {
     const todayStr = utils.getTodayString();
     const todayTasks = state.tasks.filter(t => t.assignedDate === todayStr);
     const container = document.getElementById('todayTasksList');
-    const section = document.getElementById('todayTasksSection');
     
     if (todayTasks.length === 0) {
-        section.style.display = 'none';
+        container.innerHTML = '<div class="empty-state-text">No focus tasks for today yet</div>';
         return;
     }
     
-    section.style.display = 'block';
     container.innerHTML = todayTasks.map(task => `
         <div class="task-item ${task.status === 'done' ? 'completed' : ''}">
             <input type="checkbox" 
@@ -2297,6 +2605,7 @@ function renderTodayTasks() {
                    data-id="${task.id}"
                    ${task.status === 'done' ? 'checked' : ''}>
             <label>${task.title}</label>
+            <button class="task-delete" data-id="${task.id}">×</button>
         </div>
     `).join('');
 }
@@ -2522,6 +2831,12 @@ async function init() {
                     ui.renderTasks(tasks);
                 });
                 state.unsubscribers.push(tasksUnsubscribe);
+                
+                const mealsUnsubscribe = db_ops.listenToMeals((meals) => {
+                    state.meals = meals;
+                    ui.renderMeals(meals);
+                });
+                state.unsubscribers.push(mealsUnsubscribe);
                 
                 // Setup event handlers (only once)
                 if (!window.handlersSetup) {
