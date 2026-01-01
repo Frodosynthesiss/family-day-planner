@@ -2132,12 +2132,12 @@ function setupEventHandlers() {
             state.todayPlan,
             log?.actualWake,
             {
-                enabled: document.getElementById('nap1Enabled').checked,
+                enabled: !!(log?.naps?.nap1?.start || log?.naps?.nap1?.end),
                 start: log?.naps?.nap1?.start,
                 end: log?.naps?.nap1?.end
             },
             {
-                enabled: document.getElementById('nap2Enabled').checked,
+                enabled: !!(log?.naps?.nap2?.start || log?.naps?.nap2?.end),
                 start: log?.naps?.nap2?.start,
                 end: log?.naps?.nap2?.end
             }
