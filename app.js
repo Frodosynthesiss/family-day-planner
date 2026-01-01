@@ -677,20 +677,22 @@ const scheduler = {
             addMinutes(napData.nap2.start, -20) :
             addMinutes(ww2End, -20);
         
-        // Lunch roughly 1/3 into wake window
-        const lunchPrepStart = addMinutes(ww2Start, Math.floor(WAKE_WINDOW_2 / 3));
+        // Lunch starts 45 min after nap 1 ends (which is ww2Start)
+        // Lunch Prep is 10 min before lunch, so Lunch Prep starts at 45 - 10 = 35 min after nap end
+        const lunchStart = addMinutes(ww2Start, 45);
+        const lunchPrepStart = addMinutes(ww2Start, 35);
         
-        // Open time before lunch
-        const openTime2aDuration = minutesBetween(currentTime, addMinutes(lunchPrepStart, -10));
+        // Open time before lunch prep (after Wake Up Time + buffer)
+        const openTime2aDuration = minutesBetween(currentTime, lunchPrepStart);
         if (openTime2aDuration > 0) {
             blocks.push({
                 start: currentTime,
-                end: addMinutes(lunchPrepStart, -10),
+                end: lunchPrepStart,
                 title: 'Open Time',
                 type: 'open',
                 caregiver: 'Anyone'
             });
-            currentTime = addMinutes(lunchPrepStart, -10);
+            currentTime = lunchPrepStart;
         }
         
         addRoutineBlock('Lunch Prep', 10);
@@ -1572,10 +1574,12 @@ const wizard = {
         // Snack is 10min before nap routine
         const snack2Start = addMinutes(napRoutine2Start, -10);
         
-        // Put lunch roughly 1/3 into wake window
-        const lunchPrepStart = addMinutes(ww2Start, 10 + 5 + 60); // Wake Up (10) + buffer (5) + 60
+        // Lunch starts 45 min after nap 1 ends (which is ww2Start)
+        // Lunch Prep is 10 min before lunch, so Lunch Prep starts at 45 - 10 = 35 min after nap end
+        const lunchStart = addMinutes(ww2Start, 45);
+        const lunchPrepStart = addMinutes(ww2Start, 35);
         
-        // Open time before lunch
+        // Open time before lunch prep (after Wake Up Time + buffer)
         const openTime2aDuration = minutesBetween(currentTime, lunchPrepStart);
         if (openTime2aDuration > 0) {
             blocks.push({
