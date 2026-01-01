@@ -2241,6 +2241,24 @@ function setupEventHandlers() {
         utils.showToast('Wake time updated - schedule adjusted', 'success');
     });
     
+    // Refresh schedule button
+    document.getElementById('refreshScheduleBtn').addEventListener('click', async () => {
+        const btn = document.getElementById('refreshScheduleBtn');
+        btn.classList.add('spinning');
+        
+        try {
+            await loadNapTimes();
+            await renderTodaySchedule();
+            renderTodayTasks();
+            utils.showToast('Schedule refreshed', 'success');
+        } catch (error) {
+            console.error('Error refreshing:', error);
+            utils.showToast('Failed to refresh', 'error');
+        }
+        
+        setTimeout(() => btn.classList.remove('spinning'), 500);
+    });
+    
     // Nap buttons
     document.querySelectorAll('.nap-btn').forEach(btn => {
         btn.addEventListener('click', async (e) => {
@@ -2838,6 +2856,7 @@ async function init() {
                 const tasksUnsubscribe = db_ops.listenToTasks((tasks) => {
                     state.tasks = tasks;
                     ui.renderTasks(tasks);
+                    renderTodayTasks(); // Also update Today tab
                 });
                 state.unsubscribers.push(tasksUnsubscribe);
                 
