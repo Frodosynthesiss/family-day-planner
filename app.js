@@ -2542,6 +2542,11 @@ async function loadNapTimes() {
     const date = utils.getTodayString();
     const log = await db_ops.getDayLog(date);
     
+    // Load actual wake time
+    if (log?.actualWake) {
+        document.getElementById('actualWakeTime').value = log.actualWake;
+    }
+    
     if (log?.naps?.nap1) {
         if (log.naps.nap1.start) {
             document.getElementById('nap1StartTime').value = log.naps.nap1.start;
