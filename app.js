@@ -1852,8 +1852,8 @@ const wizard = {
     async next() {
         await this.saveCurrentStep();
         
-        // If moving from brain dump (step 6) to task selection (step 7), process brain dump first
-        if (this.currentStep === 6 && this.currentStep < this.totalSteps) {
+        // If moving from brain dump (step 7) to task selection (step 8), process brain dump first
+        if (this.currentStep === 7 && this.currentStep < this.totalSteps) {
             await this.processBrainDump();
         }
         
@@ -1887,13 +1887,15 @@ const wizard = {
     },
     
     saveCurrentStep() {
-        if (this.currentStep === 1) {
+        if (this.currentStep === 2) {
+            // Wake time is now step 2
             this.data.wakeTarget = document.getElementById('wakeTarget').value;
-        } else if (this.currentStep === 4) {
-            // Save bath decision
+        } else if (this.currentStep === 5) {
+            // Bath decision is now step 5 (Appointments)
             const bathCheckbox = document.getElementById('scheduleBath');
             this.data.includeBath = bathCheckbox ? bathCheckbox.checked : false;
-        } else if (this.currentStep === 6) {
+        } else if (this.currentStep === 7) {
+            // Brain dump is now step 7
             this.data.brainDump = document.getElementById('brainDumpText').value;
         }
     },
@@ -2564,26 +2566,36 @@ async function loadNapTimes() {
     const date = utils.getTodayString();
     const log = await db_ops.getDayLog(date);
     
-    // Load actual wake time
-    if (log?.actualWake) {
-        document.getElementById('actualWakeTime').value = log.actualWake;
-    }
+    // Clear all fields first
+    document.getElementById('actualWakeTime').value = '';
+    document.getElementById('nap1StartTime').value = '';
+    document.getElementById('nap1EndTime').value = '';
+    document.getElementById('nap2StartTime').value = '';
+    document.getElementById('nap2EndTime').value = '';
     
-    if (log?.naps?.nap1) {
-        if (log.naps.nap1.start) {
-            document.getElementById('nap1StartTime').value = log.naps.nap1.start;
+    // Only load if we have a log for TODAY specifically
+    if (log && log.date === date) {
+        // Load actual wake time
+        if (log.actualWake) {
+            document.getElementById('actualWakeTime').value = log.actualWake;
         }
-        if (log.naps.nap1.end) {
-            document.getElementById('nap1EndTime').value = log.naps.nap1.end;
+        
+        if (log.naps?.nap1) {
+            if (log.naps.nap1.start) {
+                document.getElementById('nap1StartTime').value = log.naps.nap1.start;
+            }
+            if (log.naps.nap1.end) {
+                document.getElementById('nap1EndTime').value = log.naps.nap1.end;
+            }
         }
-    }
-    
-    if (log?.naps?.nap2) {
-        if (log.naps.nap2.start) {
-            document.getElementById('nap2StartTime').value = log.naps.nap2.start;
-        }
-        if (log.naps.nap2.end) {
-            document.getElementById('nap2EndTime').value = log.naps.nap2.end;
+        
+        if (log.naps?.nap2) {
+            if (log.naps.nap2.start) {
+                document.getElementById('nap2StartTime').value = log.naps.nap2.start;
+            }
+            if (log.naps.nap2.end) {
+                document.getElementById('nap2EndTime').value = log.naps.nap2.end;
+            }
         }
     }
 }
@@ -2644,6 +2656,20 @@ async function renderTodaySchedule() {
     // Render availability summary if plan exists
     renderAvailabilitySummary();
     
+    // Only use nap data if it's actually from today and has valid times
+    let validNapData = null;
+    if (log && log.date === date && log.naps) {
+        validNapData = {};
+        // Only include nap1 if it has valid start time
+        if (log.naps.nap1?.start) {
+            validNapData.nap1 = log.naps.nap1;
+        }
+        // Only include nap2 if it has valid start time
+        if (log.naps.nap2?.start) {
+            validNapData.nap2 = log.naps.nap2;
+        }
+    }
+    
     // If we have a plan with calculated schedule, use it
     if (state.todayPlan && state.todayPlan.calculatedSchedule) {
         let blocks = [...state.todayPlan.calculatedSchedule];
@@ -2653,7 +2679,7 @@ async function renderTodaySchedule() {
             blocks = scheduler.adjustScheduleForActualWake(
                 state.todayPlan,
                 log.actualWake,
-                log.naps
+                validNapData
             );
         }
         
@@ -2677,7 +2703,7 @@ async function renderTodaySchedule() {
         const blocks = scheduler.adjustScheduleForActualWake(
             testPlan,
             log.actualWake,
-            log.naps
+            validNapData
         );
         
         ui.renderSchedule(blocks);
