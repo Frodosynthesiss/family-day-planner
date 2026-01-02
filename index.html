@@ -131,7 +131,7 @@
                 <div class="control-card">
                     <div class="control-section">
                         <label class="control-label">Actual Wake Time</label>
-                        <input type="time" id="actualWakeTime" class="time-input">
+                        <input type="time" id="actualWakeTime" class="time-input" autocomplete="off">
                     </div>
                     
                     <div class="nap-grid">
@@ -140,11 +140,11 @@
                             <div class="nap-time-inputs">
                                 <div class="time-input-group">
                                     <label>Start Time</label>
-                                    <input type="time" id="nap1StartTime" class="time-input">
+                                    <input type="time" id="nap1StartTime" class="time-input" autocomplete="off">
                                 </div>
                                 <div class="time-input-group">
                                     <label>End Time</label>
-                                    <input type="time" id="nap1EndTime" class="time-input">
+                                    <input type="time" id="nap1EndTime" class="time-input" autocomplete="off">
                                 </div>
                             </div>
                             <div class="nap-buttons">
@@ -159,11 +159,11 @@
                             <div class="nap-time-inputs">
                                 <div class="time-input-group">
                                     <label>Start Time</label>
-                                    <input type="time" id="nap2StartTime" class="time-input">
+                                    <input type="time" id="nap2StartTime" class="time-input" autocomplete="off">
                                 </div>
                                 <div class="time-input-group">
                                     <label>End Time</label>
-                                    <input type="time" id="nap2EndTime" class="time-input">
+                                    <input type="time" id="nap2EndTime" class="time-input" autocomplete="off">
                                 </div>
                             </div>
                             <div class="nap-buttons">
@@ -290,6 +290,12 @@
                     <div id="calendarStatus" class="status-badge">Not connected</div>
                     <button id="connectCalendarBtn" class="secondary-btn">Connect Calendar</button>
                     <button id="disconnectCalendarBtn" class="secondary-btn" style="display: none;">Disconnect</button>
+                </div>
+
+                <div class="settings-card">
+                    <h3>Today's Data</h3>
+                    <p class="settings-description">Clear today's wake time and nap logs to start fresh. This won't affect your plan - just the tracked times.</p>
+                    <button id="clearTodayLogBtn" class="secondary-btn">Clear Today's Log</button>
                 </div>
 
                 <div class="settings-card danger-zone">

@@ -228,6 +228,17 @@ const db_ops = {
         }
     },
     
+    async clearDayLog(date) {
+        try {
+            await db.collection('families').doc(FAMILY_ID)
+                .collection('day_logs').doc(date).delete();
+            return true;
+        } catch (error) {
+            console.error('Error clearing day log:', error);
+            return false;
+        }
+    },
+    
     // Tasks
     async getTasks() {
         try {
@@ -2480,6 +2491,30 @@ function setupEventHandlers() {
         await googleCalendar.exportDay(date, blocks);
     });
     
+    // Clear today's log
+    document.getElementById('clearTodayLogBtn').addEventListener('click', async () => {
+        if (confirm('Clear today\'s wake time and nap data? Your plan will stay intact.')) {
+            const today = utils.getTodayString();
+            const success = await db_ops.clearDayLog(today);
+            
+            if (success) {
+                // Clear the input fields
+                document.getElementById('actualWakeTime').value = '';
+                document.getElementById('nap1StartTime').value = '';
+                document.getElementById('nap1EndTime').value = '';
+                document.getElementById('nap2StartTime').value = '';
+                document.getElementById('nap2EndTime').value = '';
+                
+                // Re-render schedule (will show plan without adjustments)
+                await renderTodaySchedule();
+                
+                utils.showToast('Today\'s log cleared', 'success');
+            } else {
+                utils.showToast('Failed to clear log', 'error');
+            }
+        }
+    });
+    
     // Clear data
     document.getElementById('clearDataBtn').addEventListener('click', async () => {
         if (confirm('Are you sure you want to clear all data? This cannot be undone.')) {
@@ -2564,39 +2599,38 @@ async function updateManualNapTime(napNum) {
 
 async function loadNapTimes() {
     const date = utils.getTodayString();
-    const log = await db_ops.getDayLog(date);
     
-    // Clear all fields first
+    // Always clear all fields first to prevent stale data
     document.getElementById('actualWakeTime').value = '';
     document.getElementById('nap1StartTime').value = '';
     document.getElementById('nap1EndTime').value = '';
     document.getElementById('nap2StartTime').value = '';
     document.getElementById('nap2EndTime').value = '';
     
-    // Only load if we have a log for TODAY specifically
-    if (log && log.date === date) {
-        // Load actual wake time
-        if (log.actualWake) {
-            document.getElementById('actualWakeTime').value = log.actualWake;
-        }
-        
-        if (log.naps?.nap1) {
-            if (log.naps.nap1.start) {
-                document.getElementById('nap1StartTime').value = log.naps.nap1.start;
-            }
-            if (log.naps.nap1.end) {
-                document.getElementById('nap1EndTime').value = log.naps.nap1.end;
-            }
-        }
-        
-        if (log.naps?.nap2) {
-            if (log.naps.nap2.start) {
-                document.getElementById('nap2StartTime').value = log.naps.nap2.start;
-            }
-            if (log.naps.nap2.end) {
-                document.getElementById('nap2EndTime').value = log.naps.nap2.end;
-            }
-        }
+    // Get today's log (document ID is the date, so this is date-specific)
+    const log = await db_ops.getDayLog(date);
+    
+    if (!log) return; // No log for today yet
+    
+    // Load actual wake time if it exists
+    if (log.actualWake) {
+        document.getElementById('actualWakeTime').value = log.actualWake;
+    }
+    
+    // Load nap 1 times if they exist
+    if (log.naps?.nap1?.start) {
+        document.getElementById('nap1StartTime').value = log.naps.nap1.start;
+    }
+    if (log.naps?.nap1?.end) {
+        document.getElementById('nap1EndTime').value = log.naps.nap1.end;
+    }
+    
+    // Load nap 2 times if they exist
+    if (log.naps?.nap2?.start) {
+        document.getElementById('nap2StartTime').value = log.naps.nap2.start;
+    }
+    if (log.naps?.nap2?.end) {
+        document.getElementById('nap2EndTime').value = log.naps.nap2.end;
     }
 }
 
@@ -2656,17 +2690,21 @@ async function renderTodaySchedule() {
     // Render availability summary if plan exists
     renderAvailabilitySummary();
     
-    // Only use nap data if it's actually from today and has valid times
+    // Only use nap data if it has valid start times (not just any truthy value)
     let validNapData = null;
-    if (log && log.date === date && log.naps) {
+    if (log?.naps) {
         validNapData = {};
-        // Only include nap1 if it has valid start time
-        if (log.naps.nap1?.start) {
+        // Only include nap1 if it has a properly formatted start time (HH:MM)
+        if (log.naps.nap1?.start && /^\d{2}:\d{2}$/.test(log.naps.nap1.start)) {
             validNapData.nap1 = log.naps.nap1;
         }
-        // Only include nap2 if it has valid start time
-        if (log.naps.nap2?.start) {
+        // Only include nap2 if it has a properly formatted start time
+        if (log.naps.nap2?.start && /^\d{2}:\d{2}$/.test(log.naps.nap2.start)) {
             validNapData.nap2 = log.naps.nap2;
+        }
+        // If no valid naps, set to null
+        if (!validNapData.nap1 && !validNapData.nap2) {
+            validNapData = null;
         }
     }
     
