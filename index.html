@@ -264,13 +264,95 @@
                 <div id="mealsList" class="meals-list"></div>
             </div>
 
+            <!-- Lists Tab -->
+            <div id="listsTab" class="tab-pane">
+                <div class="tab-header">
+                    <h2>Lists</h2>
+                    <p class="tab-subtitle">Groceries, shopping, notes & links</p>
+                </div>
+                
+                <!-- Groceries Section -->
+                <div class="list-section">
+                    <div class="list-section-header">
+                        <h3>🛒 Groceries</h3>
+                        <button class="add-list-item-btn" data-category="groceries">+ Add</button>
+                    </div>
+                    <div class="list-input-container" id="groceriesInput" style="display: none;">
+                        <textarea class="list-textarea" placeholder="Add grocery item..." rows="2"></textarea>
+                        <div class="list-input-actions">
+                            <button class="secondary-btn cancel-list-btn" data-category="groceries">Cancel</button>
+                            <button class="primary-btn save-list-btn" data-category="groceries">Save</button>
+                        </div>
+                    </div>
+                    <div id="groceriesList" class="list-items"></div>
+                </div>
+                
+                <!-- Shopping Section -->
+                <div class="list-section">
+                    <div class="list-section-header">
+                        <h3>🛍️ Shopping</h3>
+                        <button class="add-list-item-btn" data-category="shopping">+ Add</button>
+                    </div>
+                    <div class="list-input-container" id="shoppingInput" style="display: none;">
+                        <textarea class="list-textarea" placeholder="Add shopping item..." rows="2"></textarea>
+                        <div class="list-input-actions">
+                            <button class="secondary-btn cancel-list-btn" data-category="shopping">Cancel</button>
+                            <button class="primary-btn save-list-btn" data-category="shopping">Save</button>
+                        </div>
+                    </div>
+                    <div id="shoppingList" class="list-items"></div>
+                </div>
+                
+                <!-- Notes Section -->
+                <div class="list-section">
+                    <div class="list-section-header">
+                        <h3>📝 Notes</h3>
+                        <button class="add-list-item-btn" data-category="notes">+ Add</button>
+                    </div>
+                    <div class="list-input-container" id="notesInput" style="display: none;">
+                        <textarea class="list-textarea" placeholder="Add a note..." rows="2"></textarea>
+                        <div class="list-input-actions">
+                            <button class="secondary-btn cancel-list-btn" data-category="notes">Cancel</button>
+                            <button class="primary-btn save-list-btn" data-category="notes">Save</button>
+                        </div>
+                    </div>
+                    <div id="notesList" class="list-items"></div>
+                </div>
+                
+                <!-- Links Section -->
+                <div class="list-section">
+                    <div class="list-section-header">
+                        <h3>🔗 Links</h3>
+                        <button class="add-list-item-btn" data-category="links">+ Add</button>
+                    </div>
+                    <div class="list-input-container" id="linksInput" style="display: none;">
+                        <textarea class="list-textarea" placeholder="Add a link or note with URLs..." rows="2"></textarea>
+                        <div class="list-input-actions">
+                            <button class="secondary-btn cancel-list-btn" data-category="links">Cancel</button>
+                            <button class="primary-btn save-list-btn" data-category="links">Save</button>
+                        </div>
+                    </div>
+                    <div id="linksList" class="list-items"></div>
+                </div>
+            </div>
+
             <!-- History Tab -->
             <div id="historyTab" class="tab-pane">
                 <div class="tab-header">
-                    <h2>Day Logs</h2>
-                    <p class="tab-subtitle">View past schedules</p>
+                    <div class="tab-header-row">
+                        <div>
+                            <h2>Day Logs</h2>
+                            <p class="tab-subtitle">View past schedules</p>
+                        </div>
+                        <button id="openSettingsBtn" class="icon-btn settings-link" aria-label="Settings">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <circle cx="12" cy="12" r="3"/>
+                                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+                            </svg>
+                        </button>
+                    </div>
                 </div>
-                <div id="historyList" class="history-grid"></div>
+                <div id="historyList" class="history-list"></div>
             </div>
 
             <!-- Settings Tab -->
@@ -344,19 +426,23 @@
                 </svg>
                 <span>Meals</span>
             </button>
+            <button class="nav-item" data-tab="lists">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <line x1="8" y1="6" x2="21" y2="6"/>
+                    <line x1="8" y1="12" x2="21" y2="12"/>
+                    <line x1="8" y1="18" x2="21" y2="18"/>
+                    <line x1="3" y1="6" x2="3.01" y2="6"/>
+                    <line x1="3" y1="12" x2="3.01" y2="12"/>
+                    <line x1="3" y1="18" x2="3.01" y2="18"/>
+                </svg>
+                <span>Lists</span>
+            </button>
             <button class="nav-item" data-tab="history">
                 <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M3 3v5h5"/>
                     <path d="M3.05 13A9 9 0 1 0 6 5.3L3 8"/>
                 </svg>
                 <span>History</span>
-            </button>
-            <button class="nav-item" data-tab="settings">
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <circle cx="12" cy="12" r="3"/>
-                    <path d="M12 1v6m0 6v6m5.66-17.66l-4.24 4.24m-2.83 2.83l-4.24 4.24m17.66-5.66l-4.24 4.24m-2.83 2.83l-4.24 4.24"/>
-                </svg>
-                <span>Settings</span>
             </button>
         </nav>
     </div>

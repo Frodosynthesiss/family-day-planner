@@ -28,6 +28,7 @@ const state = {
     tomorrowPlan: null,
     tasks: [],
     meals: [],
+    lists: [],
     wizardStep: 1,
     wizardData: {},
     unsubscribers: []
@@ -364,6 +365,79 @@ const db_ops = {
                 callback(meals);
             }, error => {
                 console.error('Error listening to meals:', error);
+            });
+        return unsubscribe;
+    },
+    
+    // Lists
+    async getListItems(category) {
+        try {
+            const snapshot = await db.collection('families').doc(FAMILY_ID)
+                .collection('lists')
+                .where('category', '==', category)
+                .orderBy('createdAt', 'desc')
+                .get();
+            return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        } catch (error) {
+            console.error('Error getting list items:', error);
+            return [];
+        }
+    },
+    
+    async addListItem(category, content) {
+        try {
+            const docRef = await db.collection('families').doc(FAMILY_ID)
+                .collection('lists').add({
+                    category,
+                    content,
+                    createdBy: currentUser.uid,
+                    createdAt: firebase.firestore.FieldValue.serverTimestamp()
+                });
+            return docRef.id;
+        } catch (error) {
+            console.error('Error adding list item:', error);
+            utils.showToast('Failed to add item', 'error');
+            return null;
+        }
+    },
+    
+    async updateListItem(id, content) {
+        try {
+            await db.collection('families').doc(FAMILY_ID)
+                .collection('lists').doc(id).update({
+                    content,
+                    updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+                });
+            return true;
+        } catch (error) {
+            console.error('Error updating list item:', error);
+            return false;
+        }
+    },
+    
+    async deleteListItem(id) {
+        try {
+            await db.collection('families').doc(FAMILY_ID)
+                .collection('lists').doc(id).delete();
+            return true;
+        } catch (error) {
+            console.error('Error deleting list item:', error);
+            return false;
+        }
+    },
+    
+    listenToLists(callback) {
+        const unsubscribe = db.collection('families').doc(FAMILY_ID)
+            .collection('lists')
+            .orderBy('createdAt', 'desc')
+            .onSnapshot(snapshot => {
+                const items = snapshot.docs.map(doc => ({ 
+                    id: doc.id, 
+                    ...doc.data() 
+                }));
+                callback(items);
+            }, error => {
+                console.error('Error listening to lists:', error);
             });
         return unsubscribe;
     },
@@ -1013,14 +1087,119 @@ const ui = {
             return;
         }
         
-        container.innerHTML = logs.map(log => `
-            <div class="history-item" data-date="${log.date}">
-                <div class="history-date">${utils.formatDate(log.date)}</div>
-                <div class="history-summary">
-                    ${log.actualWake ? `Wake: ${utils.formatTime(log.actualWake)}` : 'No data'}
+        // Also fetch plans for each date to show full schedule
+        const logsWithPlans = await Promise.all(logs.map(async (log) => {
+            const plan = await db_ops.getDayPlan(log.date);
+            return { ...log, plan };
+        }));
+        
+        container.innerHTML = logsWithPlans.map(log => {
+            const hasNaps = log.naps && (log.naps.nap1 || log.naps.nap2);
+            const hasSchedule = log.plan?.calculatedSchedule?.length > 0;
+            
+            let detailsHtml = '<div class="history-details">';
+            
+            // Wake time
+            if (log.actualWake) {
+                detailsHtml += `<div class="history-detail-row"><strong>Wake Time:</strong> ${utils.formatTime(log.actualWake)}</div>`;
+            }
+            
+            // Naps
+            if (hasNaps) {
+                if (log.naps.nap1?.start) {
+                    detailsHtml += `<div class="history-detail-row"><strong>Nap 1:</strong> ${utils.formatTime(log.naps.nap1.start)}${log.naps.nap1.end ? ' - ' + utils.formatTime(log.naps.nap1.end) : ' (in progress)'}</div>`;
+                }
+                if (log.naps.nap2?.start) {
+                    detailsHtml += `<div class="history-detail-row"><strong>Nap 2:</strong> ${utils.formatTime(log.naps.nap2.start)}${log.naps.nap2.end ? ' - ' + utils.formatTime(log.naps.nap2.end) : ' (in progress)'}</div>`;
+                }
+            }
+            
+            // Full schedule
+            if (hasSchedule) {
+                detailsHtml += `<div class="history-schedule-title">Schedule</div>`;
+                detailsHtml += `<div class="history-schedule">`;
+                log.plan.calculatedSchedule
+                    .sort((a, b) => a.start.localeCompare(b.start))
+                    .forEach(block => {
+                        detailsHtml += `
+                            <div class="history-block history-block-${block.type}">
+                                <span class="history-block-time">${utils.formatTime(block.start)}</span>
+                                <span class="history-block-title">${block.title}</span>
+                            </div>
+                        `;
+                    });
+                detailsHtml += `</div>`;
+            }
+            
+            if (!log.actualWake && !hasNaps && !hasSchedule) {
+                detailsHtml += `<div class="history-detail-row">No details recorded</div>`;
+            }
+            
+            detailsHtml += '</div>';
+            
+            return `
+                <div class="history-item" data-date="${log.date}">
+                    <div class="history-header">
+                        <div class="history-date">${utils.formatDate(log.date)}</div>
+                        <div class="history-summary">
+                            ${log.actualWake ? `Wake: ${utils.formatTime(log.actualWake)}` : 'No data'}
+                        </div>
+                        <svg class="history-chevron" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <polyline points="6 9 12 15 18 9"/>
+                        </svg>
+                    </div>
+                    ${detailsHtml}
                 </div>
-            </div>
-        `).join('');
+            `;
+        }).join('');
+    },
+    
+    renderLists(items) {
+        const categories = ['groceries', 'shopping', 'notes', 'links'];
+        
+        categories.forEach(category => {
+            const container = document.getElementById(`${category}List`);
+            const categoryItems = items.filter(item => item.category === category);
+            
+            if (categoryItems.length === 0) {
+                container.innerHTML = `<div class="empty-state-text">No items yet</div>`;
+                return;
+            }
+            
+            container.innerHTML = categoryItems.map(item => `
+                <div class="list-item-card" data-id="${item.id}">
+                    <div class="list-item-content" id="list-content-${item.id}">${this.linkifyText(item.content)}</div>
+                    <div class="list-item-actions">
+                        <button class="list-edit-btn" data-id="${item.id}" data-category="${category}">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+                                <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                            </svg>
+                        </button>
+                        <button class="list-delete-btn" data-id="${item.id}">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <polyline points="3 6 5 6 21 6"/>
+                                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+                            </svg>
+                        </button>
+                    </div>
+                    <div class="list-edit-form" id="list-edit-${item.id}" style="display: none;">
+                        <textarea class="list-textarea" rows="2">${item.content}</textarea>
+                        <div class="list-input-actions">
+                            <button class="secondary-btn list-cancel-edit-btn" data-id="${item.id}">Cancel</button>
+                            <button class="primary-btn list-save-edit-btn" data-id="${item.id}">Save</button>
+                        </div>
+                    </div>
+                </div>
+            `).join('');
+        });
+    },
+    
+    linkifyText(text) {
+        // Convert URLs to clickable links
+        const urlRegex = /(https?:\/\/[^\s<]+)/g;
+        const escaped = text.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        return escaped.replace(urlRegex, '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>');
     },
     
     renderMeals(meals) {
@@ -2432,6 +2611,111 @@ function setupEventHandlers() {
         }
     });
     
+    // Lists interactions
+    document.querySelectorAll('.add-list-item-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const category = btn.dataset.category;
+            document.getElementById(`${category}Input`).style.display = 'block';
+            btn.style.display = 'none';
+        });
+    });
+    
+    document.querySelectorAll('.cancel-list-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const category = btn.dataset.category;
+            const inputContainer = document.getElementById(`${category}Input`);
+            inputContainer.style.display = 'none';
+            inputContainer.querySelector('textarea').value = '';
+            document.querySelector(`.add-list-item-btn[data-category="${category}"]`).style.display = 'block';
+        });
+    });
+    
+    document.querySelectorAll('.save-list-btn').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            const category = btn.dataset.category;
+            const inputContainer = document.getElementById(`${category}Input`);
+            const textarea = inputContainer.querySelector('textarea');
+            const content = textarea.value.trim();
+            
+            if (content) {
+                await db_ops.addListItem(category, content);
+                textarea.value = '';
+                inputContainer.style.display = 'none';
+                document.querySelector(`.add-list-item-btn[data-category="${category}"]`).style.display = 'block';
+                utils.showToast('Item added', 'success');
+            }
+        });
+    });
+    
+    // List item interactions (event delegation)
+    document.addEventListener('click', async (e) => {
+        // Edit button
+        if (e.target.closest('.list-edit-btn')) {
+            const btn = e.target.closest('.list-edit-btn');
+            const id = btn.dataset.id;
+            const contentEl = document.getElementById(`list-content-${id}`);
+            const editForm = document.getElementById(`list-edit-${id}`);
+            
+            contentEl.style.display = 'none';
+            btn.parentElement.style.display = 'none';
+            editForm.style.display = 'block';
+        }
+        
+        // Cancel edit
+        if (e.target.closest('.list-cancel-edit-btn')) {
+            const btn = e.target.closest('.list-cancel-edit-btn');
+            const id = btn.dataset.id;
+            const contentEl = document.getElementById(`list-content-${id}`);
+            const editForm = document.getElementById(`list-edit-${id}`);
+            const actionsEl = contentEl.parentElement.querySelector('.list-item-actions');
+            
+            contentEl.style.display = 'block';
+            actionsEl.style.display = 'flex';
+            editForm.style.display = 'none';
+        }
+        
+        // Save edit
+        if (e.target.closest('.list-save-edit-btn')) {
+            const btn = e.target.closest('.list-save-edit-btn');
+            const id = btn.dataset.id;
+            const editForm = document.getElementById(`list-edit-${id}`);
+            const textarea = editForm.querySelector('textarea');
+            const newContent = textarea.value.trim();
+            
+            if (newContent) {
+                await db_ops.updateListItem(id, newContent);
+                utils.showToast('Item updated', 'success');
+            }
+        }
+        
+        // Delete button
+        if (e.target.closest('.list-delete-btn')) {
+            const btn = e.target.closest('.list-delete-btn');
+            const id = btn.dataset.id;
+            
+            if (confirm('Delete this item?')) {
+                await db_ops.deleteListItem(id);
+                utils.showToast('Item deleted', 'success');
+            }
+        }
+    });
+    
+    // History accordion
+    document.getElementById('historyList').addEventListener('click', (e) => {
+        const historyItem = e.target.closest('.history-item');
+        if (historyItem && e.target.closest('.history-header')) {
+            historyItem.classList.toggle('expanded');
+        }
+    });
+    
+    // Settings link from History page
+    document.getElementById('openSettingsBtn').addEventListener('click', () => {
+        // Show settings tab
+        document.querySelectorAll('.tab-pane').forEach(pane => pane.classList.remove('active'));
+        document.getElementById('settingsTab').classList.add('active');
+        document.querySelectorAll('.nav-item').forEach(nav => nav.classList.remove('active'));
+    });
+    
     // Task interactions (event delegation)
     document.addEventListener('click', async (e) => {
         if (e.target.classList.contains('task-checkbox') || e.target.classList.contains('task-checkbox-today')) {
@@ -2929,6 +3213,12 @@ async function init() {
                     ui.renderMeals(meals);
                 });
                 state.unsubscribers.push(mealsUnsubscribe);
+                
+                const listsUnsubscribe = db_ops.listenToLists((items) => {
+                    state.lists = items;
+                    ui.renderLists(items);
+                });
+                state.unsubscribers.push(listsUnsubscribe);
                 
                 // Setup event handlers (only once)
                 if (!window.handlersSetup) {
