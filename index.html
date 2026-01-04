@@ -271,6 +271,40 @@
                     <p class="tab-subtitle">Groceries, shopping, notes & links</p>
                 </div>
                 
+                <!-- Calendar Events Section -->
+                <div class="list-section calendar-events-section">
+                    <div class="list-section-header">
+                        <h3>📅 Calendar Events</h3>
+                        <button class="add-list-item-btn" id="showEventFormBtn">+ Add</button>
+                    </div>
+                    <div class="event-form" id="eventForm" style="display: none;">
+                        <input type="text" id="eventTitle" class="event-input" placeholder="Event title...">
+                        <div class="event-datetime-row">
+                            <input type="date" id="eventDate" class="event-input">
+                            <input type="time" id="eventStartTime" class="event-input" placeholder="Start">
+                            <input type="time" id="eventEndTime" class="event-input" placeholder="End">
+                        </div>
+                        <div class="event-checkbox-row">
+                            <label class="event-checkbox-label">
+                                <input type="checkbox" id="eventAllDay"> All day event
+                            </label>
+                        </div>
+                        <div class="list-input-actions">
+                            <button class="secondary-btn" id="cancelEventBtn">Cancel</button>
+                            <button class="primary-btn" id="addEventBtn">Add to List</button>
+                        </div>
+                    </div>
+                    <div id="pendingEventsList" class="pending-events"></div>
+                    <button class="primary-btn full-width download-events-btn" id="downloadEventsBtn" style="display: none;">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                            <polyline points="7 10 12 15 17 10"/>
+                            <line x1="12" y1="15" x2="12" y2="3"/>
+                        </svg>
+                        Download .ics File
+                    </button>
+                </div>
+                
                 <!-- Groceries Section -->
                 <div class="list-section">
                     <div class="list-section-header">

@@ -29,6 +29,7 @@ const state = {
     tasks: [],
     meals: [],
     lists: [],
+    pendingEvents: [],
     wizardStep: 1,
     wizardData: {},
     unsubscribers: []
@@ -62,6 +63,74 @@ const utils = {
         const ampm = h >= 12 ? 'PM' : 'AM';
         const displayHour = h === 0 ? 12 : h > 12 ? h - 12 : h;
         return `${displayHour}:${minutes} ${ampm}`;
+    },
+    
+    // ICS file generation
+    generateICS(events) {
+        const formatICSDate = (date, time, allDay = false) => {
+            const d = new Date(date + (time ? 'T' + time : ''));
+            if (allDay) {
+                // All-day events use YYYYMMDD format
+                return d.toISOString().split('T')[0].replace(/-/g, '');
+            }
+            // Timed events use local time with YYYYMMDDTHHMMSS format
+            const year = d.getFullYear();
+            const month = String(d.getMonth() + 1).padStart(2, '0');
+            const day = String(d.getDate()).padStart(2, '0');
+            const hours = String(d.getHours()).padStart(2, '0');
+            const mins = String(d.getMinutes()).padStart(2, '0');
+            return `${year}${month}${day}T${hours}${mins}00`;
+        };
+        
+        const generateUID = () => {
+            return 'vega-payne-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
+        };
+        
+        let ics = [
+            'BEGIN:VCALENDAR',
+            'VERSION:2.0',
+            'PRODID:-//Vega-Payne Command Center//EN',
+            'CALSCALE:GREGORIAN',
+            'METHOD:PUBLISH'
+        ];
+        
+        events.forEach(event => {
+            ics.push('BEGIN:VEVENT');
+            ics.push(`UID:${generateUID()}`);
+            ics.push(`DTSTAMP:${formatICSDate(new Date().toISOString().split('T')[0], new Date().toTimeString().slice(0,5))}`);
+            
+            if (event.allDay) {
+                ics.push(`DTSTART;VALUE=DATE:${formatICSDate(event.date, null, true)}`);
+                // All-day events end on the next day
+                const endDate = new Date(event.date);
+                endDate.setDate(endDate.getDate() + 1);
+                const endDateStr = endDate.toISOString().split('T')[0];
+                ics.push(`DTEND;VALUE=DATE:${formatICSDate(endDateStr, null, true)}`);
+            } else {
+                ics.push(`DTSTART:${formatICSDate(event.date, event.startTime)}`);
+                ics.push(`DTEND:${formatICSDate(event.date, event.endTime || event.startTime)}`);
+            }
+            
+            ics.push(`SUMMARY:${event.title.replace(/[,;\\]/g, '\\$&')}`);
+            ics.push('END:VEVENT');
+        });
+        
+        ics.push('END:VCALENDAR');
+        return ics.join('\r\n');
+    },
+    
+    downloadICS(events, filename = 'events.ics') {
+        const icsContent = this.generateICS(events);
+        const blob = new Blob([icsContent], { type: 'text/calendar;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = filename;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
     },
     
     getTodayString() {
@@ -2699,6 +2768,124 @@ function setupEventHandlers() {
             }
         }
     });
+    
+    // Calendar Events functionality
+    const renderPendingEvents = () => {
+        const container = document.getElementById('pendingEventsList');
+        const downloadBtn = document.getElementById('downloadEventsBtn');
+        
+        if (state.pendingEvents.length === 0) {
+            container.innerHTML = '<div class="empty-state-text">No events queued</div>';
+            downloadBtn.style.display = 'none';
+            return;
+        }
+        
+        downloadBtn.style.display = 'flex';
+        container.innerHTML = state.pendingEvents.map((event, index) => `
+            <div class="pending-event-card" data-index="${index}">
+                <div class="pending-event-info">
+                    <div class="pending-event-title">${event.title}</div>
+                    <div class="pending-event-datetime">
+                        ${utils.formatDate(event.date)}${event.allDay ? ' (All day)' : ` • ${utils.formatTime(event.startTime)}${event.endTime ? ' - ' + utils.formatTime(event.endTime) : ''}`}
+                    </div>
+                </div>
+                <button class="pending-event-remove" data-index="${index}">×</button>
+            </div>
+        `).join('');
+    };
+    
+    document.getElementById('showEventFormBtn').addEventListener('click', () => {
+        document.getElementById('eventForm').style.display = 'block';
+        document.getElementById('showEventFormBtn').style.display = 'none';
+        // Set default date to today
+        document.getElementById('eventDate').value = utils.getTodayString();
+    });
+    
+    document.getElementById('cancelEventBtn').addEventListener('click', () => {
+        document.getElementById('eventForm').style.display = 'none';
+        document.getElementById('showEventFormBtn').style.display = 'block';
+        // Clear form
+        document.getElementById('eventTitle').value = '';
+        document.getElementById('eventDate').value = '';
+        document.getElementById('eventStartTime').value = '';
+        document.getElementById('eventEndTime').value = '';
+        document.getElementById('eventAllDay').checked = false;
+    });
+    
+    document.getElementById('eventAllDay').addEventListener('change', (e) => {
+        const timeInputs = document.querySelectorAll('#eventStartTime, #eventEndTime');
+        timeInputs.forEach(input => {
+            input.disabled = e.target.checked;
+            if (e.target.checked) input.value = '';
+        });
+    });
+    
+    document.getElementById('addEventBtn').addEventListener('click', () => {
+        const title = document.getElementById('eventTitle').value.trim();
+        const date = document.getElementById('eventDate').value;
+        const startTime = document.getElementById('eventStartTime').value;
+        const endTime = document.getElementById('eventEndTime').value;
+        const allDay = document.getElementById('eventAllDay').checked;
+        
+        if (!title) {
+            utils.showToast('Please enter an event title', 'error');
+            return;
+        }
+        if (!date) {
+            utils.showToast('Please select a date', 'error');
+            return;
+        }
+        if (!allDay && !startTime) {
+            utils.showToast('Please enter a start time or mark as all day', 'error');
+            return;
+        }
+        
+        state.pendingEvents.push({ title, date, startTime, endTime, allDay });
+        renderPendingEvents();
+        
+        // Clear form but keep it open for adding more
+        document.getElementById('eventTitle').value = '';
+        document.getElementById('eventStartTime').value = '';
+        document.getElementById('eventEndTime').value = '';
+        document.getElementById('eventAllDay').checked = false;
+        document.querySelectorAll('#eventStartTime, #eventEndTime').forEach(input => input.disabled = false);
+        
+        utils.showToast('Event added to list', 'success');
+    });
+    
+    document.getElementById('pendingEventsList').addEventListener('click', (e) => {
+        if (e.target.classList.contains('pending-event-remove')) {
+            const index = parseInt(e.target.dataset.index);
+            state.pendingEvents.splice(index, 1);
+            renderPendingEvents();
+            utils.showToast('Event removed', 'success');
+        }
+    });
+    
+    document.getElementById('downloadEventsBtn').addEventListener('click', () => {
+        if (state.pendingEvents.length === 0) {
+            utils.showToast('No events to download', 'error');
+            return;
+        }
+        
+        const filename = state.pendingEvents.length === 1 
+            ? `${state.pendingEvents[0].title.replace(/[^a-z0-9]/gi, '_')}.ics`
+            : `events_${utils.getTodayString()}.ics`;
+        
+        utils.downloadICS(state.pendingEvents, filename);
+        utils.showToast('Calendar file downloaded', 'success');
+        
+        // Clear events after download
+        state.pendingEvents = [];
+        renderPendingEvents();
+        
+        // Hide the form
+        document.getElementById('eventForm').style.display = 'none';
+        document.getElementById('showEventFormBtn').style.display = 'block';
+    });
+    
+    // Initialize pending events display
+    renderPendingEvents();
     
     // History accordion
     document.getElementById('historyList').addEventListener('click', (e) => {
