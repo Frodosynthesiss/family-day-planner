@@ -1,4 +1,4 @@
-const CACHE_NAME = 'family-planner-v8';
+const CACHE_NAME = 'family-planner-v9-alignment';
 const urlsToCache = [
   './',
   './index.html',

@@ -1,7 +1,9 @@
-// Family Day Planner - Firebase Version
-// Modern, sleek implementation with Google authentication
+// Vega-Payne Command Center — Alignment Planner
+// Rewritten to focus on spousal alignment rather than adaptive baby scheduling.
 
+// ============================================================================
 // Firebase Configuration
+// ============================================================================
 const firebaseConfig = {
     apiKey: "AIzaSyA2YSjOktRbinbKMjIy1pbd_Bkbwp3ruRY",
     authDomain: "vega-payne-command-center.firebaseapp.com",
@@ -12,15 +14,22 @@ const firebaseConfig = {
     measurementId: "G-JHR2MYTHM1"
 };
 
-// Initialize Firebase
 let auth, db, functions;
 let currentUser = null;
 
-// Constants
-const FAMILY_ID = 'default_family'; // Shared family space
-const USERS = ['Kristyn', 'Julio', 'Nanny', 'Kayden'];
+const FAMILY_ID = 'default_family';
+const COVERAGE_PEOPLE = ['kristyn', 'julio', 'nanny', 'kayden'];
+const WORK_PEOPLE = ['kristyn', 'julio'];
+const PERSON_LABEL = {
+    kristyn: 'Kristyn',
+    julio: 'Julio',
+    nanny: 'Nanny',
+    kayden: 'Kayden'
+};
 
+// ============================================================================
 // Application State
+// ============================================================================
 const state = {
     user: null,
     settings: null,
@@ -29,101 +38,89 @@ const state = {
     tasks: [],
     meals: [],
     lists: [],
+    intentions: [],
     pendingEvents: [],
     wizardStep: 1,
     wizardData: {},
     unsubscribers: []
 };
 
-// Utility Functions
+// ============================================================================
+// Utilities
+// ============================================================================
 const utils = {
     formatDate(date) {
-        // If it's a YYYY-MM-DD string, parse it correctly to avoid timezone issues
         if (typeof date === 'string' && date.match(/^\d{4}-\d{2}-\d{2}$/)) {
-            const [year, month, day] = date.split('-').map(Number);
-            const d = new Date(year, month - 1, day); // month is 0-indexed
-            return d.toLocaleDateString('en-US', { 
-                month: 'short', 
-                day: 'numeric', 
-                year: 'numeric' 
+            const [y, m, d] = date.split('-').map(Number);
+            return new Date(y, m - 1, d).toLocaleDateString('en-US', {
+                weekday: 'short', month: 'short', day: 'numeric', year: 'numeric'
             });
         }
         const d = typeof date === 'string' ? new Date(date) : date;
-        return d.toLocaleDateString('en-US', { 
-            month: 'short', 
-            day: 'numeric', 
-            year: 'numeric' 
+        return d.toLocaleDateString('en-US', {
+            weekday: 'short', month: 'short', day: 'numeric', year: 'numeric'
         });
     },
-    
+
     formatTime(time) {
         if (!time) return '';
         const [hours, minutes] = time.split(':');
-        const h = parseInt(hours);
+        const h = parseInt(hours, 10);
         const ampm = h >= 12 ? 'PM' : 'AM';
         const displayHour = h === 0 ? 12 : h > 12 ? h - 12 : h;
         return `${displayHour}:${minutes} ${ampm}`;
     },
-    
-    // ICS file generation
+
+    // Convert "HH:MM" to minutes since midnight
+    toMinutes(time) {
+        if (!time) return null;
+        const [h, m] = time.split(':').map(Number);
+        return h * 60 + m;
+    },
+
+    // Check if two [start, end] time ranges overlap
+    rangesOverlap(aStart, aEnd, bStart, bEnd) {
+        const as = this.toMinutes(aStart);
+        const ae = this.toMinutes(aEnd);
+        const bs = this.toMinutes(bStart);
+        const be = this.toMinutes(bEnd);
+        if ([as, ae, bs, be].some(v => v === null)) return false;
+        return as < be && bs < ae;
+    },
+
     generateICS(events) {
         const formatICSDate = (date, time, allDay = false) => {
             const d = new Date(date + (time ? 'T' + time : ''));
-            if (allDay) {
-                // All-day events use YYYYMMDD format
-                return d.toISOString().split('T')[0].replace(/-/g, '');
-            }
-            // Timed events use local time with YYYYMMDDTHHMMSS format
-            const year = d.getFullYear();
-            const month = String(d.getMonth() + 1).padStart(2, '0');
-            const day = String(d.getDate()).padStart(2, '0');
-            const hours = String(d.getHours()).padStart(2, '0');
-            const mins = String(d.getMinutes()).padStart(2, '0');
-            return `${year}${month}${day}T${hours}${mins}00`;
+            if (allDay) return d.toISOString().split('T')[0].replace(/-/g, '');
+            const pad = n => String(n).padStart(2, '0');
+            return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}T${pad(d.getHours())}${pad(d.getMinutes())}00`;
         };
-        
-        const generateUID = () => {
-            return 'vega-payne-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
-        };
-        
-        let ics = [
-            'BEGIN:VCALENDAR',
-            'VERSION:2.0',
-            'PRODID:-//Vega-Payne Command Center//EN',
-            'CALSCALE:GREGORIAN',
-            'METHOD:PUBLISH'
-        ];
-        
+        const uid = () => 'vega-payne-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
+
+        const ics = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Vega-Payne Command Center//EN', 'CALSCALE:GREGORIAN', 'METHOD:PUBLISH'];
         events.forEach(event => {
             ics.push('BEGIN:VEVENT');
-            ics.push(`UID:${generateUID()}`);
-            ics.push(`DTSTAMP:${formatICSDate(new Date().toISOString().split('T')[0], new Date().toTimeString().slice(0,5))}`);
-            
+            ics.push(`UID:${uid()}`);
+            ics.push(`DTSTAMP:${formatICSDate(new Date().toISOString().split('T')[0], new Date().toTimeString().slice(0, 5))}`);
             if (event.allDay) {
                 ics.push(`DTSTART;VALUE=DATE:${formatICSDate(event.date, null, true)}`);
-                // All-day events end on the next day
                 const endDate = new Date(event.date);
                 endDate.setDate(endDate.getDate() + 1);
-                const endDateStr = endDate.toISOString().split('T')[0];
-                ics.push(`DTEND;VALUE=DATE:${formatICSDate(endDateStr, null, true)}`);
+                ics.push(`DTEND;VALUE=DATE:${formatICSDate(endDate.toISOString().split('T')[0], null, true)}`);
             } else {
                 ics.push(`DTSTART:${formatICSDate(event.date, event.startTime)}`);
                 ics.push(`DTEND:${formatICSDate(event.date, event.endTime || event.startTime)}`);
             }
-            
             ics.push(`SUMMARY:${event.title.replace(/[,;\\]/g, '\\$&')}`);
             ics.push('END:VEVENT');
         });
-        
         ics.push('END:VCALENDAR');
         return ics.join('\r\n');
     },
-    
+
     downloadICS(events, filename = 'events.ics') {
-        const icsContent = this.generateICS(events);
-        const blob = new Blob([icsContent], { type: 'text/calendar;charset=utf-8' });
+        const blob = new Blob([this.generateICS(events)], { type: 'text/calendar;charset=utf-8' });
         const url = URL.createObjectURL(blob);
-        
         const link = document.createElement('a');
         link.href = url;
         link.download = filename;
@@ -132,104 +129,90 @@ const utils = {
         document.body.removeChild(link);
         URL.revokeObjectURL(url);
     },
-    
+
     getTodayString() {
-        const today = new Date();
-        // Get local date string in YYYY-MM-DD format
-        const year = today.getFullYear();
-        const month = String(today.getMonth() + 1).padStart(2, '0');
-        const day = String(today.getDate()).padStart(2, '0');
-        return `${year}-${month}-${day}`;
+        const d = new Date();
+        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
     },
-    
+
     getTomorrowString() {
-        const tomorrow = new Date();
-        tomorrow.setDate(tomorrow.getDate() + 1);
-        const year = tomorrow.getFullYear();
-        const month = String(tomorrow.getMonth() + 1).padStart(2, '0');
-        const day = String(tomorrow.getDate()).padStart(2, '0');
-        return `${year}-${month}-${day}`;
+        const d = new Date();
+        d.setDate(d.getDate() + 1);
+        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
     },
-    
-    getCurrentTime() {
-        const now = new Date();
-        return `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+
+    daysBetween(aStr, bStr) {
+        // Both are YYYY-MM-DD strings
+        const [ay, am, ad] = aStr.split('-').map(Number);
+        const [by, bm, bd] = bStr.split('-').map(Number);
+        const a = new Date(ay, am - 1, ad);
+        const b = new Date(by, bm - 1, bd);
+        return Math.round((b - a) / (1000 * 60 * 60 * 24));
     },
-    
+
+    daysSince(dateStr) {
+        if (!dateStr) return null;
+        return this.daysBetween(dateStr, this.getTodayString());
+    },
+
+    relativeAge(dateStr) {
+        const days = this.daysSince(dateStr);
+        if (days === null) return '';
+        if (days <= 0) return 'today';
+        if (days === 1) return '1 day ago';
+        if (days < 14) return `${days} days ago`;
+        if (days < 60) return `${Math.floor(days / 7)} weeks ago`;
+        return `${Math.floor(days / 30)} months ago`;
+    },
+
     showToast(message, type = 'info') {
         const container = document.getElementById('toastContainer');
         const toast = document.createElement('div');
         toast.className = `toast ${type}`;
         toast.textContent = message;
         container.appendChild(toast);
-        
         setTimeout(() => {
             toast.style.animation = 'fadeOut 0.3s ease';
             setTimeout(() => toast.remove(), 300);
         }, 3000);
     },
-    
-    debounce(func, wait) {
-        let timeout;
-        return function executedFunction(...args) {
-            const later = () => {
-                clearTimeout(timeout);
-                func(...args);
-            };
-            clearTimeout(timeout);
-            timeout = setTimeout(later, wait);
-        };
+
+    escapeHtml(str) {
+        return (str || '').replace(/[&<>"']/g, c => ({
+            '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+        }[c]));
     }
 };
 
-// Firebase Database Operations
+// ============================================================================
+// Database Operations
+// ============================================================================
 const db_ops = {
-    // Settings
     async getSettings() {
         try {
             const doc = await db.collection('families').doc(FAMILY_ID).get();
             if (doc.exists) {
-                return doc.data();
+                return { ...this.getDefaultSettings(), ...doc.data() };
             }
             return this.getDefaultSettings();
-        } catch (error) {
-            console.error('Error getting settings:', error);
+        } catch (e) {
+            console.error('getSettings:', e);
             return this.getDefaultSettings();
         }
     },
-    
+
     getDefaultSettings() {
         return {
-            constraints: [
-                { name: 'Wake Window 1', value: '3 hrs' },
-                { name: 'Nap 1 Duration', value: '1 hr' },
-                { name: 'Wake Window 2', value: '3.5 hrs' },
-                { name: 'Nap 2 Duration', value: '1 hr' },
-                { name: 'Wake Window 3', value: '4 hrs' }
+            weeklyGoals: '',
+            checklistItems: [
+                { id: 'skylight', label: 'Skylight calendar up to date?' },
+                { id: 'nanny', label: 'Nanny briefed on tomorrow?' },
+                { id: 'kitchen', label: 'Kitchen reset for morning?' }
             ],
-            routineBlocks: {
-                wakeUp: { duration: 10, title: 'Wake Up Time' },
-                familyCuddle: { duration: 10, title: 'Family Cuddle' },
-                getDressed: { duration: 10, title: 'Get Dressed' },
-                breakfastPrep: { duration: 10, title: 'Breakfast Prep' },
-                breakfast: { duration: 20, title: 'Breakfast' },
-                brushTeethMorning: { duration: 5, title: 'Brush Teeth' },
-                napRoutine: { duration: 10, title: 'Nap Time Routine' },
-                lunchPrep: { duration: 10, title: 'Lunch Prep' },
-                lunch: { duration: 20, title: 'Lunch' },
-                snackMilk: { duration: 10, title: 'Snack + Milk' },
-                dinnerPrep: { duration: 10, title: 'Dinner Prep' },
-                dinner: { duration: 20, title: 'Dinner' },
-                bath: { duration: 20, title: 'Bath Time' },
-                brushTeethEvening: { duration: 5, title: 'Brush Teeth' },
-                bedtimeRoutine: { duration: 15, title: 'Bedtime Routine' },
-                buffer: { duration: 5, title: 'Buffer' }
-            },
-            lastBathDate: null,
             googleCalendar: null
         };
     },
-    
+
     async saveSettings(settings) {
         try {
             await db.collection('families').doc(FAMILY_ID).set({
@@ -237,3216 +220,2449 @@ const db_ops = {
                 updatedAt: firebase.firestore.FieldValue.serverTimestamp()
             }, { merge: true });
             return true;
-        } catch (error) {
-            console.error('Error saving settings:', error);
+        } catch (e) {
+            console.error('saveSettings:', e);
             utils.showToast('Failed to save settings', 'error');
             return false;
         }
     },
-    
-    // Day Plans
+
     async getDayPlan(date) {
         try {
-            const doc = await db.collection('families').doc(FAMILY_ID)
-                .collection('day_plans').doc(date).get();
+            const doc = await db.collection('families').doc(FAMILY_ID).collection('day_plans').doc(date).get();
             return doc.exists ? doc.data() : null;
-        } catch (error) {
-            console.error('Error getting day plan:', error);
+        } catch (e) {
+            console.error('getDayPlan:', e);
             return null;
         }
     },
-    
+
     async saveDayPlan(date, planData) {
         try {
-            await db.collection('families').doc(FAMILY_ID)
-                .collection('day_plans').doc(date).set({
-                    ...planData,
-                    createdBy: currentUser.uid,
-                    createdAt: firebase.firestore.FieldValue.serverTimestamp()
-                }, { merge: true });
+            await db.collection('families').doc(FAMILY_ID).collection('day_plans').doc(date).set({
+                ...planData,
+                createdBy: currentUser.uid,
+                createdAt: firebase.firestore.FieldValue.serverTimestamp()
+            }, { merge: true });
             return true;
-        } catch (error) {
-            console.error('Error saving day plan:', error);
+        } catch (e) {
+            console.error('saveDayPlan:', e);
             utils.showToast('Failed to save plan', 'error');
             return false;
         }
     },
-    
-    // Day Logs
-    async getDayLog(date) {
+
+    async deleteDayPlan(date) {
         try {
-            const doc = await db.collection('families').doc(FAMILY_ID)
-                .collection('day_logs').doc(date).get();
-            return doc.exists ? doc.data() : null;
-        } catch (error) {
-            console.error('Error getting day log:', error);
-            return null;
-        }
-    },
-    
-    async saveDayLog(date, logData) {
-        try {
-            await db.collection('families').doc(FAMILY_ID)
-                .collection('day_logs').doc(date).set({
-                    ...logData,
-                    updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-                }, { merge: true });
+            await db.collection('families').doc(FAMILY_ID).collection('day_plans').doc(date).delete();
             return true;
-        } catch (error) {
-            console.error('Error saving day log:', error);
+        } catch (e) {
+            console.error('deleteDayPlan:', e);
             return false;
         }
     },
-    
-    async clearDayLog(date) {
-        try {
-            await db.collection('families').doc(FAMILY_ID)
-                .collection('day_logs').doc(date).delete();
-            return true;
-        } catch (error) {
-            console.error('Error clearing day log:', error);
-            return false;
-        }
-    },
-    
+
     // Tasks
-    async getTasks() {
+    async addTask(title, assignedDate = null, intentionId = null) {
         try {
-            const snapshot = await db.collection('families').doc(FAMILY_ID)
-                .collection('tasks')
-                .orderBy('createdAt', 'desc')
-                .get();
-            return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-        } catch (error) {
-            console.error('Error getting tasks:', error);
-            return [];
-        }
-    },
-    
-    async addTask(title, assignedDate = null) {
-        try {
-            const docRef = await db.collection('families').doc(FAMILY_ID)
-                .collection('tasks').add({
-                    title,
-                    status: 'open',
-                    assignedDate,
-                    createdBy: currentUser.uid,
-                    createdAt: firebase.firestore.FieldValue.serverTimestamp(),
-                    completedAt: null
-                });
+            const payload = {
+                title,
+                status: 'open',
+                assignedDate,
+                intentionId,
+                createdBy: currentUser.uid,
+                createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+                completedAt: null
+            };
+            const docRef = await db.collection('families').doc(FAMILY_ID).collection('tasks').add(payload);
             return docRef.id;
-        } catch (error) {
-            console.error('Error adding task:', error);
+        } catch (e) {
+            console.error('addTask:', e);
             utils.showToast('Failed to add task', 'error');
             return null;
         }
     },
-    
+
     async updateTask(id, updates) {
         try {
-            await db.collection('families').doc(FAMILY_ID)
-                .collection('tasks').doc(id).update({
-                    ...updates,
-                    updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-                });
+            await db.collection('families').doc(FAMILY_ID).collection('tasks').doc(id).update({
+                ...updates,
+                updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+            });
             return true;
-        } catch (error) {
-            console.error('Error updating task:', error);
+        } catch (e) {
+            console.error('updateTask:', e);
             return false;
         }
     },
-    
+
     async deleteTask(id) {
         try {
-            await db.collection('families').doc(FAMILY_ID)
-                .collection('tasks').doc(id).delete();
+            await db.collection('families').doc(FAMILY_ID).collection('tasks').doc(id).delete();
             return true;
-        } catch (error) {
-            console.error('Error deleting task:', error);
+        } catch (e) {
+            console.error('deleteTask:', e);
             return false;
         }
     },
-    
-    // Meals
-    async getMeals() {
-        try {
-            const snapshot = await db.collection('families').doc(FAMILY_ID)
-                .collection('meals')
-                .orderBy('createdAt', 'desc')
-                .get();
-            return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-        } catch (error) {
-            console.error('Error getting meals:', error);
-            return [];
-        }
+
+    listenToTasks(cb) {
+        return db.collection('families').doc(FAMILY_ID).collection('tasks')
+            .orderBy('createdAt', 'desc')
+            .onSnapshot(snap => cb(snap.docs.map(d => ({ id: d.id, ...d.data() }))),
+                err => console.error('listenToTasks:', err));
     },
-    
+
+    // Meals
     async addMeal(content) {
         try {
-            const docRef = await db.collection('families').doc(FAMILY_ID)
-                .collection('meals').add({
-                    content,
-                    createdBy: currentUser.uid,
-                    createdAt: firebase.firestore.FieldValue.serverTimestamp()
-                });
+            const docRef = await db.collection('families').doc(FAMILY_ID).collection('meals').add({
+                content,
+                createdBy: currentUser.uid,
+                createdAt: firebase.firestore.FieldValue.serverTimestamp()
+            });
             return docRef.id;
-        } catch (error) {
-            console.error('Error adding meal:', error);
+        } catch (e) {
+            console.error('addMeal:', e);
             utils.showToast('Failed to add meal', 'error');
             return null;
         }
     },
-    
+
     async updateMeal(id, content) {
         try {
-            await db.collection('families').doc(FAMILY_ID)
-                .collection('meals').doc(id).update({
-                    content,
-                    updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-                });
+            await db.collection('families').doc(FAMILY_ID).collection('meals').doc(id).update({
+                content, updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+            });
             return true;
-        } catch (error) {
-            console.error('Error updating meal:', error);
-            return false;
-        }
+        } catch (e) { console.error(e); return false; }
     },
-    
+
     async deleteMeal(id) {
         try {
-            await db.collection('families').doc(FAMILY_ID)
-                .collection('meals').doc(id).delete();
+            await db.collection('families').doc(FAMILY_ID).collection('meals').doc(id).delete();
             return true;
-        } catch (error) {
-            console.error('Error deleting meal:', error);
-            return false;
-        }
+        } catch (e) { console.error(e); return false; }
     },
-    
-    listenToMeals(callback) {
-        const unsubscribe = db.collection('families').doc(FAMILY_ID)
-            .collection('meals')
+
+    listenToMeals(cb) {
+        return db.collection('families').doc(FAMILY_ID).collection('meals')
             .orderBy('createdAt', 'desc')
-            .onSnapshot(snapshot => {
-                const meals = snapshot.docs.map(doc => ({ 
-                    id: doc.id, 
-                    ...doc.data() 
-                }));
-                callback(meals);
-            }, error => {
-                console.error('Error listening to meals:', error);
-            });
-        return unsubscribe;
+            .onSnapshot(snap => cb(snap.docs.map(d => ({ id: d.id, ...d.data() }))),
+                err => console.error('listenToMeals:', err));
     },
-    
+
     // Lists
-    async getListItems(category) {
-        try {
-            const snapshot = await db.collection('families').doc(FAMILY_ID)
-                .collection('lists')
-                .where('category', '==', category)
-                .orderBy('createdAt', 'desc')
-                .get();
-            return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-        } catch (error) {
-            console.error('Error getting list items:', error);
-            return [];
-        }
-    },
-    
     async addListItem(category, content) {
         try {
-            const docRef = await db.collection('families').doc(FAMILY_ID)
-                .collection('lists').add({
-                    category,
-                    content,
-                    createdBy: currentUser.uid,
-                    createdAt: firebase.firestore.FieldValue.serverTimestamp()
-                });
+            const docRef = await db.collection('families').doc(FAMILY_ID).collection('lists').add({
+                category, content,
+                createdBy: currentUser.uid,
+                createdAt: firebase.firestore.FieldValue.serverTimestamp()
+            });
             return docRef.id;
-        } catch (error) {
-            console.error('Error adding list item:', error);
+        } catch (e) {
+            console.error('addListItem:', e);
             utils.showToast('Failed to add item', 'error');
             return null;
         }
     },
-    
+
     async updateListItem(id, content) {
         try {
-            await db.collection('families').doc(FAMILY_ID)
-                .collection('lists').doc(id).update({
-                    content,
-                    updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-                });
+            await db.collection('families').doc(FAMILY_ID).collection('lists').doc(id).update({
+                content, updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+            });
             return true;
-        } catch (error) {
-            console.error('Error updating list item:', error);
-            return false;
-        }
+        } catch (e) { console.error(e); return false; }
     },
-    
+
     async deleteListItem(id) {
         try {
-            await db.collection('families').doc(FAMILY_ID)
-                .collection('lists').doc(id).delete();
+            await db.collection('families').doc(FAMILY_ID).collection('lists').doc(id).delete();
             return true;
-        } catch (error) {
-            console.error('Error deleting list item:', error);
-            return false;
+        } catch (e) { console.error(e); return false; }
+    },
+
+    listenToLists(cb) {
+        return db.collection('families').doc(FAMILY_ID).collection('lists')
+            .orderBy('createdAt', 'desc')
+            .onSnapshot(snap => cb(snap.docs.map(d => ({ id: d.id, ...d.data() }))),
+                err => console.error('listenToLists:', err));
+    },
+
+    // Intentions
+    async addIntention(data) {
+        try {
+            const now = utils.getTodayString();
+            const payload = {
+                title: data.title,
+                category: data.category || 'other',
+                nextStep: data.nextStep || '',
+                status: 'active',
+                pausedReason: null,
+                createdAtStr: now,
+                lastProgressAtStr: now,
+                createdBy: currentUser.uid,
+                createdAt: firebase.firestore.FieldValue.serverTimestamp()
+            };
+            const docRef = await db.collection('families').doc(FAMILY_ID).collection('intentions').add(payload);
+            return docRef.id;
+        } catch (e) {
+            console.error('addIntention:', e);
+            utils.showToast('Failed to add intention', 'error');
+            return null;
         }
     },
-    
-    listenToLists(callback) {
-        const unsubscribe = db.collection('families').doc(FAMILY_ID)
-            .collection('lists')
-            .orderBy('createdAt', 'desc')
-            .onSnapshot(snapshot => {
-                const items = snapshot.docs.map(doc => ({ 
-                    id: doc.id, 
-                    ...doc.data() 
-                }));
-                callback(items);
-            }, error => {
-                console.error('Error listening to lists:', error);
-            });
-        return unsubscribe;
-    },
-    
-    // History
-    async getRecentLogs(limit = 30) {
+
+    async updateIntention(id, updates) {
         try {
-            const snapshot = await db.collection('families').doc(FAMILY_ID)
-                .collection('day_logs')
-                .orderBy('date', 'desc')
-                .limit(limit)
-                .get();
-            return snapshot.docs.map(doc => ({ 
-                date: doc.id, 
-                ...doc.data() 
-            }));
-        } catch (error) {
-            console.error('Error getting recent logs:', error);
+            await db.collection('families').doc(FAMILY_ID).collection('intentions').doc(id).update({
+                ...updates,
+                updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+            });
+            return true;
+        } catch (e) { console.error(e); return false; }
+    },
+
+    async deleteIntention(id) {
+        try {
+            await db.collection('families').doc(FAMILY_ID).collection('intentions').doc(id).delete();
+            return true;
+        } catch (e) { console.error(e); return false; }
+    },
+
+    listenToIntentions(cb) {
+        return db.collection('families').doc(FAMILY_ID).collection('intentions')
+            .orderBy('createdAt', 'desc')
+            .onSnapshot(snap => cb(snap.docs.map(d => ({ id: d.id, ...d.data() }))),
+                err => console.error('listenToIntentions:', err));
+    },
+
+    // History (past plans)
+    async getRecentPlans(limit = 30) {
+        try {
+            const snap = await db.collection('families').doc(FAMILY_ID).collection('day_plans')
+                .orderBy(firebase.firestore.FieldPath.documentId(), 'desc')
+                .limit(limit).get();
+            return snap.docs.map(d => ({ date: d.id, ...d.data() }));
+        } catch (e) {
+            console.error('getRecentPlans:', e);
             return [];
         }
-    },
-    
-    // Real-time listeners
-    listenToTasks(callback) {
-        const unsubscribe = db.collection('families').doc(FAMILY_ID)
-            .collection('tasks')
-            .orderBy('createdAt', 'desc')
-            .onSnapshot(snapshot => {
-                const tasks = snapshot.docs.map(doc => ({ 
-                    id: doc.id, 
-                    ...doc.data() 
-                }));
-                callback(tasks);
-            }, error => {
-                console.error('Error listening to tasks:', error);
-            });
-        return unsubscribe;
-    },
-    
-    listenToDayLog(date, callback) {
-        const unsubscribe = db.collection('families').doc(FAMILY_ID)
-            .collection('day_logs').doc(date)
-            .onSnapshot(doc => {
-                callback(doc.exists ? doc.data() : null);
-            }, error => {
-                console.error('Error listening to day log:', error);
-            });
-        return unsubscribe;
     }
 };
 
-// Schedule Generation
-const scheduler = {
-    generateSchedule(plan, actualWake, nap1Data, nap2Data) {
-        if (!plan) return [];
-        
+// ============================================================================
+// Coach — rules-based flagging (dry, factual, brisk)
+// ============================================================================
+const coach = {
+    // Each function returns an array of {level: 'warn'|'info', text: string}
+
+    workConflicts(workBlocks) {
+        const flags = [];
+        const k = workBlocks.kristyn || [];
+        const j = workBlocks.julio || [];
+        for (const kb of k) {
+            for (const jb of j) {
+                if (kb.start && kb.end && jb.start && jb.end &&
+                    utils.rangesOverlap(kb.start, kb.end, jb.start, jb.end)) {
+                    flags.push({
+                        level: 'warn',
+                        text: `Both in work mode ${utils.formatTime(kb.start)}–${utils.formatTime(kb.end)} overlaps ${utils.formatTime(jb.start)}–${utils.formatTime(jb.end)}. Who's got Kayden?`
+                    });
+                }
+            }
+        }
+        return flags;
+    },
+
+    coverageGaps(coverage, appointments) {
+        const flags = [];
+        // Build union of covered ranges (any person)
         const blocks = [];
-        let currentTime = actualWake || plan.wakeTarget || '07:00';
-        
-        const addMinutes = (time, minutes) => {
-            const [h, m] = time.split(':').map(Number);
-            const date = new Date();
-            date.setHours(h, m + minutes);
-            return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
-        };
-        
-        const parseDuration = (duration) => {
-            const match = duration.match(/(\d+\.?\d*)\s*(hr|min)/);
-            if (!match) return 0;
-            const value = parseFloat(match[1]);
-            return match[2] === 'hr' ? value * 60 : value;
-        };
-        
-        // Wake block
-        blocks.push({
-            start: currentTime,
-            end: addMinutes(currentTime, 30),
-            title: 'Wake & Morning Routine',
-            type: 'routine',
-            caregiver: 'Available'
-        });
-        
-        currentTime = addMinutes(currentTime, 30);
-        
-        // Get constraints
-        const constraints = state.settings?.constraints || this.getDefaultConstraints();
-        const wakeWindow1 = parseDuration(constraints.find(c => c.name === 'Wake Window Before Nap 1')?.value || '2.5 hrs');
-        const napDuration1 = parseDuration(constraints.find(c => c.name === 'Nap 1 Duration')?.value || '90 min');
-        const wakeWindow2 = parseDuration(constraints.find(c => c.name === 'Wake Window Between Naps')?.value || '3 hrs');
-        const napDuration2 = parseDuration(constraints.find(c => c.name === 'Nap 2 Duration')?.value || '90 min');
-        
-        // Handle Nap 1
-        if (nap1Data.enabled) {
-            const nap1Start = nap1Data.start || addMinutes(currentTime, wakeWindow1 - 30);
-            const nap1End = nap1Data.end || addMinutes(nap1Start, napDuration1);
-            
-            if (currentTime < nap1Start) {
-                blocks.push({
-                    start: currentTime,
-                    end: nap1Start,
-                    title: 'Open Time',
-                    type: 'open',
-                    caregiver: 'Anyone'
+        for (const p of COVERAGE_PEOPLE) {
+            for (const b of (coverage[p] || [])) {
+                if (b.start && b.end) {
+                    blocks.push({ start: utils.toMinutes(b.start), end: utils.toMinutes(b.end) });
+                }
+            }
+        }
+        if (blocks.length === 0) {
+            flags.push({ level: 'warn', text: 'No coverage blocks set yet.' });
+            return flags;
+        }
+        // Sort + merge
+        blocks.sort((a, b) => a.start - b.start);
+        const merged = [blocks[0]];
+        for (let i = 1; i < blocks.length; i++) {
+            const last = merged[merged.length - 1];
+            if (blocks[i].start <= last.end) {
+                last.end = Math.max(last.end, blocks[i].end);
+            } else {
+                merged.push(blocks[i]);
+            }
+        }
+        // Find gaps within the overall covered window
+        const dayStart = merged[0].start;
+        const dayEnd = merged[merged.length - 1].end;
+        for (let i = 1; i < merged.length; i++) {
+            const gapStart = merged[i - 1].end;
+            const gapEnd = merged[i].start;
+            if (gapEnd - gapStart >= 15) {
+                flags.push({
+                    level: 'warn',
+                    text: `Uncovered: ${coach._fmtMins(gapStart)}–${coach._fmtMins(gapEnd)}. Who's got it?`
                 });
             }
-            
-            const nap1Caregiver = plan.caregiverAvailability?.nap1?.filter(c => c !== 'Kayden')[0] || 'Available';
-            blocks.push({
-                start: nap1Start,
-                end: nap1End,
-                title: 'Nap 1',
-                type: 'nap',
-                caregiver: nap1Caregiver
-            });
-            
-            currentTime = nap1End;
         }
-        
-        // Insert appointments
-        if (plan.appointments && plan.appointments.length > 0) {
-            plan.appointments.forEach(apt => {
-                if (apt.start && apt.title) {
-                    const aptEnd = apt.end || addMinutes(apt.start, 60);
-                    
-                    if (currentTime < apt.start) {
-                        blocks.push({
-                            start: currentTime,
-                            end: apt.start,
-                            title: 'Open Time',
-                            type: 'open',
-                            caregiver: 'Anyone'
+        // Appointments with no coverage
+        for (const apt of (appointments || [])) {
+            if (!apt.title || !apt.startTime) continue;
+            const aStart = utils.toMinutes(apt.startTime);
+            const aEnd = apt.endTime ? utils.toMinutes(apt.endTime) : aStart + 30;
+            const covered = merged.some(b => b.start <= aStart && b.end >= aEnd);
+            if (!covered) {
+                flags.push({
+                    level: 'warn',
+                    text: `Appointment "${apt.title}" at ${utils.formatTime(apt.startTime)} isn't inside a coverage block.`
+                });
+            }
+        }
+        return flags;
+    },
+
+    appointmentConflicts(appointments, workBlocks) {
+        const flags = [];
+        for (const apt of (appointments || [])) {
+            if (!apt.title || !apt.startTime) continue;
+            const aEnd = apt.endTime || apt.startTime;
+            for (const person of WORK_PEOPLE) {
+                for (const wb of (workBlocks[person] || [])) {
+                    if (wb.start && wb.end && utils.rangesOverlap(apt.startTime, aEnd, wb.start, wb.end)) {
+                        flags.push({
+                            level: 'warn',
+                            text: `"${apt.title}" at ${utils.formatTime(apt.startTime)} hits ${PERSON_LABEL[person]}'s work block.`
                         });
                     }
-                    
-                    blocks.push({
-                        start: apt.start,
-                        end: aptEnd,
-                        title: apt.title,
-                        type: 'appointment',
-                        caregiver: apt.caregiver || 'Family'
-                    });
-                    
-                    currentTime = aptEnd;
                 }
-            });
-        }
-        
-        // Handle Nap 2
-        if (nap2Data.enabled) {
-            const nap2Start = nap2Data.start || addMinutes(currentTime, wakeWindow2);
-            const nap2End = nap2Data.end || addMinutes(nap2Start, napDuration2);
-            
-            if (currentTime < nap2Start) {
-                blocks.push({
-                    start: currentTime,
-                    end: nap2Start,
-                    title: 'Open Time',
-                    type: 'open',
-                    caregiver: 'Anyone'
-                });
-            }
-            
-            const nap2Caregiver = plan.caregiverAvailability?.nap2?.filter(c => c !== 'Kayden')[0] || 'Available';
-            blocks.push({
-                start: nap2Start,
-                end: nap2End,
-                title: 'Nap 2',
-                type: 'nap',
-                caregiver: nap2Caregiver
-            });
-            
-            currentTime = nap2End;
-        }
-        
-        // Evening routine
-        const bedtime = constraints.find(c => c.name === 'Bedtime Target')?.value || '19:00';
-        const bedtimeHour = bedtime.match(/(\d+)/)?.[1] || '19';
-        const bedtimeTime = `${bedtimeHour.padStart(2, '0')}:00`;
-        
-        if (currentTime < bedtimeTime) {
-            blocks.push({
-                start: currentTime,
-                end: addMinutes(bedtimeTime, -30),
-                title: 'Open Time',
-                type: 'open',
-                caregiver: 'Anyone'
-            });
-            
-            blocks.push({
-                start: addMinutes(bedtimeTime, -30),
-                end: bedtimeTime,
-                title: 'Bedtime Routine',
-                type: 'routine',
-                caregiver: 'Available'
-            });
-        }
-        
-        blocks.sort((a, b) => a.start.localeCompare(b.start));
-        return blocks;
-    },
-    
-    getDefaultConstraints() {
-        return [
-            { name: 'Nap 1 Duration', value: '90 min' },
-            { name: 'Nap 2 Duration', value: '90 min' },
-            { name: 'Wake Window Before Nap 1', value: '2.5 hrs' },
-            { name: 'Wake Window Between Naps', value: '3 hrs' },
-            { name: 'Bedtime Target', value: '7:00 PM' }
-        ];
-    },
-    
-    adjustScheduleForActualWake(plan, actualWake, napData = {}) {
-        // Use the same detailed routine logic as wizard, but with actual data
-        const blocks = [];
-        let currentTime = actualWake;
-        
-        const addMinutes = (time, minutes) => {
-            const [h, m] = time.split(':').map(Number);
-            const date = new Date();
-            date.setHours(h, m + minutes);
-            return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
-        };
-        
-        const minutesBetween = (start, end) => {
-            const [h1, m1] = start.split(':').map(Number);
-            const [h2, m2] = end.split(':').map(Number);
-            return (h2 * 60 + m2) - (h1 * 60 + m1);
-        };
-        
-        const addRoutineBlock = (title, duration, type = 'routine') => {
-            blocks.push({
-                start: currentTime,
-                end: addMinutes(currentTime, duration),
-                title,
-                type,
-                caregiver: 'Available'
-            });
-            currentTime = addMinutes(currentTime, duration);
-        };
-        
-        const addBuffer = () => {
-            currentTime = addMinutes(currentTime, 5); // 5 minute buffer between tasks
-        };
-        
-        // Fixed durations (in minutes) - updated wake windows
-        const WAKE_WINDOW_1 = 3 * 60;    // 180 min (3 hours max)
-        const WAKE_WINDOW_2 = 3.5 * 60;  // 210 min (3.5 hours max)
-        const WAKE_WINDOW_3 = 4 * 60;    // 240 min (4 hours max)
-        
-        // Get actual nap durations if logged, otherwise use 1 hour
-        const nap1Duration = napData?.nap1?.start && napData?.nap1?.end ? 
-            minutesBetween(napData.nap1.start, napData.nap1.end) : 60;
-        const nap2Duration = napData?.nap2?.start && napData?.nap2?.end ?
-            minutesBetween(napData.nap2.start, napData.nap2.end) : 60;
-        
-        // Find original caregivers from plan
-        const originalNap1 = plan.calculatedSchedule?.find(b => b.title === 'Nap 1');
-        const nap1Caregiver = originalNap1?.caregiver || 'Available';
-        const originalNap2 = plan.calculatedSchedule?.find(b => b.title === 'Nap 2');
-        const nap2Caregiver = originalNap2?.caregiver || 'Available';
-        
-        // ========== WAKE WINDOW 1 (3 hours) ==========
-        const ww1Start = currentTime;
-        const ww1End = addMinutes(ww1Start, WAKE_WINDOW_1);
-        
-        // Fixed morning routine with buffers
-        addRoutineBlock('Wake Up Time', 10);
-        addBuffer();
-        addRoutineBlock('Family Cuddle', 10);
-        addBuffer();
-        addRoutineBlock('Get Dressed', 10);
-        addBuffer();
-        addRoutineBlock('Breakfast Prep', 10);
-        addBuffer();
-        addRoutineBlock('Breakfast', 20, 'meal');
-        addBuffer();
-        addRoutineBlock('Brush Teeth', 5);
-        addBuffer();
-        
-        // Nap routine starts 10min before WW1 ends (or at actual logged time)
-        const napRoutine1Start = napData?.nap1?.start ? 
-            addMinutes(napData.nap1.start, -10) : 
-            addMinutes(ww1End, -10);
-        
-        // Fill with open time until nap routine
-        const openTime1Duration = minutesBetween(currentTime, napRoutine1Start);
-        if (openTime1Duration > 0) {
-            blocks.push({
-                start: currentTime,
-                end: napRoutine1Start,
-                title: 'Open Time',
-                type: 'open',
-                caregiver: 'Anyone'
-            });
-            currentTime = napRoutine1Start;
-        }
-        
-        // Nap Time Routine (right before nap)
-        addRoutineBlock('Nap Time Routine', 10);
-        
-        // Nap 1 - use actual times if logged
-        const nap1Start = napData?.nap1?.start || currentTime;
-        const nap1End = napData?.nap1?.end || addMinutes(nap1Start, 60);
-        blocks.push({
-            start: nap1Start,
-            end: nap1End,
-            title: 'Nap 1',
-            type: 'nap',
-            caregiver: nap1Caregiver
-        });
-        currentTime = nap1End;
-        
-        // ========== WAKE WINDOW 2 (3.5 hours) ==========
-        const ww2Start = currentTime;
-        const ww2End = addMinutes(ww2Start, WAKE_WINDOW_2);
-        
-        addRoutineBlock('Wake Up Time', 10);
-        addBuffer();
-        
-        // Snack needs to start 20min before WW2 ends (or before actual nap 2)
-        const snack2Start = napData?.nap2?.start ?
-            addMinutes(napData.nap2.start, -20) :
-            addMinutes(ww2End, -20);
-        
-        // Lunch starts 45 min after nap 1 ends (which is ww2Start)
-        // Lunch Prep is 10 min before lunch, so Lunch Prep starts at 45 - 10 = 35 min after nap end
-        const lunchStart = addMinutes(ww2Start, 45);
-        const lunchPrepStart = addMinutes(ww2Start, 35);
-        
-        // Open time before lunch prep (after Wake Up Time + buffer)
-        const openTime2aDuration = minutesBetween(currentTime, lunchPrepStart);
-        if (openTime2aDuration > 0) {
-            blocks.push({
-                start: currentTime,
-                end: lunchPrepStart,
-                title: 'Open Time',
-                type: 'open',
-                caregiver: 'Anyone'
-            });
-            currentTime = lunchPrepStart;
-        }
-        
-        addRoutineBlock('Lunch Prep', 10);
-        addBuffer();
-        addRoutineBlock('Lunch', 20, 'meal');
-        addBuffer();
-        
-        // Open time after lunch until snack
-        const openTime2bDuration = minutesBetween(currentTime, snack2Start);
-        if (openTime2bDuration > 0) {
-            blocks.push({
-                start: currentTime,
-                end: snack2Start,
-                title: 'Open Time',
-                type: 'open',
-                caregiver: 'Anyone'
-            });
-            currentTime = snack2Start;
-        }
-        
-        // Snack + Milk (right before nap routine)
-        addRoutineBlock('Snack + Milk', 10, 'meal');
-        addBuffer();
-        
-        // Nap Time Routine (right before nap)
-        addRoutineBlock('Nap Time Routine', 10);
-        addBuffer();
-        
-        // Nap 2 - use actual times if logged
-        const nap2Start = napData?.nap2?.start || currentTime;
-        const nap2End = napData?.nap2?.end || addMinutes(nap2Start, 60);
-        blocks.push({
-            start: nap2Start,
-            end: nap2End,
-            title: 'Nap 2',
-            type: 'nap',
-            caregiver: nap2Caregiver
-        });
-        currentTime = nap2End;
-        
-        // ========== WAKE WINDOW 3 (4 hours) ==========
-        const ww3Start = currentTime;
-        const ww3End = addMinutes(ww3Start, WAKE_WINDOW_3);
-        const bedtime = ww3End; // Calculated bedtime
-        
-        addRoutineBlock('Wake Up Time', 10);
-        addBuffer();
-        addRoutineBlock('Snack + Milk', 10, 'meal');
-        addBuffer();
-        
-        // Fixed 40min open time
-        addRoutineBlock('Open Time', 40, 'open');
-        addBuffer();
-        
-        addRoutineBlock('Dinner Prep', 10);
-        addBuffer();
-        addRoutineBlock('Dinner', 20, 'meal');
-        addBuffer();
-        
-        // Get bath info from plan
-        const includeBath = plan.includeBath || false;
-        
-        // Calculate when bedtime routine needs to start
-        const bedtimeRoutineStart = includeBath ? 
-            addMinutes(bedtime, -40) : 
-            addMinutes(bedtime, -20);
-        
-        // Flexible open time fills remaining space
-        const openTime3Duration = minutesBetween(currentTime, bedtimeRoutineStart);
-        if (openTime3Duration > 0) {
-            blocks.push({
-                start: currentTime,
-                end: bedtimeRoutineStart,
-                title: 'Open Time',
-                type: 'open',
-                caregiver: 'Anyone'
-            });
-            currentTime = bedtimeRoutineStart;
-        }
-        
-        // Bath (if scheduled in plan)
-        if (includeBath) {
-            const originalBath = plan.calculatedSchedule?.find(b => b.type === 'bath');
-            blocks.push({
-                start: currentTime,
-                end: addMinutes(currentTime, 20),
-                title: 'Bath Time',
-                type: 'bath',
-                caregiver: originalBath?.caregiver || 'Both Parents'
-            });
-            currentTime = addMinutes(currentTime, 20);
-            addBuffer();
-        }
-        
-        // Brush Teeth (right before bedtime routine)
-        addRoutineBlock('Brush Teeth', 5);
-        addBuffer();
-        
-        // Bedtime Routine (right before bedtime)
-        addRoutineBlock('Bedtime Routine', 15);
-        
-        // ========== INSERT APPOINTMENTS ==========
-        const appointments = plan.appointments || [];
-        const sortedAppointments = appointments
-            .filter(apt => apt.start && apt.title)
-            .sort((a, b) => a.start.localeCompare(b.start));
-        
-        for (const apt of sortedAppointments) {
-            const aptStart = apt.start;
-            const aptEnd = apt.end || addMinutes(aptStart, 60);
-            
-            // Find which open time block contains this appointment
-            let insertIndex = blocks.findIndex(b => 
-                b.type === 'open' && 
-                aptStart >= b.start && 
-                aptStart < b.end
-            );
-            
-            if (insertIndex !== -1) {
-                const openBlock = blocks[insertIndex];
-                const newBlocks = [];
-                
-                // Open time before appointment
-                if (openBlock.start < aptStart) {
-                    newBlocks.push({
-                        start: openBlock.start,
-                        end: aptStart,
-                        title: 'Open Time',
-                        type: 'open',
-                        caregiver: 'Anyone'
-                    });
-                }
-                
-                // Appointment
-                newBlocks.push({
-                    start: aptStart,
-                    end: aptEnd,
-                    title: apt.title,
-                    type: 'appointment',
-                    caregiver: 'Family'
-                });
-                
-                // Open time after appointment
-                if (aptEnd < openBlock.end) {
-                    newBlocks.push({
-                        start: aptEnd,
-                        end: openBlock.end,
-                        title: 'Open Time',
-                        type: 'open',
-                        caregiver: 'Anyone'
-                    });
-                }
-                
-                blocks.splice(insertIndex, 1, ...newBlocks);
             }
         }
-        
-        // Sort all blocks by start time
-        blocks.sort((a, b) => a.start.localeCompare(b.start));
-        
-        return blocks;
+        return flags;
+    },
+
+    // Task review: stale rollovers
+    staleTaskFlags(taskAges) {
+        // taskAges: array of {title, daysOld}
+        const stale = taskAges.filter(t => t.daysOld >= 3);
+        if (stale.length === 0) return [];
+        return stale.map(t => ({
+            level: 'info',
+            text: `"${t.title}" has been on the list ${t.daysOld} days. Still worth doing?`
+        }));
+    },
+
+    tooManyFocusTasks(selected) {
+        if (selected.length > 3) {
+            return [{
+                level: 'warn',
+                text: `You picked ${selected.length}. 3 is the ceiling — typically 1-2 of them slip when you pick more.`
+            }];
+        }
+        return [];
+    },
+
+    // Stale intentions: no progress in 14+ days
+    staleIntentions(intentions) {
+        const active = (intentions || []).filter(i => i.status === 'active');
+        const stale = active.filter(i => {
+            const days = utils.daysSince(i.lastProgressAtStr);
+            return days !== null && days >= 14;
+        });
+        return stale;
+    },
+
+    _fmtMins(mins) {
+        const h = Math.floor(mins / 60);
+        const m = mins % 60;
+        const pad = n => String(n).padStart(2, '0');
+        return utils.formatTime(`${pad(h)}:${pad(m)}`);
     }
 };
 
-// Continue to Part 2...
-
-// Google Calendar Integration
+// ============================================================================
+// Google Calendar (unchanged except export builds from new plan shape)
+// ============================================================================
 const googleCalendar = {
     async requestAccess() {
         try {
-            // Use Firebase Functions to handle OAuth
             const requestAccess = functions.httpsCallable('requestCalendarAccess');
             const result = await requestAccess({ familyId: FAMILY_ID });
-            
-            if (result.data.authUrl) {
-                window.location.href = result.data.authUrl;
-            }
-        } catch (error) {
-            console.error('Error requesting calendar access:', error);
+            if (result.data.authUrl) window.location.href = result.data.authUrl;
+        } catch (e) {
+            console.error('requestAccess:', e);
             utils.showToast('Failed to connect Google Calendar', 'error');
         }
     },
-    
+
     async disconnect() {
         try {
             const disconnect = functions.httpsCallable('disconnectCalendar');
             await disconnect({ familyId: FAMILY_ID });
-            
             state.settings.googleCalendar = null;
             await db_ops.saveSettings(state.settings);
-            
             renderSettings();
             utils.showToast('Google Calendar disconnected', 'success');
-        } catch (error) {
-            console.error('Error disconnecting:', error);
+        } catch (e) {
+            console.error('disconnect:', e);
             utils.showToast('Failed to disconnect', 'error');
         }
     },
-    
-    async exportDay(date, blocks) {
+
+    async exportPlan(date, plan) {
         try {
             if (!state.settings?.googleCalendar?.connected) {
                 utils.showToast('Please connect Google Calendar first', 'warning');
                 return;
             }
-            
-            const exportBlocks = blocks.filter(b => b.type !== 'open');
-            const events = exportBlocks.map(block => ({
-                summary: `Family Planner — ${block.title}`,
-                description: block.caregiver ? `Caregiver: ${block.caregiver}` : '',
-                start: { dateTime: `${date}T${block.start}:00` },
-                end: { dateTime: `${date}T${block.end}:00` }
-            }));
-            
-            const exportEvents = functions.httpsCallable('exportToCalendar');
-            const result = await exportEvents({
-                familyId: FAMILY_ID,
-                date,
-                events
-            });
-            
-            if (result.data.success) {
-                const log = await db_ops.getDayLog(date);
-                const logData = log || {};
-                logData.exportedEvents = result.data.eventIds;
-                await db_ops.saveDayLog(date, logData);
-                
-                utils.showToast('Exported to Google Calendar', 'success');
+            const events = [];
+            // Work blocks
+            for (const person of WORK_PEOPLE) {
+                for (const b of (plan.workBlocks?.[person] || [])) {
+                    if (b.start && b.end) {
+                        events.push({
+                            summary: `${PERSON_LABEL[person]} — work${b.label ? ': ' + b.label : ''}`,
+                            description: b.label || '',
+                            start: { dateTime: `${date}T${b.start}:00` },
+                            end: { dateTime: `${date}T${b.end}:00` }
+                        });
+                    }
+                }
             }
-        } catch (error) {
-            console.error('Error exporting to calendar:', error);
+            // Coverage
+            for (const person of COVERAGE_PEOPLE) {
+                for (const b of (plan.coverage?.[person] || [])) {
+                    if (b.start && b.end) {
+                        events.push({
+                            summary: `${PERSON_LABEL[person]} covers Kayden${b.label ? ' — ' + b.label : ''}`,
+                            description: b.label || '',
+                            start: { dateTime: `${date}T${b.start}:00` },
+                            end: { dateTime: `${date}T${b.end}:00` }
+                        });
+                    }
+                }
+            }
+            // Appointments
+            for (const apt of (plan.appointments || [])) {
+                if (apt.title && apt.startTime) {
+                    events.push({
+                        summary: apt.title,
+                        description: apt.notes || '',
+                        start: { dateTime: `${date}T${apt.startTime}:00` },
+                        end: { dateTime: `${date}T${apt.endTime || apt.startTime}:00` }
+                    });
+                }
+            }
+
+            const exportEvents = functions.httpsCallable('exportToCalendar');
+            const result = await exportEvents({ familyId: FAMILY_ID, date, events });
+            if (result.data.success) utils.showToast('Exported to Google Calendar', 'success');
+        } catch (e) {
+            console.error('exportPlan:', e);
             utils.showToast('Failed to export to calendar', 'error');
         }
     }
 };
 
-// UI Rendering
+// ============================================================================
+// UI — rendering
+// ============================================================================
 const ui = {
-    renderSchedule(blocks) {
-        const container = document.getElementById('todaySchedule');
-        
-        if (!blocks || blocks.length === 0) {
-            container.innerHTML = `
-                <div class="empty-state">
-                    <div class="empty-state-icon">📅</div>
-                    <div class="empty-state-text">Set actual wake time to generate schedule</div>
-                </div>
-            `;
-            return;
-        }
-        
-        container.innerHTML = blocks.map(block => `
-            <div class="schedule-block block-type-${block.type}">
-                <div class="block-time">
-                    ${utils.formatTime(block.start)}<br>
-                    ${utils.formatTime(block.end)}
-                </div>
-                <div class="block-content">
-                    <div class="block-title">${block.title}</div>
-                    <div class="block-caregiver">${block.caregiver}</div>
-                </div>
-            </div>
-        `).join('');
-    },
-    
     renderTasks(tasks) {
         const todayStr = utils.getTodayString();
         const todayTasks = tasks.filter(t => t.status === 'open' && t.assignedDate === todayStr);
-        const brainDumpTasks = tasks.filter(t => t.status === 'open' && !t.assignedDate);
-        const completedTasks = tasks.filter(t => t.status === 'done');
-        
-        const renderTaskList = (taskList, containerId) => {
-            const container = document.getElementById(containerId);
-            
-            if (taskList.length === 0) {
-                container.innerHTML = `<div class="empty-state-text">No tasks</div>`;
+        const brainDump = tasks.filter(t => t.status === 'open' && !t.assignedDate);
+        const done = tasks.filter(t => t.status === 'done');
+
+        const renderList = (list, containerId) => {
+            const el = document.getElementById(containerId);
+            if (!el) return;
+            if (list.length === 0) {
+                el.innerHTML = `<div class="empty-state-text">No tasks</div>`;
                 return;
             }
-            
-            container.innerHTML = taskList.map(task => `
+            el.innerHTML = list.map(task => {
+                const intention = task.intentionId ? state.intentions.find(i => i.id === task.intentionId) : null;
+                return `
                 <div class="task-item ${task.status === 'done' ? 'completed' : ''}">
-                    <input type="checkbox" class="task-checkbox" 
-                           data-id="${task.id}" 
-                           ${task.status === 'done' ? 'checked' : ''}>
-                    <span class="task-text">${task.title}</span>
+                    <input type="checkbox" class="task-checkbox"
+                           data-id="${task.id}" ${task.status === 'done' ? 'checked' : ''}>
+                    <div class="task-text-wrap">
+                        <span class="task-text">${utils.escapeHtml(task.title)}</span>
+                        ${intention ? `<span class="intention-tag" title="Long-game: ${utils.escapeHtml(intention.title)}">long-game</span>` : ''}
+                    </div>
                     <button class="task-delete" data-id="${task.id}">×</button>
-                </div>
-            `).join('');
+                </div>`;
+            }).join('');
         };
-        
-        renderTaskList(todayTasks, 'todayTasks');
-        renderTaskList(brainDumpTasks, 'brainDumpTasks');
-        renderTaskList(completedTasks, 'completedTasks');
+
+        renderList(todayTasks, 'todayTasks');
+        renderList(brainDump, 'brainDumpTasks');
+        renderList(done, 'completedTasks');
     },
-    
-    async renderHistory() {
-        const logs = await db_ops.getRecentLogs(30);
-        const container = document.getElementById('historyList');
-        
-        if (logs.length === 0) {
-            container.innerHTML = `
-                <div class="empty-state">
-                    <div class="empty-state-icon">📖</div>
-                    <div class="empty-state-text">No history yet</div>
-                </div>
-            `;
-            return;
-        }
-        
-        // Also fetch plans for each date to show full schedule
-        const logsWithPlans = await Promise.all(logs.map(async (log) => {
-            const plan = await db_ops.getDayPlan(log.date);
-            return { ...log, plan };
-        }));
-        
-        container.innerHTML = logsWithPlans.map(log => {
-            const hasNaps = log.naps && (log.naps.nap1 || log.naps.nap2);
-            const hasSchedule = log.plan?.calculatedSchedule?.length > 0;
-            
-            let detailsHtml = '<div class="history-details">';
-            
-            // Wake time
-            if (log.actualWake) {
-                detailsHtml += `<div class="history-detail-row"><strong>Wake Time:</strong> ${utils.formatTime(log.actualWake)}</div>`;
-            }
-            
-            // Naps
-            if (hasNaps) {
-                if (log.naps.nap1?.start) {
-                    detailsHtml += `<div class="history-detail-row"><strong>Nap 1:</strong> ${utils.formatTime(log.naps.nap1.start)}${log.naps.nap1.end ? ' - ' + utils.formatTime(log.naps.nap1.end) : ' (in progress)'}</div>`;
-                }
-                if (log.naps.nap2?.start) {
-                    detailsHtml += `<div class="history-detail-row"><strong>Nap 2:</strong> ${utils.formatTime(log.naps.nap2.start)}${log.naps.nap2.end ? ' - ' + utils.formatTime(log.naps.nap2.end) : ' (in progress)'}</div>`;
-                }
-            }
-            
-            // Full schedule
-            if (hasSchedule) {
-                detailsHtml += `<div class="history-schedule-title">Schedule</div>`;
-                detailsHtml += `<div class="history-schedule">`;
-                log.plan.calculatedSchedule
-                    .sort((a, b) => a.start.localeCompare(b.start))
-                    .forEach(block => {
-                        detailsHtml += `
-                            <div class="history-block history-block-${block.type}">
-                                <span class="history-block-time">${utils.formatTime(block.start)}</span>
-                                <span class="history-block-title">${block.title}</span>
-                            </div>
-                        `;
-                    });
-                detailsHtml += `</div>`;
-            }
-            
-            if (!log.actualWake && !hasNaps && !hasSchedule) {
-                detailsHtml += `<div class="history-detail-row">No details recorded</div>`;
-            }
-            
-            detailsHtml += '</div>';
-            
-            return `
-                <div class="history-item" data-date="${log.date}">
-                    <div class="history-header">
-                        <div class="history-date">${utils.formatDate(log.date)}</div>
-                        <div class="history-summary">
-                            ${log.actualWake ? `Wake: ${utils.formatTime(log.actualWake)}` : 'No data'}
-                        </div>
-                        <svg class="history-chevron" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <polyline points="6 9 12 15 18 9"/>
-                        </svg>
-                    </div>
-                    ${detailsHtml}
-                </div>
-            `;
-        }).join('');
-    },
-    
-    renderLists(items) {
-        const categories = ['groceries', 'shopping', 'notes', 'links'];
-        
-        categories.forEach(category => {
-            const container = document.getElementById(`${category}List`);
-            const categoryItems = items.filter(item => item.category === category);
-            
-            if (categoryItems.length === 0) {
-                container.innerHTML = `<div class="empty-state-text">No items yet</div>`;
-                return;
-            }
-            
-            container.innerHTML = categoryItems.map(item => `
-                <div class="list-item-card" data-id="${item.id}">
-                    <div class="list-item-content" id="list-content-${item.id}">${this.linkifyText(item.content)}</div>
-                    <div class="list-item-actions">
-                        <button class="list-edit-btn" data-id="${item.id}" data-category="${category}">
-                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
-                                <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
-                            </svg>
-                        </button>
-                        <button class="list-delete-btn" data-id="${item.id}">
-                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <polyline points="3 6 5 6 21 6"/>
-                                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
-                            </svg>
-                        </button>
-                    </div>
-                    <div class="list-edit-form" id="list-edit-${item.id}" style="display: none;">
-                        <textarea class="list-textarea" rows="2">${item.content}</textarea>
-                        <div class="list-input-actions">
-                            <button class="secondary-btn list-cancel-edit-btn" data-id="${item.id}">Cancel</button>
-                            <button class="primary-btn list-save-edit-btn" data-id="${item.id}">Save</button>
-                        </div>
-                    </div>
-                </div>
-            `).join('');
-        });
-    },
-    
-    linkifyText(text) {
-        // Convert URLs to clickable links
-        const urlRegex = /(https?:\/\/[^\s<]+)/g;
-        const escaped = text.replace(/</g, '&lt;').replace(/>/g, '&gt;');
-        return escaped.replace(urlRegex, '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>');
-    },
-    
+
     renderMeals(meals) {
         const container = document.getElementById('mealsList');
-        
+        if (!container) return;
         if (meals.length === 0) {
             container.innerHTML = `
                 <div class="empty-state">
                     <div class="empty-state-icon">🍽️</div>
                     <div class="empty-state-text">No meals planned yet</div>
-                </div>
-            `;
+                </div>`;
             return;
         }
-        
         container.innerHTML = meals.map(meal => `
             <div class="meal-card" data-id="${meal.id}">
-                <div class="meal-content" id="meal-content-${meal.id}">${meal.content}</div>
+                <div class="meal-content" id="meal-content-${meal.id}">${utils.escapeHtml(meal.content)}</div>
                 <div class="meal-actions">
-                    <button class="meal-edit-btn" data-id="${meal.id}">
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
-                            <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
-                        </svg>
-                    </button>
-                    <button class="meal-delete-btn" data-id="${meal.id}">
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <polyline points="3 6 5 6 21 6"/>
-                            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
-                        </svg>
-                    </button>
+                    <button class="meal-edit-btn" data-id="${meal.id}">✎</button>
+                    <button class="meal-delete-btn" data-id="${meal.id}">×</button>
                 </div>
                 <div class="meal-edit-form" id="meal-edit-${meal.id}" style="display: none;">
-                    <textarea class="meal-textarea" rows="3">${meal.content}</textarea>
+                    <textarea class="meal-textarea" rows="3">${utils.escapeHtml(meal.content)}</textarea>
                     <div class="meal-edit-actions">
                         <button class="secondary-btn meal-cancel-btn" data-id="${meal.id}">Cancel</button>
                         <button class="primary-btn meal-save-btn" data-id="${meal.id}">Save</button>
                     </div>
                 </div>
-            </div>
-        `).join('');
+            </div>`).join('');
+    },
+
+    renderLists(items) {
+        const categories = ['groceries', 'shopping', 'notes', 'links'];
+        categories.forEach(category => {
+            const container = document.getElementById(`${category}List`);
+            if (!container) return;
+            const categoryItems = items.filter(i => i.category === category);
+            if (categoryItems.length === 0) {
+                container.innerHTML = `<div class="empty-state-text">No items yet</div>`;
+                return;
+            }
+            container.innerHTML = categoryItems.map(item => `
+                <div class="list-item-card" data-id="${item.id}">
+                    <div class="list-item-content" id="list-content-${item.id}">${this.linkifyText(item.content)}</div>
+                    <div class="list-item-actions">
+                        <button class="list-edit-btn" data-id="${item.id}" data-category="${category}">✎</button>
+                        <button class="list-delete-btn" data-id="${item.id}">×</button>
+                    </div>
+                    <div class="list-edit-form" id="list-edit-${item.id}" style="display: none;">
+                        <textarea class="list-textarea" rows="2">${utils.escapeHtml(item.content)}</textarea>
+                        <div class="list-input-actions">
+                            <button class="secondary-btn list-cancel-edit-btn" data-id="${item.id}">Cancel</button>
+                            <button class="primary-btn list-save-edit-btn" data-id="${item.id}">Save</button>
+                        </div>
+                    </div>
+                </div>`).join('');
+        });
+    },
+
+    linkifyText(text) {
+        const urlRegex = /(https?:\/\/[^\s<]+)/g;
+        const escaped = utils.escapeHtml(text);
+        return escaped.replace(urlRegex, '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>');
+    },
+
+    renderIntentions(intentions) {
+        const active = intentions.filter(i => i.status === 'active');
+        const paused = intentions.filter(i => i.status === 'paused');
+        const archived = intentions.filter(i => i.status === 'done' || i.status === 'dropped');
+
+        const render = (list, containerId, emptyText) => {
+            const el = document.getElementById(containerId);
+            if (!el) return;
+            if (list.length === 0) {
+                el.innerHTML = `<div class="empty-state-text">${emptyText}</div>`;
+                return;
+            }
+            el.innerHTML = list.map(i => this._intentionCard(i)).join('');
+        };
+
+        render(active, 'activeIntentionsList', 'No active intentions yet.');
+        render(paused, 'pausedIntentionsList', 'None paused.');
+        render(archived, 'archivedIntentionsList', 'None yet.');
+    },
+
+    _intentionCard(i) {
+        const ageStr = i.createdAtStr ? utils.relativeAge(i.createdAtStr) : '';
+        const movedStr = i.lastProgressAtStr ? utils.relativeAge(i.lastProgressAtStr) : '';
+        const daysSinceProgress = utils.daysSince(i.lastProgressAtStr);
+        const isStale = daysSinceProgress !== null && daysSinceProgress >= 14 && i.status === 'active';
+
+        const categoryLabel = {
+            family: 'Family', community: 'Community', health: 'Health',
+            home: 'Home', us: 'Us', other: 'Other'
+        }[i.category || 'other'] || 'Other';
+
+        const statusActions = i.status === 'active' ? `
+            <button class="intention-action-btn" data-action="promote" data-id="${i.id}">Promote next step</button>
+            <button class="intention-action-btn" data-action="progress" data-id="${i.id}">Mark progress</button>
+            <button class="intention-action-btn" data-action="pause" data-id="${i.id}">Pause</button>
+            <button class="intention-action-btn" data-action="done" data-id="${i.id}">Done</button>
+            <button class="intention-action-btn danger" data-action="drop" data-id="${i.id}">Drop</button>
+        ` : i.status === 'paused' ? `
+            <button class="intention-action-btn" data-action="resume" data-id="${i.id}">Resume</button>
+            <button class="intention-action-btn danger" data-action="drop" data-id="${i.id}">Drop</button>
+        ` : `
+            <button class="intention-action-btn" data-action="resume" data-id="${i.id}">Reactivate</button>
+            <button class="intention-action-btn danger" data-action="delete" data-id="${i.id}">Delete</button>
+        `;
+
+        return `
+            <div class="intention-card ${isStale ? 'stale' : ''}" data-id="${i.id}">
+                <div class="intention-card-header">
+                    <span class="intention-category">${categoryLabel}</span>
+                    <span class="intention-age">${ageStr ? 'added ' + ageStr : ''}</span>
+                </div>
+                <div class="intention-title">${utils.escapeHtml(i.title)}</div>
+                <div class="intention-next-step-row">
+                    <label>Next step:</label>
+                    <div class="intention-next-step-edit">
+                        <input type="text" class="intention-next-step-input" data-id="${i.id}"
+                               value="${utils.escapeHtml(i.nextStep || '')}"
+                               placeholder="What's the smallest thing that moves this forward?">
+                        <button class="intention-next-step-save" data-id="${i.id}">Save</button>
+                    </div>
+                </div>
+                ${movedStr && i.status === 'active' ? `<div class="intention-progress-line ${isStale ? 'stale' : ''}">Last moved ${movedStr}${isStale ? ' — stalled' : ''}</div>` : ''}
+                ${i.status === 'paused' && i.pausedReason ? `<div class="intention-progress-line">Paused: ${utils.escapeHtml(i.pausedReason)}</div>` : ''}
+                <div class="intention-actions">
+                    ${statusActions}
+                </div>
+            </div>`;
+    },
+
+    async renderHistory() {
+        const plans = await db_ops.getRecentPlans(30);
+        const container = document.getElementById('historyList');
+        if (!container) return;
+        if (plans.length === 0) {
+            container.innerHTML = `
+                <div class="empty-state">
+                    <div class="empty-state-icon">📖</div>
+                    <div class="empty-state-text">No past alignments yet</div>
+                </div>`;
+            return;
+        }
+
+        container.innerHTML = plans.map(plan => {
+            const appts = (plan.appointments || []).filter(a => a.title);
+            const focusCount = (plan.focusTaskIds || []).length;
+            const summaryBits = [];
+            if (plan.checkIn) {
+                const label = { better: 'Better', expected: 'As expected', worse: 'Worse' }[plan.checkIn] || '';
+                if (label) summaryBits.push(label);
+            }
+            if (focusCount) summaryBits.push(`${focusCount} focus task${focusCount === 1 ? '' : 's'}`);
+            if (appts.length) summaryBits.push(`${appts.length} appt${appts.length === 1 ? '' : 's'}`);
+
+            return `
+                <div class="history-item" data-date="${plan.date}">
+                    <div class="history-header">
+                        <div class="history-date">${utils.formatDate(plan.date)}</div>
+                        <div class="history-summary">${summaryBits.join(' • ') || 'Plan recorded'}</div>
+                        <svg class="history-chevron" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <polyline points="6 9 12 15 18 9"/>
+                        </svg>
+                    </div>
+                    <div class="history-details">
+                        ${this._historyDetailsHTML(plan)}
+                    </div>
+                </div>`;
+        }).join('');
+    },
+
+    _historyDetailsHTML(plan) {
+        const parts = [];
+        if (plan.checkInNote) {
+            parts.push(`<div class="history-detail-row"><strong>Check-in note:</strong> ${utils.escapeHtml(plan.checkInNote)}</div>`);
+        }
+        if (plan.weeklyGoals) {
+            parts.push(`<div class="history-detail-row"><strong>Weekly goals:</strong><br>${utils.escapeHtml(plan.weeklyGoals).replace(/\n/g, '<br>')}</div>`);
+        }
+        // Work blocks
+        const workBits = [];
+        for (const p of WORK_PEOPLE) {
+            for (const b of (plan.workBlocks?.[p] || [])) {
+                if (b.start && b.end) workBits.push(`${PERSON_LABEL[p]} work ${utils.formatTime(b.start)}–${utils.formatTime(b.end)}${b.label ? ' (' + utils.escapeHtml(b.label) + ')' : ''}`);
+            }
+        }
+        if (workBits.length) parts.push(`<div class="history-detail-row"><strong>Work:</strong><br>${workBits.join('<br>')}</div>`);
+
+        // Coverage
+        const coverBits = [];
+        for (const p of COVERAGE_PEOPLE) {
+            for (const b of (plan.coverage?.[p] || [])) {
+                if (b.start && b.end) coverBits.push(`${PERSON_LABEL[p]} ${utils.formatTime(b.start)}–${utils.formatTime(b.end)}`);
+            }
+        }
+        if (coverBits.length) parts.push(`<div class="history-detail-row"><strong>Coverage:</strong><br>${coverBits.join('<br>')}</div>`);
+
+        // Appointments
+        const apts = (plan.appointments || []).filter(a => a.title);
+        if (apts.length) {
+            parts.push(`<div class="history-detail-row"><strong>Appointments:</strong><br>${apts.map(a => `${utils.formatTime(a.startTime)} — ${utils.escapeHtml(a.title)}`).join('<br>')}</div>`);
+        }
+
+        // Asks
+        if (plan.asks?.kristyn) parts.push(`<div class="history-detail-row"><strong>Kristyn asked:</strong> ${utils.escapeHtml(plan.asks.kristyn)}</div>`);
+        if (plan.asks?.julio) parts.push(`<div class="history-detail-row"><strong>Julio asked:</strong> ${utils.escapeHtml(plan.asks.julio)}</div>`);
+
+        if (parts.length === 0) return `<div class="history-detail-row">No details recorded</div>`;
+        return parts.join('');
     }
 };
 
 function renderSettings() {
-    const constraintsContainer = document.getElementById('defaultConstraints');
-    const constraints = state.settings?.constraints || scheduler.getDefaultConstraints();
-    
-    constraintsContainer.innerHTML = constraints.map(c => `
-        <div class="constraint-item">
-            <span class="constraint-name">${c.name}</span>
-            <span class="constraint-value">${c.value}</span>
-        </div>
-    `).join('');
-    
+    // Weekly goals
+    const wgInput = document.getElementById('weeklyGoalsInput');
+    if (wgInput) wgInput.value = state.settings?.weeklyGoals || '';
+
+    // Checklist editor
+    const editor = document.getElementById('checklistEditor');
+    if (editor) {
+        const items = state.settings?.checklistItems || [];
+        if (items.length === 0) {
+            editor.innerHTML = `<div class="empty-state-text">No items yet. Add one below.</div>`;
+        } else {
+            editor.innerHTML = items.map(it => `
+                <div class="checklist-editor-row" data-id="${it.id}">
+                    <input type="text" class="task-input checklist-editor-input" data-id="${it.id}" value="${utils.escapeHtml(it.label)}">
+                    <button class="icon-btn checklist-editor-delete" data-id="${it.id}" aria-label="Delete">×</button>
+                </div>`).join('');
+        }
+    }
+
+    // Calendar status
     const statusDiv = document.getElementById('calendarStatus');
     const connectBtn = document.getElementById('connectCalendarBtn');
     const disconnectBtn = document.getElementById('disconnectCalendarBtn');
-    
-    if (state.settings?.googleCalendar?.connected) {
-        statusDiv.textContent = '✓ Connected';
-        statusDiv.className = 'status-badge connected';
-        connectBtn.style.display = 'none';
-        disconnectBtn.style.display = 'block';
-    } else {
-        statusDiv.textContent = 'Not connected';
-        statusDiv.className = 'status-badge';
-        connectBtn.style.display = 'block';
-        disconnectBtn.style.display = 'none';
+    if (statusDiv && connectBtn && disconnectBtn) {
+        if (state.settings?.googleCalendar?.connected) {
+            statusDiv.textContent = '✓ Connected';
+            statusDiv.className = 'status-badge connected';
+            connectBtn.style.display = 'none';
+            disconnectBtn.style.display = 'block';
+        } else {
+            statusDiv.textContent = 'Not connected';
+            statusDiv.className = 'status-badge';
+            connectBtn.style.display = 'block';
+            disconnectBtn.style.display = 'none';
+        }
     }
 }
 
-// Evening Wizard - Comprehensive 9-step planning
+// ============================================================================
+// Wizard — 9 steps
+// ============================================================================
 const wizard = {
-    currentStep: 1,
     totalSteps: 9,
-    data: {},
-    
-    open() {
-        document.getElementById('wizardModal').classList.add('active');
-        this.currentStep = 1;
-        this.data = {
-            eveningChecklist: {
-                skylightCalendar: false,
-                juneGoals: false,
-                householdChores: false
-            },
-            wakeTarget: '07:00',
-            parentUnavailable: {
-                kristyn: [],
-                julio: []
-            },
-            helpersAvailable: {
-                nanny: [],
-                kayden: []
-            },
+
+    emptyData() {
+        return {
+            checkIn: null,
+            checkInNote: '',
+            checklistResponses: {}, // id -> true/false
+            workBlocks: { kristyn: [], julio: [] },
+            coverage: { kristyn: [], julio: [], nanny: [], kayden: [] },
             appointments: [],
-            todayTasksCompleted: {},
-            brainDump: '',
-            selectedTasks: [],
-            constraints: state.settings?.constraints || scheduler.getDefaultConstraints()
+            taskReview: {}, // taskId -> 'done'|'rolled'|'drop'
+            brainDumpText: '',
+            selectedTaskIds: [], // open tasks chosen for tomorrow
+            newTasksFromBrainDump: [],
+            promotedIntentions: [], // {intentionId, title} — promoted next-steps
+            weeklyGoals: '',
+            asks: { kristyn: '', julio: '' }
         };
-        this.renderStep();
     },
-    
+
+    async open() {
+        state.wizardStep = 1;
+        state.wizardData = this.emptyData();
+
+        // Prefill from settings
+        state.wizardData.weeklyGoals = state.settings?.weeklyGoals || '';
+
+        // If we're re-opening a plan that exists, load its data (editing mode)
+        const tomorrow = utils.getTomorrowString();
+        const existing = await db_ops.getDayPlan(tomorrow);
+        if (existing) {
+            Object.assign(state.wizardData, {
+                checkIn: existing.checkIn || null,
+                checkInNote: existing.checkInNote || '',
+                checklistResponses: existing.checklistResponses || {},
+                workBlocks: existing.workBlocks || { kristyn: [], julio: [] },
+                coverage: existing.coverage || { kristyn: [], julio: [], nanny: [], kayden: [] },
+                appointments: existing.appointments || [],
+                weeklyGoals: existing.weeklyGoals || state.wizardData.weeklyGoals,
+                asks: existing.asks || { kristyn: '', julio: '' }
+            });
+        }
+
+        document.getElementById('wizardModal').classList.add('active');
+        this.showStep(1);
+        this.renderStep1();
+    },
+
     close() {
         document.getElementById('wizardModal').classList.remove('active');
     },
-    
-    renderStep() {
-        // Hide all steps
+
+    showStep(n) {
+        state.wizardStep = n;
         for (let i = 1; i <= this.totalSteps; i++) {
-            const step = document.getElementById(`step${i}`);
-            if (step) step.style.display = 'none';
+            const el = document.getElementById(`step${i}`);
+            if (el) el.style.display = (i === n) ? 'block' : 'none';
         }
-        
-        // Show current step
-        const currentStepEl = document.getElementById(`step${this.currentStep}`);
-        if (currentStepEl) currentStepEl.style.display = 'block';
-        
-        // Update progress
-        const progressFill = document.getElementById('wizardProgress');
-        const progressText = document.getElementById('wizardProgressText');
-        progressFill.style.width = `${(this.currentStep / this.totalSteps) * 100}%`;
-        progressText.textContent = `Step ${this.currentStep} of ${this.totalSteps}`;
-        
-        // Render step-specific content
-        this.renderStepContent();
+        const pct = (n / this.totalSteps) * 100;
+        document.getElementById('wizardProgress').style.width = `${pct}%`;
+        document.getElementById('wizardProgressText').textContent = `Step ${n} of ${this.totalSteps}`;
+        // Scroll modal body to top
+        const body = document.querySelector('#wizardModal .modal-body');
+        if (body) body.scrollTop = 0;
     },
-    
-    async renderStepContent() {
-        switch(this.currentStep) {
-            case 1:
-                // Evening Checklist - new first step
-                this.renderEveningChecklist();
-                break;
-            case 2:
-                document.getElementById('wizardDate').textContent = utils.formatDate(utils.getTomorrowString());
-                document.getElementById('wakeTarget').value = this.data.wakeTarget;
-                break;
-            case 3:
-                this.renderAvailability();
-                break;
-            case 4:
-                this.renderHelperAvailability();
-                break;
-            case 5:
-                this.renderAppointments();
-                await this.checkBathReminder();
-                break;
-            case 6:
-                await this.renderTodayTaskReview();
-                break;
-            case 7:
-                document.getElementById('brainDumpText').value = this.data.brainDump || '';
-                break;
-            case 8:
-                await this.renderTaskSelection();
-                break;
-            case 9:
-                this.renderSchedulePreview();
-                break;
+
+    // Step navigation
+    next() {
+        const step = state.wizardStep;
+        // Collect data from current step before moving on
+        if (step === 1) this.collectStep1();
+        else if (step === 2) this.collectStep2();
+        else if (step === 3) this.collectStep3();
+        else if (step === 4) this.collectStep4();
+        else if (step === 5) this.collectStep5();
+        else if (step === 6) this.collectStep6();
+        else if (step === 7) this.collectStep7();
+        else if (step === 8) this.collectStep8();
+
+        if (step < this.totalSteps) {
+            this.showStep(step + 1);
+            this.renderStep(step + 1);
         }
     },
-    
-    renderEveningChecklist() {
-        const container = document.getElementById('eveningChecklistItems');
-        const checklist = this.data.eveningChecklist;
-        
-        container.innerHTML = `
-            <div class="checklist-item">
-                <label class="checklist-label">
-                    <input type="checkbox" id="checkSkylight" ${checklist.skylightCalendar ? 'checked' : ''}>
-                    <span>Is everything up to date on the Skylight calendar?</span>
-                </label>
-            </div>
-            <div class="checklist-item">
-                <label class="checklist-label">
-                    <input type="checkbox" id="checkJuneGoals" ${checklist.juneGoals ? 'checked' : ''}>
-                    <span>What is the status on our goals for June?</span>
-                </label>
-            </div>
-            <div class="checklist-item">
-                <label class="checklist-label">
-                    <input type="checkbox" id="checkHousehold" ${checklist.householdChores ? 'checked' : ''}>
-                    <span>What are the outstanding household chores?</span>
-                </label>
-            </div>
-        `;
-        
-        // Add event listeners
-        document.getElementById('checkSkylight').addEventListener('change', (e) => {
-            this.data.eveningChecklist.skylightCalendar = e.target.checked;
-        });
-        document.getElementById('checkJuneGoals').addEventListener('change', (e) => {
-            this.data.eveningChecklist.juneGoals = e.target.checked;
-        });
-        document.getElementById('checkHousehold').addEventListener('change', (e) => {
-            this.data.eveningChecklist.householdChores = e.target.checked;
-        });
-    },
-    
-    async checkBathReminder() {
-        const settings = state.settings || await db_ops.getSettings();
-        const lastBath = settings.lastBathDate;
-        const bathReminder = document.getElementById('bathReminder');
-        
-        if (!lastBath) {
-            // No bath record, show reminder
-            bathReminder.style.display = 'block';
-            document.getElementById('daysSinceBath').textContent = '?';
-            return;
-        }
-        
-        const lastBathDate = new Date(lastBath);
-        const today = new Date();
-        const daysSince = Math.floor((today - lastBathDate) / (1000 * 60 * 60 * 24));
-        
-        if (daysSince >= 3) {
-            bathReminder.style.display = 'block';
-            document.getElementById('daysSinceBath').textContent = daysSince;
-        } else {
-            bathReminder.style.display = 'none';
-        }
-    },
-    
-    renderAvailability() {
-        this.renderTimeBlocks('kristyn', 'kristynUnavailableList');
-        this.renderTimeBlocks('julio', 'julioUnavailableList');
-    },
-    
-    renderHelperAvailability() {
-        this.renderTimeBlocks('nanny', 'nannyAvailableList', true);
-        this.renderTimeBlocks('kayden', 'kaydenAvailableList', true);
-    },
-    
-    renderTimeBlocks(person, containerId, isHelper = false) {
-        const container = document.getElementById(containerId);
-        const blocks = isHelper ? 
-            this.data.helpersAvailable[person] : 
-            this.data.parentUnavailable[person];
-        
-        if (blocks.length === 0) {
-            container.innerHTML = '<p class="empty-state-text">No time blocks added</p>';
-            return;
-        }
-        
-        container.innerHTML = blocks.map((block, idx) => `
-            <div class="time-block-item">
-                <input type="time" value="${block.start}" data-person="${person}" data-idx="${idx}" data-field="start" data-helper="${isHelper}">
-                <input type="time" value="${block.end}" data-person="${person}" data-idx="${idx}" data-field="end" data-helper="${isHelper}">
-                <button onclick="wizard.removeTimeBlock('${person}', ${idx}, ${isHelper})">×</button>
-            </div>
-        `).join('');
-    },
-    
-    addTimeBlock(person, isHelper = false) {
-        const block = { start: '09:00', end: '12:00' };
-        if (isHelper) {
-            this.data.helpersAvailable[person].push(block);
-            this.renderTimeBlocks(person, `${person}AvailableList`, true);
-        } else {
-            this.data.parentUnavailable[person].push(block);
-            this.renderTimeBlocks(person, `${person}UnavailableList`);
-        }
-    },
-    
-    removeTimeBlock(person, idx, isHelper = false) {
-        if (isHelper) {
-            this.data.helpersAvailable[person].splice(idx, 1);
-            this.renderHelperAvailability();
-        } else {
-            this.data.parentUnavailable[person].splice(idx, 1);
-            this.renderAvailability();
-        }
-    },
-    
-    renderAppointments() {
-        const container = document.getElementById('appointmentsList');
-        
-        if (this.data.appointments.length === 0) {
-            container.innerHTML = '<p class="empty-state-text">No appointments added</p>';
-            return;
-        }
-        
-        container.innerHTML = this.data.appointments.map((apt, idx) => `
-            <div class="appointment-item">
-                <input type="text" placeholder="Title" value="${apt.title || ''}" 
-                       data-idx="${idx}" data-field="title" class="appointment-input">
-                <input type="time" value="${apt.start || ''}" 
-                       data-idx="${idx}" data-field="start" class="appointment-input">
-                <input type="time" placeholder="End (optional)" value="${apt.end || ''}" 
-                       data-idx="${idx}" data-field="end" class="appointment-input">
-                <button class="secondary-btn full-width" onclick="wizard.removeAppointment(${idx})">Remove</button>
-            </div>
-        `).join('');
-    },
-    
-    addAppointment() {
-        this.data.appointments.push({ title: '', start: '', end: '' });
-        this.renderAppointments();
-    },
-    
-    removeAppointment(idx) {
-        this.data.appointments.splice(idx, 1);
-        this.renderAppointments();
-    },
-    
-    async renderTodayTaskReview() {
-        const todayStr = utils.getTodayString();
-        const todayTasks = state.tasks.filter(t => t.assignedDate === todayStr && t.status === 'open');
-        const container = document.getElementById('todayTaskReview');
-        
-        if (todayTasks.length === 0) {
-            container.innerHTML = '<p class="empty-state-text">No tasks were planned for today</p>';
-            return;
-        }
-        
-        container.innerHTML = todayTasks.map(task => `
-            <div class="task-review-item ${this.data.todayTasksCompleted[task.id] ? 'completed' : ''}">
-                <input type="checkbox" 
-                       id="review-${task.id}" 
-                       data-task-id="${task.id}"
-                       ${this.data.todayTasksCompleted[task.id] ? 'checked' : ''}
-                       onchange="wizard.toggleTaskCompletion('${task.id}', this.checked)">
-                <label for="review-${task.id}">${task.title}</label>
-            </div>
-        `).join('');
-    },
-    
-    toggleTaskCompletion(taskId, completed) {
-        this.data.todayTasksCompleted[taskId] = completed;
-        this.renderTodayTaskReview();
-    },
-    
-    async renderTaskSelection() {
-        // Get all open tasks (brain dump + existing)
-        const allTasks = state.tasks.filter(t => t.status === 'open' && !t.assignedDate);
-        const container = document.getElementById('taskSelectionList');
-        
-        if (allTasks.length === 0) {
-            container.innerHTML = '<p class="empty-state-text">No tasks available. Add some in the brain dump!</p>';
-            return;
-        }
-        
-        container.innerHTML = allTasks.map(task => `
-            <div class="task-selection-item ${this.data.selectedTasks.includes(task.id) ? 'selected' : ''}">
-                <input type="checkbox" 
-                       id="select-${task.id}" 
-                       data-task-id="${task.id}"
-                       ${this.data.selectedTasks.includes(task.id) ? 'checked' : ''}
-                       onchange="wizard.toggleTaskSelection('${task.id}', this.checked)">
-                <label for="select-${task.id}">${task.title}</label>
-            </div>
-        `).join('');
-    },
-    
-    toggleTaskSelection(taskId, selected) {
-        if (selected) {
-            if (!this.data.selectedTasks.includes(taskId)) {
-                this.data.selectedTasks.push(taskId);
-            }
-        } else {
-            this.data.selectedTasks = this.data.selectedTasks.filter(id => id !== taskId);
-        }
-        document.querySelector(`#select-${taskId}`).closest('.task-selection-item').classList.toggle('selected', selected);
-    },
-    
-    renderSchedulePreview() {
-        const schedule = this.calculateSchedule();
-        const warnings = this.detectConflicts(schedule);
-        
-        // Render tomorrow's tasks
-        const tasksContainer = document.getElementById('tomorrowTasksPreview');
-        const tomorrowTasks = state.tasks.filter(t => 
-            this.data.selectedTasks.includes(t.id)
-        );
-        
-        if (tomorrowTasks.length > 0) {
-            tasksContainer.innerHTML = `
-                <h4>Tomorrow's Tasks (${tomorrowTasks.length})</h4>
-                <div class="task-list">
-                    ${tomorrowTasks.map(task => `
-                        <div class="task-preview-item">✓ ${task.title}</div>
-                    `).join('')}
-                </div>
-            `;
-            tasksContainer.style.display = 'block';
-        } else {
-            tasksContainer.style.display = 'none';
-        }
-        
-        // Render schedule
-        const scheduleContainer = document.getElementById('schedulePreview');
-        if (schedule.blocks.length === 0) {
-            scheduleContainer.innerHTML = '<p class="empty-state-text">No schedule generated</p>';
-        } else {
-            scheduleContainer.innerHTML = schedule.blocks.map(block => `
-                <div class="preview-block">
-                    <div class="preview-time">
-                        ${utils.formatTime(block.start)}<br>
-                        ${utils.formatTime(block.end)}
-                    </div>
-                    <div class="preview-content">
-                        <div class="preview-title">${block.title}</div>
-                        <div class="preview-caregiver">${block.caregiver}</div>
-                    </div>
-                    <span class="preview-badge ${block.type}">${block.type}</span>
-                </div>
-            `).join('');
-        }
-        
-        // Render warnings
-        const warningsContainer = document.getElementById('scheduleWarnings');
-        if (warnings.length === 0) {
-            warningsContainer.innerHTML = '<div class="warning-item info">✓ No conflicts detected</div>';
-        } else {
-            warningsContainer.innerHTML = warnings.map(warning => `
-                <div class="warning-item ${warning.severity}">
-                    ${warning.severity === 'error' ? '⚠️' : 'ℹ️'} ${warning.message}
-                </div>
-            `).join('');
-        }
-    },
-    
-    calculateSchedule() {
-        const blocks = [];
-        let currentTime = this.data.wakeTarget;
-        
-        // Helper functions
-        const addMinutes = (time, minutes) => {
-            const [h, m] = time.split(':').map(Number);
-            const date = new Date();
-            date.setHours(h, m + minutes);
-            return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
-        };
-        
-        const minutesBetween = (start, end) => {
-            const [h1, m1] = start.split(':').map(Number);
-            const [h2, m2] = end.split(':').map(Number);
-            return (h2 * 60 + m2) - (h1 * 60 + m1);
-        };
-        
-        const isTimeInRange = (time, start, end) => {
-            return time >= start && time < end;
-        };
-        
-        const getAvailableCaregiver = (time, forNap = false) => {
-            if (forNap) {
-                // Priority: Parents first, then Nanny, never Kayden
-                const parents = ['Kristyn', 'Julio'];
-                for (const parent of parents) {
-                    const personKey = parent.toLowerCase();
-                    const isUnavailable = this.data.parentUnavailable[personKey].some(block => 
-                        isTimeInRange(time, block.start, block.end)
-                    );
-                    if (!isUnavailable) return parent;
-                }
-                
-                // Check Nanny
-                const nannyAvailable = this.data.helpersAvailable.nanny.some(block =>
-                    isTimeInRange(time, block.start, block.end)
-                );
-                if (nannyAvailable) return 'Nanny';
-                
-                return 'No one available!';
-            } else {
-                return 'Anyone';
-            }
-        };
-        
-        const areBothParentsAvailable = (time) => {
-            const kristynAvailable = !this.data.parentUnavailable.kristyn.some(block =>
-                isTimeInRange(time, block.start, block.end)
-            );
-            const julioAvailable = !this.data.parentUnavailable.julio.some(block =>
-                isTimeInRange(time, block.start, block.end)
-            );
-            return kristynAvailable && julioAvailable;
-        };
-        
-        const addRoutineBlock = (title, duration, type = 'routine') => {
-            blocks.push({
-                start: currentTime,
-                end: addMinutes(currentTime, duration),
-                title,
-                type,
-                caregiver: 'Available'
-            });
-            currentTime = addMinutes(currentTime, duration);
-        };
-        
-        const addBuffer = () => {
-            currentTime = addMinutes(currentTime, 5); // 5 minute buffer between tasks
-        };
-        
-        // Fixed durations (in minutes) - updated wake windows
-        const WAKE_WINDOW_1 = 3 * 60;    // 180 min (3 hours max)
-        const WAKE_WINDOW_2 = 3.5 * 60;  // 210 min (3.5 hours max)
-        const WAKE_WINDOW_3 = 4 * 60;    // 240 min (4 hours max)
-        const NAP_DURATION = 60;         // 1 hour OUTSIDE wake window
-        const NAP_ROUTINE = 10;          // 10 min - INSIDE wake window (last thing before nap)
-        
-        // ========== WAKE WINDOW 1 (3 hours) ==========
-        const ww1Start = currentTime;
-        
-        // Fixed morning routine with buffers
-        addRoutineBlock('Wake Up Time', 10);
-        addBuffer();
-        addRoutineBlock('Family Cuddle', 10);
-        addBuffer();
-        addRoutineBlock('Get Dressed', 10);
-        addBuffer();
-        addRoutineBlock('Breakfast Prep', 10);
-        addBuffer();
-        addRoutineBlock('Breakfast', 20, 'meal');
-        addBuffer();
-        addRoutineBlock('Brush Teeth', 5);
-        addBuffer();
-        
-        // Calculate when nap routine should start - last 10min of wake window
-        const napRoutine1Start = addMinutes(ww1Start, WAKE_WINDOW_1 - NAP_ROUTINE);
-        
-        // Fill with open time until nap routine
-        const openTime1Duration = minutesBetween(currentTime, napRoutine1Start);
-        if (openTime1Duration > 0) {
-            blocks.push({
-                start: currentTime,
-                end: napRoutine1Start,
-                title: 'Open Time',
-                type: 'open',
-                caregiver: 'Anyone'
-            });
-            currentTime = napRoutine1Start;
-        }
-        
-        // Nap Time Routine (last thing in WW1)
-        addRoutineBlock('Nap Time Routine', NAP_ROUTINE);
-        
-        // Now we're at the END of WW1, NAP is OUTSIDE the wake window
-        const nap1Start = currentTime;
-        const nap1End = addMinutes(nap1Start, NAP_DURATION);
-        const nap1Caregiver = getAvailableCaregiver(nap1Start, true);
-        blocks.push({
-            start: nap1Start,
-            end: nap1End,
-            title: 'Nap 1',
-            type: 'nap',
-            caregiver: nap1Caregiver
-        });
-        currentTime = nap1End;
-        
-        // ========== WAKE WINDOW 2 (3.5 hours) ==========
-        const ww2Start = currentTime;
-        
-        addRoutineBlock('Wake Up Time', 10);
-        addBuffer();
-        
-        // Nap routine is last 10min of WW2, then nap is OUTSIDE
-        const napRoutine2Start = addMinutes(ww2Start, WAKE_WINDOW_2 - NAP_ROUTINE);
-        
-        // Snack is 10min before nap routine
-        const snack2Start = addMinutes(napRoutine2Start, -10);
-        
-        // Lunch starts 45 min after nap 1 ends (which is ww2Start)
-        // Lunch Prep is 10 min before lunch, so Lunch Prep starts at 45 - 10 = 35 min after nap end
-        const lunchStart = addMinutes(ww2Start, 45);
-        const lunchPrepStart = addMinutes(ww2Start, 35);
-        
-        // Open time before lunch prep (after Wake Up Time + buffer)
-        const openTime2aDuration = minutesBetween(currentTime, lunchPrepStart);
-        if (openTime2aDuration > 0) {
-            blocks.push({
-                start: currentTime,
-                end: lunchPrepStart,
-                title: 'Open Time',
-                type: 'open',
-                caregiver: 'Anyone'
-            });
-            currentTime = lunchPrepStart;
-        }
-        
-        addRoutineBlock('Lunch Prep', 10);
-        addBuffer();
-        addRoutineBlock('Lunch', 20, 'meal');
-        addBuffer();
-        
-        // Open time after lunch until snack
-        const openTime2bDuration = minutesBetween(currentTime, snack2Start);
-        if (openTime2bDuration > 0) {
-            blocks.push({
-                start: currentTime,
-                end: snack2Start,
-                title: 'Open Time',
-                type: 'open',
-                caregiver: 'Anyone'
-            });
-            currentTime = snack2Start;
-        }
-        
-        // Snack + Milk (right before nap routine)
-        addRoutineBlock('Snack + Milk', 10, 'meal');
-        addBuffer();
-        
-        // Nap Time Routine (last thing in WW2)
-        addRoutineBlock('Nap Time Routine', NAP_ROUTINE);
-        addBuffer();
-        
-        // Nap 2 is OUTSIDE wake window
-        const nap2Start = currentTime;
-        const nap2End = addMinutes(nap2Start, NAP_DURATION);
-        const nap2Caregiver = getAvailableCaregiver(nap2Start, true);
-        blocks.push({
-            start: nap2Start,
-            end: nap2End,
-            title: 'Nap 2',
-            type: 'nap',
-            caregiver: nap2Caregiver
-        });
-        currentTime = nap2End;
-        
-        // ========== WAKE WINDOW 3 (4 hours) ==========
-        const ww3Start = currentTime;
-        const ww3End = addMinutes(ww3Start, WAKE_WINDOW_3);
-        const bedtime = ww3End; // Bedtime is calculated!
-        
-        addRoutineBlock('Wake Up Time', 10);
-        addBuffer();
-        addRoutineBlock('Snack + Milk', 10, 'meal');
-        addBuffer();
-        
-        // Fixed 40min open time
-        addRoutineBlock('Open Time', 40, 'open');
-        addBuffer();
-        
-        addRoutineBlock('Dinner Prep', 10);
-        addBuffer();
-        addRoutineBlock('Dinner', 20, 'meal');
-        addBuffer();
-        
-        // Calculate when bedtime routine needs to start
-        // Brush Teeth (5min) + Bedtime Routine (15min) = 20min before bedtime
-        // If bath scheduled, add 20min more = 40min before bedtime
-        const bedtimeRoutineStart = this.data.includeBath ? 
-            addMinutes(bedtime, -40) : 
-            addMinutes(bedtime, -20);
-        
-        // Flexible open time fills remaining space
-        const openTime3Duration = minutesBetween(currentTime, bedtimeRoutineStart);
-        if (openTime3Duration > 0) {
-            blocks.push({
-                start: currentTime,
-                end: bedtimeRoutineStart,
-                title: 'Open Time',
-                type: 'open',
-                caregiver: 'Anyone'
-            });
-            currentTime = bedtimeRoutineStart;
-        }
-        
-        // Bath (if scheduled) - right before brush teeth
-        if (this.data.includeBath) {
-            const bathCaregiver = areBothParentsAvailable(currentTime) ? 
-                'Both Parents' : 
-                'Both Parents (UNAVAILABLE!)';
-            blocks.push({
-                start: currentTime,
-                end: addMinutes(currentTime, 20),
-                title: 'Bath Time',
-                type: 'bath',
-                caregiver: bathCaregiver
-            });
-            currentTime = addMinutes(currentTime, 20);
-            addBuffer();
-        }
-        
-        // Brush Teeth (right before bedtime routine)
-        addRoutineBlock('Brush Teeth', 5);
-        addBuffer();
-        
-        // Bedtime Routine (right before bedtime)
-        addRoutineBlock('Bedtime Routine', 15);
-        
-        // ========== INSERT APPOINTMENTS ==========
-        // Now intelligently insert appointments into open time blocks
-        const sortedAppointments = [...this.data.appointments]
-            .filter(apt => apt.start && apt.title)
-            .sort((a, b) => a.start.localeCompare(b.start));
-        
-        for (const apt of sortedAppointments) {
-            const aptStart = apt.start;
-            const aptEnd = apt.end || addMinutes(aptStart, 60);
-            
-            // Find which open time block contains this appointment
-            let insertIndex = blocks.findIndex(b => 
-                b.type === 'open' && 
-                aptStart >= b.start && 
-                aptStart < b.end
-            );
-            
-            if (insertIndex !== -1) {
-                const openBlock = blocks[insertIndex];
-                const newBlocks = [];
-                
-                // Open time before appointment
-                if (openBlock.start < aptStart) {
-                    newBlocks.push({
-                        start: openBlock.start,
-                        end: aptStart,
-                        title: 'Open Time',
-                        type: 'open',
-                        caregiver: 'Anyone'
-                    });
-                }
-                
-                // Appointment
-                newBlocks.push({
-                    start: aptStart,
-                    end: aptEnd,
-                    title: apt.title,
-                    type: 'appointment',
-                    caregiver: 'Family'
-                });
-                
-                // Open time after appointment (if any remains)
-                if (aptEnd < openBlock.end) {
-                    newBlocks.push({
-                        start: aptEnd,
-                        end: openBlock.end,
-                        title: 'Open Time',
-                        type: 'open',
-                        caregiver: 'Anyone'
-                    });
-                }
-                
-                // Replace the open block with split blocks
-                blocks.splice(insertIndex, 1, ...newBlocks);
-            }
-        }
-        
-        // Sort all blocks by start time
-        blocks.sort((a, b) => a.start.localeCompare(b.start));
-        
-        return { 
-            blocks, 
-            nap1Start, 
-            nap2Start,
-            bedtime  // Return calculated bedtime
-        };
-    },
-    
-    detectConflicts(schedule) {
-        const warnings = [];
-        
-        const addMinutes = (time, minutes) => {
-            const [h, m] = time.split(':').map(Number);
-            const date = new Date();
-            date.setHours(h, m + minutes);
-            return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
-        };
-        
-        // Check for unassigned naps
-        schedule.blocks.forEach(block => {
-            if (block.type === 'nap' && block.caregiver === 'No one available!') {
-                warnings.push({
-                    severity: 'error',
-                    message: `${block.title}: No caregiver available at ${utils.formatTime(block.start)}`
-                });
-            }
-        });
-        
-        // Check for bath without both parents
-        schedule.blocks.forEach(block => {
-            if (block.type === 'bath' && block.caregiver.includes('UNAVAILABLE')) {
-                warnings.push({
-                    severity: 'error',
-                    message: `Bath scheduled at ${utils.formatTime(block.start)} but both parents not available`
-                });
-            }
-        });
-        
-        // Get all meal and nap blocks
-        const meals = schedule.blocks.filter(b => b.type === 'meal');
-        const naps = schedule.blocks.filter(b => b.type === 'nap');
-        const bath = schedule.blocks.find(b => b.type === 'bath');
-        
-        // Check if appointments overlap with important blocks
-        const appointments = this.data.appointments.filter(apt => apt.start && apt.title);
-        
-        appointments.forEach(apt => {
-            const aptStart = apt.start;
-            const aptEnd = apt.end || addMinutes(aptStart, 60);
-            
-            // Check nap conflicts
-            naps.forEach(nap => {
-                const hasConflict = (aptStart >= nap.start && aptStart < nap.end) ||
-                                   (aptEnd > nap.start && aptEnd <= nap.end) ||
-                                   (aptStart <= nap.start && aptEnd >= nap.end);
-                
-                if (hasConflict) {
-                    warnings.push({
-                        severity: 'warning',
-                        message: `"${apt.title}" overlaps with ${nap.title}`
-                    });
-                }
-            });
-            
-            // Check meal conflicts
-            meals.forEach(meal => {
-                const hasConflict = (aptStart >= meal.start && aptStart < meal.end) ||
-                                   (aptEnd > meal.start && aptEnd <= meal.end) ||
-                                   (aptStart <= meal.start && aptEnd >= meal.end);
-                
-                if (hasConflict) {
-                    warnings.push({
-                        severity: 'info',
-                        message: `"${apt.title}" during ${meal.title} time`
-                    });
-                }
-            });
-            
-            // Check bath conflict
-            if (bath) {
-                const hasConflict = (aptStart >= bath.start && aptStart < bath.end) ||
-                                   (aptEnd > bath.start && aptEnd <= bath.end) ||
-                                   (aptStart <= bath.start && aptEnd >= bath.end);
-                
-                if (hasConflict) {
-                    warnings.push({
-                        severity: 'warning',
-                        message: `"${apt.title}" conflicts with Bath Time`
-                    });
-                }
-            }
-        });
-        
-        return warnings;
-    },
-    
-    async next() {
-        await this.saveCurrentStep();
-        
-        // If moving from brain dump (step 7) to task selection (step 8), process brain dump first
-        if (this.currentStep === 7 && this.currentStep < this.totalSteps) {
-            await this.processBrainDump();
-        }
-        
-        if (this.currentStep < this.totalSteps) {
-            this.currentStep++;
-            await this.renderStep();
-        }
-    },
-    
-    async processBrainDump() {
-        // Create tasks from brain dump immediately so they show in step 7
-        if (this.data.brainDump && this.data.brainDump.trim()) {
-            const tasks = this.data.brainDump.split('\n').filter(t => t.trim());
-            for (const task of tasks) {
-                await db_ops.addTask(task.trim());
-            }
-            
-            // Wait a moment for tasks to be created
-            await new Promise(resolve => setTimeout(resolve, 300));
-            
-            // Reload tasks so they appear in step 7
-            state.tasks = await db_ops.getTasks();
-        }
-    },
-    
+
     back() {
-        if (this.currentStep > 1) {
-            this.currentStep--;
-            this.renderStep();
+        const step = state.wizardStep;
+        if (step > 1) {
+            // Collect current step data so user can return
+            if (step === 2) this.collectStep2();
+            else if (step === 3) this.collectStep3();
+            else if (step === 4) this.collectStep4();
+            else if (step === 5) this.collectStep5();
+            else if (step === 6) this.collectStep6();
+            else if (step === 7) this.collectStep7();
+            else if (step === 8) this.collectStep8();
+
+            this.showStep(step - 1);
+            this.renderStep(step - 1);
         }
     },
-    
-    saveCurrentStep() {
-        if (this.currentStep === 2) {
-            // Wake time is now step 2
-            this.data.wakeTarget = document.getElementById('wakeTarget').value;
-        } else if (this.currentStep === 5) {
-            // Bath decision is now step 5 (Appointments)
-            const bathCheckbox = document.getElementById('scheduleBath');
-            this.data.includeBath = bathCheckbox ? bathCheckbox.checked : false;
-        } else if (this.currentStep === 7) {
-            // Brain dump is now step 7
-            this.data.brainDump = document.getElementById('brainDumpText').value;
+
+    renderStep(n) {
+        const fn = this[`renderStep${n}`];
+        if (fn) fn.call(this);
+    },
+
+    // --------------- Step 1: Check-in + checklist ---------------
+    renderStep1() {
+        // Check-in selection
+        document.querySelectorAll('.check-in-btn').forEach(btn => {
+            btn.classList.toggle('selected', state.wizardData.checkIn === btn.dataset.value);
+        });
+        document.getElementById('checkInNote').value = state.wizardData.checkInNote || '';
+
+        // Checklist
+        const container = document.getElementById('eveningChecklistItems');
+        const items = state.settings?.checklistItems || [];
+        if (items.length === 0) {
+            container.innerHTML = `<div class="empty-state-text">No checklist items. Add some in Settings.</div>`;
+        } else {
+            container.innerHTML = items.map(it => {
+                const checked = state.wizardData.checklistResponses[it.id] ? 'checked' : '';
+                return `
+                    <label class="checklist-row">
+                        <input type="checkbox" class="checklist-checkbox" data-id="${it.id}" ${checked}>
+                        <span>${utils.escapeHtml(it.label)}</span>
+                    </label>`;
+            }).join('');
         }
     },
-    
-    async save() {
-        const tomorrow = utils.getTomorrowString();
-        
-        // Save day plan
-        const schedule = this.calculateSchedule();
-        const planData = {
-            ...this.data,
-            calculatedSchedule: schedule.blocks,
-            nap1Time: schedule.nap1Start,
-            nap2Time: schedule.nap2Start
+
+    collectStep1() {
+        state.wizardData.checkInNote = document.getElementById('checkInNote').value.trim();
+        const responses = {};
+        document.querySelectorAll('#eveningChecklistItems .checklist-checkbox').forEach(cb => {
+            responses[cb.dataset.id] = cb.checked;
+        });
+        state.wizardData.checklistResponses = responses;
+    },
+
+    // --------------- Step 2: Work blocks ---------------
+    renderStep2() {
+        WORK_PEOPLE.forEach(p => this._renderBlockList('work', p, state.wizardData.workBlocks[p]));
+        this._renderFlags('workFlags', coach.workConflicts(state.wizardData.workBlocks));
+    },
+
+    collectStep2() {
+        WORK_PEOPLE.forEach(p => this._collectBlockList('work', p));
+    },
+
+    // --------------- Step 3: Coverage ---------------
+    renderStep3() {
+        COVERAGE_PEOPLE.forEach(p => this._renderBlockList('cover', p, state.wizardData.coverage[p]));
+        this._renderFlags('coverageFlags', coach.coverageGaps(state.wizardData.coverage, state.wizardData.appointments));
+    },
+
+    collectStep3() {
+        COVERAGE_PEOPLE.forEach(p => this._collectBlockList('cover', p));
+    },
+
+    // Shared time-block renderer
+    _renderBlockList(kind, person, blocks) {
+        const idMap = {
+            work: { kristyn: 'kristynWorkList', julio: 'julioWorkList' },
+            cover: { kristyn: 'kristynCoverList', julio: 'julioCoverList', nanny: 'nannyCoverList', kayden: 'kaydenCoverList' }
         };
-        await db_ops.saveDayPlan(tomorrow, planData);
-        
-        // Update bath date if scheduled
-        if (this.data.includeBath) {
-            const updatedSettings = state.settings || await db_ops.getSettings();
-            updatedSettings.lastBathDate = tomorrow;
-            await db_ops.saveSettings(updatedSettings);
+        const container = document.getElementById(idMap[kind][person]);
+        if (!container) return;
+        if (!blocks || blocks.length === 0) {
+            container.innerHTML = `<div class="empty-state-text small">No blocks yet.</div>`;
+            return;
         }
-        
-        // Mark today's tasks as complete/incomplete
-        for (const [taskId, completed] of Object.entries(this.data.todayTasksCompleted)) {
-            if (completed) {
+        container.innerHTML = blocks.map((b, i) => `
+            <div class="time-block-row" data-kind="${kind}" data-person="${person}" data-idx="${i}">
+                <input type="time" class="time-input block-start" value="${b.start || ''}" data-field="start">
+                <span class="time-dash">–</span>
+                <input type="time" class="time-input block-end" value="${b.end || ''}" data-field="end">
+                <input type="text" class="time-label-input" placeholder="Label (optional)" value="${utils.escapeHtml(b.label || '')}" data-field="label">
+                <button class="block-remove" data-kind="${kind}" data-person="${person}" data-idx="${i}">×</button>
+            </div>`).join('');
+    },
+
+    _collectBlockList(kind, person) {
+        const target = kind === 'work' ? state.wizardData.workBlocks[person] : state.wizardData.coverage[person];
+        const idMap = {
+            work: { kristyn: 'kristynWorkList', julio: 'julioWorkList' },
+            cover: { kristyn: 'kristynCoverList', julio: 'julioCoverList', nanny: 'nannyCoverList', kayden: 'kaydenCoverList' }
+        };
+        const container = document.getElementById(idMap[kind][person]);
+        if (!container) return;
+        const rows = container.querySelectorAll('.time-block-row');
+        const newBlocks = [];
+        rows.forEach((row, idx) => {
+            if (idx >= target.length) target.push({});
+            target[idx].start = row.querySelector('[data-field="start"]').value;
+            target[idx].end = row.querySelector('[data-field="end"]').value;
+            target[idx].label = row.querySelector('[data-field="label"]').value.trim();
+            newBlocks.push(target[idx]);
+        });
+        if (kind === 'work') state.wizardData.workBlocks[person] = newBlocks;
+        else state.wizardData.coverage[person] = newBlocks;
+    },
+
+    addBlock(kind, person) {
+        // Sync any in-progress edits before re-render
+        this._collectBlockList(kind, person);
+        if (kind === 'work') {
+            state.wizardData.workBlocks[person].push({ start: '', end: '', label: '' });
+        } else {
+            state.wizardData.coverage[person].push({ start: '', end: '', label: '' });
+        }
+        this.renderStep(state.wizardStep);
+    },
+
+    removeBlock(kind, person, idx) {
+        // Sync current DOM values before mutation
+        this._collectBlockList(kind, person);
+        if (kind === 'work') state.wizardData.workBlocks[person].splice(idx, 1);
+        else state.wizardData.coverage[person].splice(idx, 1);
+        this.renderStep(state.wizardStep);
+    },
+
+    // --------------- Step 4: Appointments ---------------
+    renderStep4() {
+        const container = document.getElementById('appointmentsList');
+        if (!container) return;
+        const apts = state.wizardData.appointments;
+        if (apts.length === 0) {
+            container.innerHTML = `<div class="empty-state-text small">None yet.</div>`;
+        } else {
+            container.innerHTML = apts.map((a, i) => `
+                <div class="appointment-row" data-idx="${i}">
+                    <input type="text" class="apt-title-input" placeholder="Title" value="${utils.escapeHtml(a.title || '')}" data-field="title">
+                    <div class="apt-time-row">
+                        <input type="time" class="time-input" value="${a.startTime || ''}" data-field="startTime">
+                        <span class="time-dash">–</span>
+                        <input type="time" class="time-input" value="${a.endTime || ''}" data-field="endTime">
+                    </div>
+                    <input type="text" class="apt-notes-input" placeholder="Who goes / notes" value="${utils.escapeHtml(a.notes || '')}" data-field="notes">
+                    <button class="block-remove" data-remove-apt="${i}">×</button>
+                </div>`).join('');
+        }
+        this._renderFlags('appointmentFlags', [
+            ...coach.appointmentConflicts(apts, state.wizardData.workBlocks),
+            ...coach.coverageGaps(state.wizardData.coverage, apts).filter(f => f.text.includes('Appointment'))
+        ]);
+    },
+
+    collectStep4() {
+        const container = document.getElementById('appointmentsList');
+        if (!container) return;
+        const rows = container.querySelectorAll('.appointment-row');
+        const apts = [];
+        rows.forEach(row => {
+            apts.push({
+                title: row.querySelector('[data-field="title"]').value.trim(),
+                startTime: row.querySelector('[data-field="startTime"]').value,
+                endTime: row.querySelector('[data-field="endTime"]').value,
+                notes: row.querySelector('[data-field="notes"]').value.trim()
+            });
+        });
+        state.wizardData.appointments = apts;
+    },
+
+    addAppointment() {
+        this.collectStep4();
+        state.wizardData.appointments.push({ title: '', startTime: '', endTime: '', notes: '' });
+        this.renderStep4();
+    },
+
+    removeAppointment(idx) {
+        this.collectStep4();
+        state.wizardData.appointments.splice(idx, 1);
+        this.renderStep4();
+    },
+
+    // --------------- Step 5: Today's task review ---------------
+    renderStep5() {
+        const container = document.getElementById('todayTaskReview');
+        if (!container) return;
+        const todayStr = utils.getTodayString();
+        const candidates = state.tasks.filter(t =>
+            (t.status === 'open' && t.assignedDate === todayStr) ||
+            (t.status === 'done' && t.assignedDate === todayStr)
+        );
+        if (candidates.length === 0) {
+            container.innerHTML = `<div class="empty-state-text small">No tasks were scheduled for today.</div>`;
+            this._renderFlags('taskReviewFlags', []);
+            return;
+        }
+
+        container.innerHTML = candidates.map(t => {
+            const existing = state.wizardData.taskReview[t.id] ||
+                (t.status === 'done' ? 'done' : 'rolled');
+            const daysOld = t.createdAtStr ? utils.daysSince(t.createdAtStr) : 0;
+            return `
+                <div class="task-review-row" data-id="${t.id}">
+                    <div class="task-review-title">${utils.escapeHtml(t.title)}</div>
+                    <div class="task-review-buttons">
+                        <button class="task-review-btn ${existing === 'done' ? 'selected' : ''}" data-review="done" data-id="${t.id}">Done</button>
+                        <button class="task-review-btn ${existing === 'rolled' ? 'selected' : ''}" data-review="rolled" data-id="${t.id}">Roll over</button>
+                        <button class="task-review-btn ${existing === 'drop' ? 'selected' : ''}" data-review="drop" data-id="${t.id}">Drop</button>
+                    </div>
+                </div>`;
+        }).join('');
+
+        // Compute rollover ages for flags
+        const ages = candidates.map(t => {
+            const daysOld = t.createdAtStr ? utils.daysSince(t.createdAtStr) : 0;
+            return { title: t.title, daysOld: daysOld || 0 };
+        });
+        this._renderFlags('taskReviewFlags', coach.staleTaskFlags(ages));
+    },
+
+    collectStep5() {
+        // Collected inline by click handler
+    },
+
+    // --------------- Step 6: Brain dump ---------------
+    renderStep6() {
+        document.getElementById('brainDumpText').value = state.wizardData.brainDumpText || '';
+    },
+
+    collectStep6() {
+        state.wizardData.brainDumpText = document.getElementById('brainDumpText').value;
+    },
+
+    // --------------- Step 7: Focus + stale intentions ---------------
+    renderStep7() {
+        // Stale intentions surfacing
+        const stale = coach.staleIntentions(state.intentions);
+        const block = document.getElementById('staleIntentionsBlock');
+        const staleList = document.getElementById('staleIntentionsList');
+        if (stale.length > 0) {
+            block.style.display = 'block';
+            staleList.innerHTML = stale.map(i => {
+                const promoted = state.wizardData.promotedIntentions.some(p => p.intentionId === i.id);
+                const movedStr = i.lastProgressAtStr ? utils.relativeAge(i.lastProgressAtStr) : '';
+                return `
+                    <div class="stale-intention-item ${promoted ? 'promoted' : ''}" data-id="${i.id}">
+                        <div>
+                            <div class="stale-intention-title">${utils.escapeHtml(i.title)}</div>
+                            <div class="stale-intention-next">Next step: ${i.nextStep ? utils.escapeHtml(i.nextStep) : '<em>(none defined — edit in Long-game tab)</em>'}</div>
+                            <div class="stale-intention-meta">Last moved ${movedStr || 'never'}</div>
+                        </div>
+                        <button class="promote-intention-btn" data-id="${i.id}" ${!i.nextStep ? 'disabled' : ''}>
+                            ${promoted ? '✓ Promoted' : 'Promote to tomorrow'}
+                        </button>
+                    </div>`;
+            }).join('');
+        } else {
+            block.style.display = 'none';
+        }
+
+        // Candidate pool: open tasks (today + brain dump) + brain dump text lines + already-selected
+        const container = document.getElementById('taskSelectionList');
+        if (!container) return;
+
+        const brainDumpLines = (state.wizardData.brainDumpText || '')
+            .split('\n').map(s => s.trim()).filter(Boolean);
+        // Promoted intentions appear at the top
+        const promoted = state.wizardData.promotedIntentions;
+
+        const openTasks = state.tasks.filter(t => t.status === 'open');
+        // Only surface uncompleted tasks + the brain-dump-derived lines
+        const candidates = [
+            ...promoted.map(p => ({ kind: 'intention', id: p.intentionId, title: p.title })),
+            ...openTasks.map(t => ({ kind: 'task', id: t.id, title: t.title })),
+            ...brainDumpLines.map((line, idx) => ({ kind: 'dump', id: `dump-${idx}`, title: line }))
+        ];
+
+        if (candidates.length === 0) {
+            container.innerHTML = `<div class="empty-state-text small">No candidates. Add some in the brain dump or Tasks tab.</div>`;
+        } else {
+            container.innerHTML = candidates.map(c => {
+                const selected = this._isFocusSelected(c);
+                return `
+                    <div class="task-selection-item ${selected ? 'selected' : ''} ${c.kind === 'intention' ? 'intention-item' : ''}" data-kind="${c.kind}" data-id="${c.id}">
+                        <span class="task-selection-text">
+                            ${utils.escapeHtml(c.title)}
+                            ${c.kind === 'intention' ? '<span class="intention-tag-inline">long-game</span>' : ''}
+                            ${c.kind === 'dump' ? '<span class="dump-tag-inline">brain dump</span>' : ''}
+                        </span>
+                        <span class="task-selection-check">${selected ? '✓' : ''}</span>
+                    </div>`;
+            }).join('');
+        }
+
+        const selectedCount = state.wizardData.selectedTaskIds.length + state.wizardData.promotedIntentions.length + state.wizardData.newTasksFromBrainDump.length;
+        const flags = [];
+        if (selectedCount > 3) {
+            flags.push({
+                level: 'warn',
+                text: `You picked ${selectedCount}. 3 is the ceiling — typically 1-2 of them slip when you pick more.`
+            });
+        }
+        this._renderFlags('focusFlags', flags);
+    },
+
+    _isFocusSelected(c) {
+        if (c.kind === 'intention') {
+            return state.wizardData.promotedIntentions.some(p => p.intentionId === c.id);
+        }
+        if (c.kind === 'task') {
+            return state.wizardData.selectedTaskIds.includes(c.id);
+        }
+        if (c.kind === 'dump') {
+            return state.wizardData.newTasksFromBrainDump.some(t => t.tempId === c.id);
+        }
+        return false;
+    },
+
+    toggleFocusSelection(kind, id) {
+        if (kind === 'intention') {
+            const idx = state.wizardData.promotedIntentions.findIndex(p => p.intentionId === id);
+            if (idx >= 0) {
+                state.wizardData.promotedIntentions.splice(idx, 1);
+            } else {
+                const i = state.intentions.find(x => x.id === id);
+                if (i && i.nextStep) {
+                    state.wizardData.promotedIntentions.push({
+                        intentionId: id,
+                        title: i.nextStep,
+                        intentionTitle: i.title
+                    });
+                }
+            }
+        } else if (kind === 'task') {
+            const idx = state.wizardData.selectedTaskIds.indexOf(id);
+            if (idx >= 0) state.wizardData.selectedTaskIds.splice(idx, 1);
+            else state.wizardData.selectedTaskIds.push(id);
+        } else if (kind === 'dump') {
+            const idx = state.wizardData.newTasksFromBrainDump.findIndex(t => t.tempId === id);
+            if (idx >= 0) {
+                state.wizardData.newTasksFromBrainDump.splice(idx, 1);
+            } else {
+                // Find the line text from brain dump
+                const lines = (state.wizardData.brainDumpText || '').split('\n').map(s => s.trim()).filter(Boolean);
+                const dumpIdx = parseInt(id.replace('dump-', ''), 10);
+                if (!isNaN(dumpIdx) && lines[dumpIdx]) {
+                    state.wizardData.newTasksFromBrainDump.push({ tempId: id, title: lines[dumpIdx] });
+                }
+            }
+        }
+        this.renderStep7();
+    },
+
+    togglePromoteIntention(id) {
+        const idx = state.wizardData.promotedIntentions.findIndex(p => p.intentionId === id);
+        if (idx >= 0) {
+            state.wizardData.promotedIntentions.splice(idx, 1);
+        } else {
+            const i = state.intentions.find(x => x.id === id);
+            if (i && i.nextStep) {
+                state.wizardData.promotedIntentions.push({
+                    intentionId: id,
+                    title: i.nextStep,
+                    intentionTitle: i.title
+                });
+            } else if (i && !i.nextStep) {
+                utils.showToast('Add a next step in the Long-game tab first', 'warning');
+                return;
+            }
+        }
+        this.renderStep7();
+    },
+
+    collectStep7() {
+        // Selection is live, no-op
+    },
+
+    // --------------- Step 8: Alignment ---------------
+    renderStep8() {
+        document.getElementById('wizardWeeklyGoals').value = state.wizardData.weeklyGoals || '';
+        document.getElementById('kristynAsk').value = state.wizardData.asks.kristyn || '';
+        document.getElementById('julioAsk').value = state.wizardData.asks.julio || '';
+
+        // Show flag about asks being skipped often — by looking at recent plans
+        this._loadRecentAskSkipFlag();
+    },
+
+    async _loadRecentAskSkipFlag() {
+        try {
+            const recent = await db_ops.getRecentPlans(3);
+            // Only consider plans older than today (to avoid flagging our own draft)
+            const flags = [];
+            const skipped = recent.filter(p =>
+                !p.asks || (!p.asks.kristyn && !p.asks.julio)
+            );
+            if (recent.length >= 3 && skipped.length >= 3) {
+                flags.push({
+                    level: 'info',
+                    text: 'Asks have been skipped the last 3 nights. Even a small one helps.'
+                });
+            }
+            this._renderFlags('alignmentFlags', flags);
+        } catch (e) {
+            this._renderFlags('alignmentFlags', []);
+        }
+    },
+
+    collectStep8() {
+        state.wizardData.weeklyGoals = document.getElementById('wizardWeeklyGoals').value.trim();
+        state.wizardData.asks.kristyn = document.getElementById('kristynAsk').value.trim();
+        state.wizardData.asks.julio = document.getElementById('julioAsk').value.trim();
+    },
+
+    // --------------- Step 9: Review ---------------
+    renderStep9() {
+        // Gather all flags one more time
+        const allFlags = [
+            ...coach.workConflicts(state.wizardData.workBlocks),
+            ...coach.coverageGaps(state.wizardData.coverage, state.wizardData.appointments),
+            ...coach.appointmentConflicts(state.wizardData.appointments, state.wizardData.workBlocks)
+        ];
+        // Dedupe by text
+        const seen = new Set();
+        const unique = allFlags.filter(f => {
+            if (seen.has(f.text)) return false;
+            seen.add(f.text); return true;
+        });
+        this._renderFlags('reviewFlags', unique);
+
+        // Build summary
+        const d = state.wizardData;
+        const summary = document.getElementById('reviewSummary');
+        const parts = [];
+
+        // Check-in
+        if (d.checkIn) {
+            const label = { better: 'Better than expected', expected: 'About what we expected', worse: 'Worse than expected' }[d.checkIn];
+            parts.push(`<div class="review-line"><strong>Today:</strong> ${label}${d.checkInNote ? ' — ' + utils.escapeHtml(d.checkInNote) : ''}</div>`);
+        }
+
+        // Work
+        const workBits = [];
+        for (const p of WORK_PEOPLE) {
+            for (const b of d.workBlocks[p]) {
+                if (b.start && b.end) workBits.push(`${PERSON_LABEL[p]}: ${utils.formatTime(b.start)}–${utils.formatTime(b.end)}${b.label ? ' (' + utils.escapeHtml(b.label) + ')' : ''}`);
+            }
+        }
+        if (workBits.length) parts.push(`<div class="review-line"><strong>Work:</strong><br>${workBits.join('<br>')}</div>`);
+
+        // Coverage
+        const coverBits = [];
+        for (const p of COVERAGE_PEOPLE) {
+            for (const b of d.coverage[p]) {
+                if (b.start && b.end) coverBits.push(`${PERSON_LABEL[p]}: ${utils.formatTime(b.start)}–${utils.formatTime(b.end)}`);
+            }
+        }
+        if (coverBits.length) parts.push(`<div class="review-line"><strong>Coverage:</strong><br>${coverBits.join('<br>')}</div>`);
+
+        // Appointments
+        const apts = d.appointments.filter(a => a.title);
+        if (apts.length) {
+            parts.push(`<div class="review-line"><strong>Appointments:</strong><br>${apts.map(a => `${utils.formatTime(a.startTime)} — ${utils.escapeHtml(a.title)}${a.notes ? ' (' + utils.escapeHtml(a.notes) + ')' : ''}`).join('<br>')}</div>`);
+        }
+
+        // Focus tasks (promoted + selected + brain-dump)
+        const focusList = [
+            ...d.promotedIntentions.map(p => `${utils.escapeHtml(p.title)} (long-game: ${utils.escapeHtml(p.intentionTitle || '')})`),
+            ...d.selectedTaskIds.map(id => {
+                const t = state.tasks.find(x => x.id === id);
+                return t ? utils.escapeHtml(t.title) : null;
+            }).filter(Boolean),
+            ...d.newTasksFromBrainDump.map(t => utils.escapeHtml(t.title))
+        ];
+        if (focusList.length) {
+            parts.push(`<div class="review-line"><strong>Tomorrow's focus:</strong><br>${focusList.map(t => '• ' + t).join('<br>')}</div>`);
+        }
+
+        // Weekly goals + asks
+        if (d.weeklyGoals) parts.push(`<div class="review-line"><strong>Weekly goals:</strong><br>${utils.escapeHtml(d.weeklyGoals).replace(/\n/g, '<br>')}</div>`);
+        if (d.asks.kristyn) parts.push(`<div class="review-line"><strong>Kristyn's ask:</strong> ${utils.escapeHtml(d.asks.kristyn)}</div>`);
+        if (d.asks.julio) parts.push(`<div class="review-line"><strong>Julio's ask:</strong> ${utils.escapeHtml(d.asks.julio)}</div>`);
+
+        summary.innerHTML = parts.length > 0 ? parts.join('') :
+            `<div class="empty-state-text">Nothing captured yet.</div>`;
+    },
+
+    // ---------- Flag renderer ----------
+    _renderFlags(containerId, flags) {
+        const el = document.getElementById(containerId);
+        if (!el) return;
+        if (!flags || flags.length === 0) {
+            el.innerHTML = '';
+            return;
+        }
+        el.innerHTML = flags.map(f => `
+            <div class="coach-flag ${f.level === 'warn' ? 'warn' : 'info'}">
+                <span class="coach-flag-icon">${f.level === 'warn' ? '⚠' : 'ℹ'}</span>
+                <span>${utils.escapeHtml(f.text)}</span>
+            </div>`).join('');
+    },
+
+    // ---------- Save ----------
+    async save() {
+        const d = state.wizardData;
+        const tomorrow = utils.getTomorrowString();
+        const today = utils.getTodayString();
+
+        // 1. Process today's task review
+        for (const [taskId, action] of Object.entries(d.taskReview)) {
+            if (action === 'done') {
                 await db_ops.updateTask(taskId, {
                     status: 'done',
                     completedAt: firebase.firestore.FieldValue.serverTimestamp()
                 });
+            } else if (action === 'rolled') {
+                // Leave assigned to today? Actually, remove the assignment so it goes to brain dump;
+                // the user will re-assign via focus if they want it for tomorrow.
+                await db_ops.updateTask(taskId, { assignedDate: null });
+            } else if (action === 'drop') {
+                await db_ops.deleteTask(taskId);
             }
         }
-        
-        // Brain dump tasks were already created in step 6->7 transition
-        // Just assign selected tasks to tomorrow
-        for (const taskId of this.data.selectedTasks) {
+
+        // 2. Create new tasks from brain dump items that were selected
+        const newTaskIds = [];
+        for (const nt of d.newTasksFromBrainDump) {
+            const id = await db_ops.addTask(nt.title, tomorrow);
+            if (id) newTaskIds.push(id);
+        }
+
+        // 3. Create tasks for promoted intentions
+        const intentionTaskIds = [];
+        for (const pi of d.promotedIntentions) {
+            const id = await db_ops.addTask(pi.title, tomorrow, pi.intentionId);
+            if (id) intentionTaskIds.push({ taskId: id, intentionId: pi.intentionId });
+        }
+
+        // 4. Assign selected open tasks to tomorrow
+        for (const taskId of d.selectedTaskIds) {
             await db_ops.updateTask(taskId, { assignedDate: tomorrow });
         }
-        
-        utils.showToast('Tomorrow planned! 🎉', 'success');
+
+        // 5. Save the day plan
+        const allFocusTaskIds = [
+            ...d.selectedTaskIds,
+            ...newTaskIds,
+            ...intentionTaskIds.map(x => x.taskId)
+        ];
+        const planData = {
+            date: tomorrow,
+            checkIn: d.checkIn,
+            checkInNote: d.checkInNote,
+            checklistResponses: d.checklistResponses,
+            workBlocks: d.workBlocks,
+            coverage: d.coverage,
+            appointments: d.appointments,
+            focusTaskIds: allFocusTaskIds,
+            promotedIntentionIds: d.promotedIntentions.map(p => p.intentionId),
+            weeklyGoals: d.weeklyGoals,
+            asks: d.asks
+        };
+        await db_ops.saveDayPlan(tomorrow, planData);
+
+        // 6. Persist weekly goals to settings
+        if (state.settings) {
+            state.settings.weeklyGoals = d.weeklyGoals;
+            await db_ops.saveSettings({ weeklyGoals: d.weeklyGoals });
+        }
+
+        // 7. Any remaining brain-dump lines that weren't promoted become unassigned tasks
+        const dumpLines = (d.brainDumpText || '').split('\n').map(s => s.trim()).filter(Boolean);
+        const selectedDumpTitles = new Set(d.newTasksFromBrainDump.map(t => t.title));
+        for (const line of dumpLines) {
+            if (!selectedDumpTitles.has(line)) {
+                await db_ops.addTask(line, null);
+            }
+        }
+
         this.close();
-        
+        utils.showToast('Plan saved. Goodnight.', 'success');
         await loadData();
     }
 };
 
-// Edit Today's Plan
+// ============================================================================
+// Edit Today — light editor for same-day adjustments
+// ============================================================================
 const editToday = {
-    data: {},
-    
+    data: null,
+
     open() {
         if (!state.todayPlan) {
-            utils.showToast('No plan to edit - use Evening wizard first', 'warning');
+            utils.showToast('No plan for today to edit', 'warning');
             return;
         }
-        
-        // Load current plan data
-        this.data = {
-            parentUnavailable: {
-                kristyn: [...(state.todayPlan.parentUnavailable?.kristyn || [])],
-                julio: [...(state.todayPlan.parentUnavailable?.julio || [])]
-            },
-            helpersAvailable: {
-                nanny: [...(state.todayPlan.helpersAvailable?.nanny || [])],
-            },
-            appointments: [...(state.todayPlan.appointments || [])]
-        };
-        
+        // Deep clone
+        this.data = JSON.parse(JSON.stringify({
+            workBlocks: state.todayPlan.workBlocks || { kristyn: [], julio: [] },
+            coverage: state.todayPlan.coverage || { kristyn: [], julio: [], nanny: [], kayden: [] },
+            appointments: state.todayPlan.appointments || []
+        }));
         document.getElementById('editTodayModal').classList.add('active');
         this.render();
     },
-    
+
     close() {
         document.getElementById('editTodayModal').classList.remove('active');
     },
-    
+
     render() {
-        this.renderTimeBlocks('kristyn', 'editKristynList');
-        this.renderTimeBlocks('julio', 'editJulioList');
-        this.renderTimeBlocks('nanny', 'editNannyList', true);
-        this.renderAppointments();
-    },
-    
-    renderTimeBlocks(person, containerId, isHelper = false) {
-        const container = document.getElementById(containerId);
-        const blocks = isHelper ? 
-            this.data.helpersAvailable[person] : 
-            this.data.parentUnavailable[person];
-        
-        if (blocks.length === 0) {
-            container.innerHTML = '<p class="empty-state-text">No time blocks</p>';
-            return;
+        const renderList = (kind, person, blocks, containerId) => {
+            const container = document.getElementById(containerId);
+            if (!container) return;
+            if (!blocks || blocks.length === 0) {
+                container.innerHTML = `<div class="empty-state-text small">No blocks.</div>`;
+                return;
+            }
+            container.innerHTML = blocks.map((b, i) => `
+                <div class="time-block-row" data-edit-kind="${kind}" data-edit-person="${person}" data-edit-idx="${i}">
+                    <input type="time" class="time-input edit-block-field" value="${b.start || ''}" data-field="start">
+                    <span class="time-dash">–</span>
+                    <input type="time" class="time-input edit-block-field" value="${b.end || ''}" data-field="end">
+                    <input type="text" class="time-label-input edit-block-field" placeholder="Label" value="${utils.escapeHtml(b.label || '')}" data-field="label">
+                    <button class="block-remove" data-edit-remove-kind="${kind}" data-edit-remove-person="${person}" data-edit-remove-idx="${i}">×</button>
+                </div>`).join('');
+        };
+        WORK_PEOPLE.forEach(p => renderList('work', p, this.data.workBlocks[p],
+            p === 'kristyn' ? 'editKristynWorkList' : 'editJulioWorkList'));
+        const coverIds = { kristyn: 'editKristynCoverList', julio: 'editJulioCoverList', nanny: 'editNannyCoverList', kayden: 'editKaydenCoverList' };
+        COVERAGE_PEOPLE.forEach(p => renderList('cover', p, this.data.coverage[p], coverIds[p]));
+
+        // Appointments
+        const aptContainer = document.getElementById('editAppointmentsList');
+        if (aptContainer) {
+            if (this.data.appointments.length === 0) {
+                aptContainer.innerHTML = `<div class="empty-state-text small">No appointments.</div>`;
+            } else {
+                aptContainer.innerHTML = this.data.appointments.map((a, i) => `
+                    <div class="appointment-row" data-edit-apt-idx="${i}">
+                        <input type="text" class="apt-title-input edit-apt-field" placeholder="Title" value="${utils.escapeHtml(a.title || '')}" data-field="title">
+                        <div class="apt-time-row">
+                            <input type="time" class="time-input edit-apt-field" value="${a.startTime || ''}" data-field="startTime">
+                            <span class="time-dash">–</span>
+                            <input type="time" class="time-input edit-apt-field" value="${a.endTime || ''}" data-field="endTime">
+                        </div>
+                        <input type="text" class="apt-notes-input edit-apt-field" placeholder="Notes" value="${utils.escapeHtml(a.notes || '')}" data-field="notes">
+                        <button class="block-remove" data-edit-remove-apt="${i}">×</button>
+                    </div>`).join('');
+            }
         }
-        
-        container.innerHTML = blocks.map((block, idx) => `
-            <div class="time-block-item">
-                <input type="time" value="${block.start}" class="edit-time-input" data-person="${person}" data-idx="${idx}" data-field="start" data-helper="${isHelper}">
-                <input type="time" value="${block.end}" class="edit-time-input" data-person="${person}" data-idx="${idx}" data-field="end" data-helper="${isHelper}">
-                <button onclick="editToday.removeTimeBlock('${person}', ${idx}, ${isHelper})">×</button>
-            </div>
-        `).join('');
     },
-    
-    renderAppointments() {
-        const container = document.getElementById('editAppointmentsList');
-        
-        if (this.data.appointments.length === 0) {
-            container.innerHTML = '<p class="empty-state-text">No appointments</p>';
-            return;
-        }
-        
-        container.innerHTML = this.data.appointments.map((apt, idx) => `
-            <div class="appointment-item">
-                <input type="text" placeholder="Title" value="${apt.title || ''}" 
-                       class="edit-apt-input" data-idx="${idx}" data-field="title">
-                <input type="time" value="${apt.start || ''}" 
-                       class="edit-apt-input" data-idx="${idx}" data-field="start">
-                <input type="time" value="${apt.end || ''}" 
-                       class="edit-apt-input" data-idx="${idx}" data-field="end">
-                <button class="secondary-btn full-width" onclick="editToday.removeAppointment(${idx})">Remove</button>
-            </div>
-        `).join('');
+
+    collect() {
+        // Sync from DOM
+        WORK_PEOPLE.forEach(p => {
+            const id = p === 'kristyn' ? 'editKristynWorkList' : 'editJulioWorkList';
+            const rows = document.getElementById(id).querySelectorAll('.time-block-row');
+            const newBlocks = [];
+            rows.forEach(row => {
+                newBlocks.push({
+                    start: row.querySelector('[data-field="start"]').value,
+                    end: row.querySelector('[data-field="end"]').value,
+                    label: row.querySelector('[data-field="label"]').value.trim()
+                });
+            });
+            this.data.workBlocks[p] = newBlocks;
+        });
+        const coverIds = { kristyn: 'editKristynCoverList', julio: 'editJulioCoverList', nanny: 'editNannyCoverList', kayden: 'editKaydenCoverList' };
+        COVERAGE_PEOPLE.forEach(p => {
+            const rows = document.getElementById(coverIds[p]).querySelectorAll('.time-block-row');
+            const newBlocks = [];
+            rows.forEach(row => {
+                newBlocks.push({
+                    start: row.querySelector('[data-field="start"]').value,
+                    end: row.querySelector('[data-field="end"]').value,
+                    label: row.querySelector('[data-field="label"]').value.trim()
+                });
+            });
+            this.data.coverage[p] = newBlocks;
+        });
+        const aptRows = document.getElementById('editAppointmentsList').querySelectorAll('.appointment-row');
+        const apts = [];
+        aptRows.forEach(row => {
+            apts.push({
+                title: row.querySelector('[data-field="title"]').value.trim(),
+                startTime: row.querySelector('[data-field="startTime"]').value,
+                endTime: row.querySelector('[data-field="endTime"]').value,
+                notes: row.querySelector('[data-field="notes"]').value.trim()
+            });
+        });
+        this.data.appointments = apts;
     },
-    
-    addTimeBlock(person, isHelper = false) {
-        const block = { start: '09:00', end: '12:00' };
-        if (isHelper) {
-            this.data.helpersAvailable[person].push(block);
-        } else {
-            this.data.parentUnavailable[person].push(block);
-        }
+
+    addBlock(kind, person) {
+        this.collect();
+        if (kind === 'work') this.data.workBlocks[person].push({ start: '', end: '', label: '' });
+        else this.data.coverage[person].push({ start: '', end: '', label: '' });
         this.render();
     },
-    
-    removeTimeBlock(person, idx, isHelper = false) {
-        if (isHelper) {
-            this.data.helpersAvailable[person].splice(idx, 1);
-        } else {
-            this.data.parentUnavailable[person].splice(idx, 1);
-        }
+
+    removeBlock(kind, person, idx) {
+        this.collect();
+        if (kind === 'work') this.data.workBlocks[person].splice(idx, 1);
+        else this.data.coverage[person].splice(idx, 1);
         this.render();
     },
-    
+
     addAppointment() {
-        this.data.appointments.push({ title: '', start: '', end: '' });
+        this.collect();
+        this.data.appointments.push({ title: '', startTime: '', endTime: '', notes: '' });
         this.render();
     },
-    
+
     removeAppointment(idx) {
+        this.collect();
         this.data.appointments.splice(idx, 1);
         this.render();
     },
-    
+
     async save() {
+        this.collect();
         const today = utils.getTodayString();
-        
-        // Update today's plan with new data
-        const updatedPlan = {
+        const updated = {
             ...state.todayPlan,
-            parentUnavailable: this.data.parentUnavailable,
-            helpersAvailable: this.data.helpersAvailable,
+            workBlocks: this.data.workBlocks,
+            coverage: this.data.coverage,
             appointments: this.data.appointments
         };
-        
-        // Recalculate schedule with new constraints
-        const schedule = wizard.calculateSchedule.call({ data: updatedPlan });
-        updatedPlan.calculatedSchedule = schedule.blocks;
-        
-        // Save to database
-        await db_ops.saveDayPlan(today, updatedPlan);
-        
-        // Update state and UI
-        state.todayPlan = updatedPlan;
-        await renderTodaySchedule();
-        
-        utils.showToast('Plan updated!', 'success');
+        await db_ops.saveDayPlan(today, updated);
         this.close();
+        utils.showToast('Today updated', 'success');
+        await loadData();
     }
 };
 
-// Event Handlers Setup
-function setupEventHandlers() {
-    // Sign out
-    document.getElementById('signOutBtn').addEventListener('click', async () => {
-        try {
-            await auth.signOut();
-        } catch (error) {
-            console.error('Sign out error:', error);
+// ============================================================================
+// Plan rendering — "The Plan" tab
+// ============================================================================
+function renderTodayPlan() {
+    const container = document.getElementById('planContent');
+    const exportBtn = document.getElementById('exportTodayBtn');
+    const planActions = document.getElementById('planActions');
+    if (!container) return;
+
+    if (!state.todayPlan) {
+        container.innerHTML = `
+            <div class="empty-state">
+                <div class="empty-state-icon">🌅</div>
+                <div class="empty-state-text">No plan for today yet.</div>
+                <div class="empty-state-subtext">Plans are made the night before — head to Evening Planning.</div>
+            </div>`;
+        if (exportBtn) exportBtn.style.display = 'none';
+        if (planActions) planActions.style.display = 'none';
+        return;
+    }
+    if (exportBtn) exportBtn.style.display = 'flex';
+    if (planActions) planActions.style.display = 'block';
+
+    const p = state.todayPlan;
+    const sections = [];
+
+    // Asks (high signal — show first)
+    if (p.asks?.kristyn || p.asks?.julio) {
+        const asks = [];
+        if (p.asks.kristyn) asks.push(`<div class="ask-line"><strong>Kristyn asked:</strong> ${utils.escapeHtml(p.asks.kristyn)}</div>`);
+        if (p.asks.julio) asks.push(`<div class="ask-line"><strong>Julio asked:</strong> ${utils.escapeHtml(p.asks.julio)}</div>`);
+        sections.push(`
+            <div class="plan-section asks-section">
+                <h3 class="section-title">Asks for today</h3>
+                ${asks.join('')}
+            </div>`);
+    }
+
+    // Weekly goals
+    if (p.weeklyGoals) {
+        sections.push(`
+            <div class="plan-section">
+                <h3 class="section-title">Weekly goals</h3>
+                <div class="weekly-goals-display">${utils.escapeHtml(p.weeklyGoals).replace(/\n/g, '<br>')}</div>
+            </div>`);
+    }
+
+    // Focus tasks
+    const focusIds = p.focusTaskIds || [];
+    const focusTasks = focusIds.map(id => state.tasks.find(t => t.id === id)).filter(Boolean);
+    if (focusTasks.length > 0) {
+        sections.push(`
+            <div class="plan-section">
+                <h3 class="section-title">Today's focus</h3>
+                <div class="task-list">
+                    ${focusTasks.map(t => {
+                        const intention = t.intentionId ? state.intentions.find(i => i.id === t.intentionId) : null;
+                        return `
+                            <div class="task-item ${t.status === 'done' ? 'completed' : ''}">
+                                <input type="checkbox" class="task-checkbox" data-id="${t.id}" ${t.status === 'done' ? 'checked' : ''}>
+                                <div class="task-text-wrap">
+                                    <span class="task-text">${utils.escapeHtml(t.title)}</span>
+                                    ${intention ? `<span class="intention-tag">long-game: ${utils.escapeHtml(intention.title)}</span>` : ''}
+                                </div>
+                            </div>`;
+                    }).join('')}
+                </div>
+            </div>`);
+    }
+
+    // Build chronological timeline
+    const timelineItems = [];
+    for (const person of WORK_PEOPLE) {
+        for (const b of (p.workBlocks?.[person] || [])) {
+            if (b.start && b.end) {
+                timelineItems.push({
+                    type: 'work',
+                    start: b.start, end: b.end,
+                    title: `${PERSON_LABEL[person]} — work${b.label ? ': ' + b.label : ''}`,
+                    person
+                });
+            }
         }
+    }
+    for (const person of COVERAGE_PEOPLE) {
+        for (const b of (p.coverage?.[person] || [])) {
+            if (b.start && b.end) {
+                timelineItems.push({
+                    type: 'cover',
+                    start: b.start, end: b.end,
+                    title: `${PERSON_LABEL[person]} covers Kayden${b.label ? ' — ' + b.label : ''}`,
+                    person
+                });
+            }
+        }
+    }
+    for (const a of (p.appointments || [])) {
+        if (a.title && a.startTime) {
+            timelineItems.push({
+                type: 'appointment',
+                start: a.startTime, end: a.endTime || a.startTime,
+                title: a.title,
+                notes: a.notes
+            });
+        }
+    }
+    timelineItems.sort((x, y) => (x.start || '').localeCompare(y.start || ''));
+
+    if (timelineItems.length > 0) {
+        sections.push(`
+            <div class="plan-section">
+                <h3 class="section-title">Timeline</h3>
+                <div class="schedule-timeline">
+                    ${timelineItems.map(item => `
+                        <div class="schedule-block block-type-${item.type}">
+                            <div class="block-time">
+                                ${utils.formatTime(item.start)}<br>
+                                ${item.end !== item.start ? utils.formatTime(item.end) : ''}
+                            </div>
+                            <div class="block-content">
+                                <div class="block-title">${utils.escapeHtml(item.title)}</div>
+                                ${item.notes ? `<div class="block-notes">${utils.escapeHtml(item.notes)}</div>` : ''}
+                            </div>
+                        </div>`).join('')}
+                </div>
+            </div>`);
+    }
+
+    // Check-in note (yesterday's reflection)
+    if (p.checkInNote) {
+        sections.push(`
+            <div class="plan-section">
+                <h3 class="section-title">Note from last night</h3>
+                <div class="checkin-note-display">${utils.escapeHtml(p.checkInNote)}</div>
+            </div>`);
+    }
+
+    container.innerHTML = sections.length > 0 ? sections.join('') :
+        `<div class="empty-state-text">Plan saved but empty — try editing it.</div>`;
+}
+
+function renderTomorrowPreview() {
+    const container = document.getElementById('tomorrowPreview');
+    if (!container) return;
+
+    if (!state.tomorrowPlan) {
+        container.innerHTML = `
+            <div class="control-card">
+                <h4>No plan for tomorrow yet</h4>
+                <p>Tap "Start Alignment" to walk through the wizard with your partner.</p>
+            </div>`;
+        return;
+    }
+
+    const p = state.tomorrowPlan;
+    const focusCount = (p.focusTaskIds || []).length;
+    const aptCount = (p.appointments || []).filter(a => a.title).length;
+    const workCount = (p.workBlocks?.kristyn?.length || 0) + (p.workBlocks?.julio?.length || 0);
+    const coverCount = COVERAGE_PEOPLE.reduce((sum, person) => sum + (p.coverage?.[person]?.length || 0), 0);
+
+    container.innerHTML = `
+        <div class="control-card">
+            <h4>Tomorrow's plan is set ✓</h4>
+            <div class="preview-stats">
+                <div class="preview-stat"><strong>${focusCount}</strong> focus task${focusCount === 1 ? '' : 's'}</div>
+                <div class="preview-stat"><strong>${workCount}</strong> work block${workCount === 1 ? '' : 's'}</div>
+                <div class="preview-stat"><strong>${coverCount}</strong> coverage block${coverCount === 1 ? '' : 's'}</div>
+                <div class="preview-stat"><strong>${aptCount}</strong> appointment${aptCount === 1 ? '' : 's'}</div>
+            </div>
+            ${p.asks?.kristyn || p.asks?.julio ? `
+                <div class="preview-asks">
+                    ${p.asks.kristyn ? `<div><strong>Kristyn asked:</strong> ${utils.escapeHtml(p.asks.kristyn)}</div>` : ''}
+                    ${p.asks.julio ? `<div><strong>Julio asked:</strong> ${utils.escapeHtml(p.asks.julio)}</div>` : ''}
+                </div>` : ''}
+        </div>`;
+}
+
+// ============================================================================
+// Data loading
+// ============================================================================
+async function loadData() {
+    try {
+        state.settings = await db_ops.getSettings();
+        state.todayPlan = await db_ops.getDayPlan(utils.getTodayString());
+        state.tomorrowPlan = await db_ops.getDayPlan(utils.getTomorrowString());
+
+        const todayDate = document.getElementById('todayDate');
+        const tomorrowDate = document.getElementById('tomorrowDate');
+        if (todayDate) todayDate.textContent = utils.formatDate(utils.getTodayString());
+        if (tomorrowDate) tomorrowDate.textContent = utils.formatDate(utils.getTomorrowString());
+
+        renderSettings();
+        renderTodayPlan();
+        renderTomorrowPreview();
+    } catch (e) {
+        console.error('loadData:', e);
+        utils.showToast('Failed to load data', 'error');
+    }
+}
+
+// ============================================================================
+// Event Handlers
+// ============================================================================
+function setupEventHandlers() {
+    // ---------- Sign out ----------
+    document.getElementById('signOutBtn').addEventListener('click', async () => {
+        try { await auth.signOut(); }
+        catch (e) { console.error('signOut:', e); }
     });
-    
-    // Navigation
+
+    // ---------- Tab navigation ----------
     document.querySelectorAll('.nav-item').forEach(btn => {
         btn.addEventListener('click', (e) => {
-            e.preventDefault(); // Prevent any default behavior
-            e.stopPropagation(); // Stop event bubbling
-            
+            e.preventDefault();
             const tab = btn.dataset.tab;
-            console.log('Switching to tab:', tab);
-            
-            // Remove active class from all navigation buttons
-            document.querySelectorAll('.nav-item').forEach(b => {
-                b.classList.remove('active');
-            });
-            
-            // Add active class to clicked button
+            document.querySelectorAll('.nav-item').forEach(b => b.classList.remove('active'));
             btn.classList.add('active');
-            
-            // Hide ALL tab panes first
-            document.querySelectorAll('.tab-pane').forEach(pane => {
-                pane.classList.remove('active');
-            });
-            
-            // Show the selected tab pane
-            const tabPaneId = `${tab}Tab`;
-            const tabPane = document.getElementById(tabPaneId);
-            
-            if (tabPane) {
-                tabPane.classList.add('active');
-                console.log('Showing tab pane:', tabPaneId);
-                
-                // Trigger specific rendering based on tab
-                if (tab === 'history') {
-                    console.log('Rendering history');
-                    ui.renderHistory();
-                } else if (tab === 'tasks') {
-                    console.log('Rendering tasks');
-                    ui.renderTasks(state.tasks);
-                } else if (tab === 'settings') {
-                    console.log('Settings tab activated');
-                    // Settings are static in HTML, no need to render
-                }
-            } else {
-                console.error('Tab pane not found:', tabPaneId);
-            }
+            document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
+            const pane = document.getElementById(`${tab}Tab`);
+            if (pane) pane.classList.add('active');
+            if (tab === 'history') ui.renderHistory();
+            else if (tab === 'tasks') ui.renderTasks(state.tasks);
+            else if (tab === 'intentions') ui.renderIntentions(state.intentions);
         });
     });
-    
-    // Wizard
+
+    // ---------- Wizard ----------
     document.getElementById('openWizardBtn').addEventListener('click', () => wizard.open());
     document.getElementById('closeWizard').addEventListener('click', () => wizard.close());
-    
-    // Edit Today
+    document.querySelectorAll('.wizard-next').forEach(btn => btn.addEventListener('click', () => wizard.next()));
+    document.querySelectorAll('.wizard-back').forEach(btn => btn.addEventListener('click', () => wizard.back()));
+    document.getElementById('saveWizard').addEventListener('click', () => wizard.save());
+
+    // Step 1 — check-in buttons + dynamic checklist
+    document.querySelectorAll('.check-in-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            state.wizardData.checkIn = btn.dataset.value;
+            document.querySelectorAll('.check-in-btn').forEach(b => b.classList.remove('selected'));
+            btn.classList.add('selected');
+        });
+    });
+
+    // Step 2 + 3 — add/remove blocks (event delegation)
+    document.addEventListener('click', (e) => {
+        const addWork = e.target.closest('[data-add-work]');
+        if (addWork) { wizard.addBlock('work', addWork.dataset.addWork); return; }
+        const addCover = e.target.closest('[data-add-cover]');
+        if (addCover) { wizard.addBlock('cover', addCover.dataset.addCover); return; }
+        const blockRemove = e.target.closest('.block-remove[data-kind]');
+        if (blockRemove) {
+            wizard.removeBlock(blockRemove.dataset.kind, blockRemove.dataset.person, parseInt(blockRemove.dataset.idx, 10));
+            return;
+        }
+    });
+
+    // Step 2 + 3 — recompute coach flags as user types
+    document.addEventListener('input', (e) => {
+        // Live update inside wizard time-block rows
+        if (e.target.closest('.wizard-step .time-block-row')) {
+            const row = e.target.closest('.time-block-row');
+            const kind = row.dataset.kind;
+            const person = row.dataset.person;
+            const idx = parseInt(row.dataset.idx, 10);
+            const field = e.target.dataset.field;
+            const target = kind === 'work' ? state.wizardData.workBlocks[person] : state.wizardData.coverage[person];
+            if (target[idx]) {
+                target[idx][field] = field === 'label' ? e.target.value.trim() : e.target.value;
+            }
+            // Refresh flags only (not whole list, to preserve focus)
+            if (state.wizardStep === 2) {
+                wizard._renderFlags('workFlags', coach.workConflicts(state.wizardData.workBlocks));
+            } else if (state.wizardStep === 3) {
+                wizard._renderFlags('coverageFlags', coach.coverageGaps(state.wizardData.coverage, state.wizardData.appointments));
+            }
+        }
+
+        // Appointments live editing
+        if (e.target.closest('.wizard-step .appointment-row')) {
+            const row = e.target.closest('.appointment-row');
+            const idx = parseInt(row.dataset.idx, 10);
+            const field = e.target.dataset.field;
+            if (state.wizardData.appointments[idx]) {
+                state.wizardData.appointments[idx][field] = ['title', 'notes'].includes(field)
+                    ? e.target.value.trim() : e.target.value;
+            }
+            if (state.wizardStep === 4) {
+                wizard._renderFlags('appointmentFlags', [
+                    ...coach.appointmentConflicts(state.wizardData.appointments, state.wizardData.workBlocks)
+                ]);
+            }
+        }
+
+        // Edit Today live editing
+        if (e.target.closest('#editTodayModal .time-block-row')) {
+            const row = e.target.closest('.time-block-row');
+            const kind = row.dataset.editKind;
+            const person = row.dataset.editPerson;
+            const idx = parseInt(row.dataset.editIdx, 10);
+            const field = e.target.dataset.field;
+            if (editToday.data) {
+                const target = kind === 'work' ? editToday.data.workBlocks[person] : editToday.data.coverage[person];
+                if (target[idx]) target[idx][field] = field === 'label' ? e.target.value.trim() : e.target.value;
+            }
+        }
+        if (e.target.closest('#editTodayModal .appointment-row')) {
+            const row = e.target.closest('.appointment-row');
+            const idx = parseInt(row.dataset.editAptIdx, 10);
+            const field = e.target.dataset.field;
+            if (editToday.data && editToday.data.appointments[idx]) {
+                editToday.data.appointments[idx][field] = ['title', 'notes'].includes(field)
+                    ? e.target.value.trim() : e.target.value;
+            }
+        }
+    });
+
+    // Step 4 — appointments
+    document.getElementById('addAppointment').addEventListener('click', () => wizard.addAppointment());
+    document.addEventListener('click', (e) => {
+        const removeApt = e.target.closest('[data-remove-apt]');
+        if (removeApt && removeApt.closest('.wizard-step')) {
+            wizard.removeAppointment(parseInt(removeApt.dataset.removeApt, 10));
+        }
+    });
+
+    // Step 5 — task review
+    document.addEventListener('click', (e) => {
+        const reviewBtn = e.target.closest('.task-review-btn');
+        if (reviewBtn) {
+            const id = reviewBtn.dataset.id;
+            const review = reviewBtn.dataset.review;
+            state.wizardData.taskReview[id] = review;
+            // Update visual state
+            document.querySelectorAll(`.task-review-btn[data-id="${id}"]`).forEach(b => b.classList.remove('selected'));
+            reviewBtn.classList.add('selected');
+        }
+    });
+
+    // Step 7 — focus selection + intention promote
+    document.addEventListener('click', (e) => {
+        const selItem = e.target.closest('.task-selection-item');
+        if (selItem && state.wizardStep === 7) {
+            wizard.toggleFocusSelection(selItem.dataset.kind, selItem.dataset.id);
+            return;
+        }
+        const promoteBtn = e.target.closest('.promote-intention-btn');
+        if (promoteBtn && state.wizardStep === 7) {
+            wizard.togglePromoteIntention(promoteBtn.dataset.id);
+            return;
+        }
+    });
+
+    // Step 1 — checklist toggle
+    document.addEventListener('change', (e) => {
+        if (e.target.classList.contains('checklist-checkbox')) {
+            state.wizardData.checklistResponses[e.target.dataset.id] = e.target.checked;
+        }
+    });
+
+    // ---------- Edit Today modal ----------
     document.getElementById('editTodayPlanBtn')?.addEventListener('click', () => editToday.open());
     document.getElementById('closeEditToday').addEventListener('click', () => editToday.close());
     document.getElementById('cancelEditToday').addEventListener('click', () => editToday.close());
     document.getElementById('saveEditToday').addEventListener('click', () => editToday.save());
-    
-    document.getElementById('editAddKristyn').addEventListener('click', () => editToday.addTimeBlock('kristyn'));
-    document.getElementById('editAddJulio').addEventListener('click', () => editToday.addTimeBlock('julio'));
-    document.getElementById('editAddNanny').addEventListener('click', () => editToday.addTimeBlock('nanny', true));
     document.getElementById('editAddAppointment').addEventListener('click', () => editToday.addAppointment());
-    
-    // Edit inputs (event delegation)
-    document.addEventListener('input', (e) => {
-        if (e.target.classList.contains('edit-time-input')) {
-            const person = e.target.dataset.person;
-            const idx = parseInt(e.target.dataset.idx);
-            const field = e.target.dataset.field;
-            const isHelper = e.target.dataset.helper === 'true';
-            
-            if (isHelper) {
-                editToday.data.helpersAvailable[person][idx][field] = e.target.value;
-            } else {
-                editToday.data.parentUnavailable[person][idx][field] = e.target.value;
-            }
-        }
-        
-        if (e.target.classList.contains('edit-apt-input')) {
-            const idx = parseInt(e.target.dataset.idx);
-            const field = e.target.dataset.field;
-            editToday.data.appointments[idx][field] = e.target.value;
-        }
-    });
-    
-    document.getElementById('clearPlanBtn').addEventListener('click', async () => {
-        if (confirm('Clear tomorrow\'s plan? This cannot be undone.')) {
-            const tomorrow = utils.getTomorrowString();
-            try {
-                await db.collection('families').doc(FAMILY_ID)
-                    .collection('day_plans').doc(tomorrow).delete();
-                utils.showToast('Plan cleared', 'success');
-                await loadData();
-            } catch (error) {
-                console.error('Error clearing plan:', error);
-                utils.showToast('Failed to clear plan', 'error');
-            }
-        }
-    });
-    
-    document.querySelectorAll('.wizard-next').forEach(btn => {
-        btn.addEventListener('click', () => wizard.next());
-    });
-    
-    document.querySelectorAll('.wizard-back').forEach(btn => {
-        btn.addEventListener('click', () => wizard.back());
-    });
-    
-    document.getElementById('saveWizard').addEventListener('click', () => wizard.save());
-    document.getElementById('addAppointment').addEventListener('click', () => wizard.addAppointment());
-    
-    // Time block add buttons (event delegation)
+
     document.addEventListener('click', (e) => {
-        if (e.target.dataset.person && e.target.textContent.includes('Add Time Block')) {
-            const person = e.target.dataset.person;
-            const isHelper = ['nanny', 'kayden'].includes(person);
-            wizard.addTimeBlock(person, isHelper);
+        const addEditWork = e.target.closest('[data-edit-work]');
+        if (addEditWork && addEditWork.closest('#editTodayModal')) {
+            editToday.addBlock('work', addEditWork.dataset.editWork); return;
+        }
+        const addEditCover = e.target.closest('[data-edit-cover]');
+        if (addEditCover && addEditCover.closest('#editTodayModal')) {
+            editToday.addBlock('cover', addEditCover.dataset.editCover); return;
+        }
+        const editRemove = e.target.closest('.block-remove[data-edit-remove-kind]');
+        if (editRemove) {
+            editToday.removeBlock(
+                editRemove.dataset.editRemoveKind,
+                editRemove.dataset.editRemovePerson,
+                parseInt(editRemove.dataset.editRemoveIdx, 10)
+            );
+            return;
+        }
+        const editRemoveApt = e.target.closest('[data-edit-remove-apt]');
+        if (editRemoveApt) {
+            editToday.removeAppointment(parseInt(editRemoveApt.dataset.editRemoveApt, 10));
+            return;
         }
     });
-    
-    // Wizard input delegation for time blocks and appointments
-    document.addEventListener('input', (e) => {
-        // Time blocks
-        if (e.target.dataset.person && e.target.dataset.idx !== undefined) {
-            const person = e.target.dataset.person;
-            const idx = parseInt(e.target.dataset.idx);
-            const field = e.target.dataset.field;
-            const isHelper = e.target.dataset.helper === 'true';
-            
-            if (isHelper) {
-                wizard.data.helpersAvailable[person][idx][field] = e.target.value;
-            } else {
-                wizard.data.parentUnavailable[person][idx][field] = e.target.value;
-            }
-        }
-        
-        // Appointments
-        if (e.target.classList.contains('appointment-input')) {
-            const idx = parseInt(e.target.dataset.idx);
-            const field = e.target.dataset.field;
-            if (wizard.data.appointments[idx]) {
-                wizard.data.appointments[idx][field] = e.target.value;
-            }
+
+    // ---------- Clear tomorrow's plan ----------
+    document.getElementById('clearPlanBtn').addEventListener('click', async () => {
+        if (!confirm("Clear tomorrow's plan? This cannot be undone.")) return;
+        const ok = await db_ops.deleteDayPlan(utils.getTomorrowString());
+        if (ok) {
+            utils.showToast('Plan cleared', 'success');
+            await loadData();
+        } else {
+            utils.showToast('Failed to clear plan', 'error');
         }
     });
-    
-    document.getElementById('actualWakeTime').addEventListener('change', async (e) => {
-        const date = utils.getTodayString();
-        const log = await db_ops.getDayLog(date) || {};
-        log.actualWake = e.target.value;
-        log.date = date; // Ensure date is set
-        await db_ops.saveDayLog(date, log);
-        await renderTodaySchedule();
-        utils.showToast('Wake time updated - schedule adjusted', 'success');
-    });
-    
-    // Refresh schedule button
+
+    // ---------- Refresh button ----------
     document.getElementById('refreshScheduleBtn').addEventListener('click', async () => {
-        const btn = document.getElementById('refreshScheduleBtn');
-        btn.classList.add('spinning');
-        
-        try {
-            await loadNapTimes();
-            await renderTodaySchedule();
-            renderTodayTasks();
-            utils.showToast('Schedule refreshed', 'success');
-        } catch (error) {
-            console.error('Error refreshing:', error);
-            utils.showToast('Failed to refresh', 'error');
-        }
-        
-        setTimeout(() => btn.classList.remove('spinning'), 500);
+        await loadData();
+        utils.showToast('Refreshed', 'success');
     });
-    
-    // Nap buttons
-    document.querySelectorAll('.nap-btn').forEach(btn => {
-        btn.addEventListener('click', async (e) => {
-            const napNum = btn.dataset.nap;
-            const isStart = btn.classList.contains('start');
-            const date = utils.getTodayString();
-            
-            const log = await db_ops.getDayLog(date) || {};
-            if (!log.naps) log.naps = {};
-            if (!log.naps[`nap${napNum}`]) log.naps[`nap${napNum}`] = {};
-            
-            if (isStart) {
-                log.naps[`nap${napNum}`].start = utils.getCurrentTime();
-                // Update input field
-                document.getElementById(`nap${napNum}StartTime`).value = log.naps[`nap${napNum}`].start;
-            } else if (btn.classList.contains('stop')) {
-                log.naps[`nap${napNum}`].end = utils.getCurrentTime();
-                // Update input field
-                document.getElementById(`nap${napNum}EndTime`).value = log.naps[`nap${napNum}`].end;
-            }
-            
-            await db_ops.saveDayLog(date, log);
-            updateNapDisplay(napNum, log.naps[`nap${napNum}`]);
-            await renderTodaySchedule();
-            utils.showToast(`Nap ${napNum} ${isStart ? 'started' : 'stopped'}`, 'success');
-        });
-    });
-    
-    // Manual nap time update buttons
-    document.getElementById('updateNap1').addEventListener('click', async () => {
-        await updateManualNapTime(1);
-    });
-    
-    document.getElementById('updateNap2').addEventListener('click', async () => {
-        await updateManualNapTime(2);
-    });
-    
-    // Manual nap time inputs trigger update on change
-    ['nap1StartTime', 'nap1EndTime', 'nap2StartTime', 'nap2EndTime'].forEach(id => {
-        document.getElementById(id).addEventListener('change', async (e) => {
-            const napNum = id.includes('nap1') ? 1 : 2;
-            await updateManualNapTime(napNum);
-        });
-    });
-    
-    // Tasks
+
+    // ---------- Tasks ----------
     document.getElementById('addTaskBtn').addEventListener('click', async () => {
         const input = document.getElementById('newTaskInput');
         const title = input.value.trim();
-        
         if (title) {
             await db_ops.addTask(title);
             input.value = '';
         }
     });
-    
-    // Quick Add Focus Task for Today
-    document.getElementById('quickAddTaskBtn').addEventListener('click', async () => {
-        const input = document.getElementById('quickAddTaskInput');
-        const title = input.value.trim();
-        
-        if (title) {
-            const todayStr = utils.getTodayString();
-            // Add task and assign to today
-            const taskId = await db_ops.addTask(title, todayStr);
-            input.value = '';
-            
-            // Also update today's plan to include this task
-            if (state.todayPlan) {
-                if (!state.todayPlan.selectedTasks) {
-                    state.todayPlan.selectedTasks = [];
-                }
-                if (taskId && !state.todayPlan.selectedTasks.includes(taskId)) {
-                    state.todayPlan.selectedTasks.push(taskId);
-                    await db_ops.saveDayPlan(todayStr, state.todayPlan);
+    document.getElementById('newTaskInput').addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') document.getElementById('addTaskBtn').click();
+    });
+
+    // Task interactions (delegation)
+    document.addEventListener('click', async (e) => {
+        if (e.target.classList.contains('task-checkbox')) {
+            const id = e.target.dataset.id;
+            const checked = e.target.checked;
+
+            // If task linked to an intention and was just completed — bump intention's last progress
+            if (checked) {
+                const task = state.tasks.find(t => t.id === id);
+                if (task && task.intentionId) {
+                    const intention = state.intentions.find(i => i.id === task.intentionId);
+                    if (intention) {
+                        await db_ops.updateIntention(task.intentionId, {
+                            lastProgressAtStr: utils.getTodayString()
+                        });
+                    }
                 }
             }
-            
-            utils.showToast('Focus task added for today', 'success');
-            renderTodayTasks();
+
+            await db_ops.updateTask(id, {
+                status: checked ? 'done' : 'open',
+                completedAt: checked ? firebase.firestore.FieldValue.serverTimestamp() : null
+            });
+        }
+        if (e.target.classList.contains('task-delete')) {
+            const id = e.target.dataset.id;
+            await db_ops.deleteTask(id);
         }
     });
-    
-    document.getElementById('quickAddTaskInput').addEventListener('keypress', (e) => {
-        if (e.key === 'Enter') {
-            document.getElementById('quickAddTaskBtn').click();
-        }
-    });
-    
-    document.getElementById('newTaskInput').addEventListener('keypress', (e) => {
-        if (e.key === 'Enter') {
-            document.getElementById('addTaskBtn').click();
-        }
-    });
-    
-    // Meals
+
+    // ---------- Meals ----------
     document.getElementById('addMealBtn').addEventListener('click', async () => {
         const input = document.getElementById('newMealInput');
         const content = input.value.trim();
-        
         if (content) {
             await db_ops.addMeal(content);
             input.value = '';
             utils.showToast('Meal added', 'success');
         }
     });
-    
-    // Meal interactions (event delegation)
+
+    // Meal edit/delete (delegation)
     document.addEventListener('click', async (e) => {
-        // Edit button
         if (e.target.closest('.meal-edit-btn')) {
             const btn = e.target.closest('.meal-edit-btn');
             const id = btn.dataset.id;
-            const contentEl = document.getElementById(`meal-content-${id}`);
-            const editForm = document.getElementById(`meal-edit-${id}`);
-            
-            contentEl.style.display = 'none';
+            document.getElementById(`meal-content-${id}`).style.display = 'none';
             btn.parentElement.style.display = 'none';
-            editForm.style.display = 'block';
+            document.getElementById(`meal-edit-${id}`).style.display = 'block';
         }
-        
-        // Cancel edit button
         if (e.target.closest('.meal-cancel-btn')) {
             const btn = e.target.closest('.meal-cancel-btn');
             const id = btn.dataset.id;
             const contentEl = document.getElementById(`meal-content-${id}`);
-            const editForm = document.getElementById(`meal-edit-${id}`);
-            const actionsEl = contentEl.parentElement.querySelector('.meal-actions');
-            
             contentEl.style.display = 'block';
-            actionsEl.style.display = 'flex';
-            editForm.style.display = 'none';
+            contentEl.parentElement.querySelector('.meal-actions').style.display = 'flex';
+            document.getElementById(`meal-edit-${id}`).style.display = 'none';
         }
-        
-        // Save edit button
         if (e.target.closest('.meal-save-btn')) {
             const btn = e.target.closest('.meal-save-btn');
             const id = btn.dataset.id;
-            const editForm = document.getElementById(`meal-edit-${id}`);
-            const textarea = editForm.querySelector('textarea');
+            const textarea = document.getElementById(`meal-edit-${id}`).querySelector('textarea');
             const newContent = textarea.value.trim();
-            
             if (newContent) {
                 await db_ops.updateMeal(id, newContent);
                 utils.showToast('Meal updated', 'success');
             }
         }
-        
-        // Delete button
         if (e.target.closest('.meal-delete-btn')) {
             const btn = e.target.closest('.meal-delete-btn');
             const id = btn.dataset.id;
-            
             if (confirm('Delete this meal?')) {
                 await db_ops.deleteMeal(id);
                 utils.showToast('Meal deleted', 'success');
             }
         }
     });
-    
-    // Lists interactions
-    document.querySelectorAll('.add-list-item-btn').forEach(btn => {
+
+    // ---------- Lists ----------
+    document.querySelectorAll('.add-list-item-btn[data-category]').forEach(btn => {
         btn.addEventListener('click', () => {
             const category = btn.dataset.category;
             document.getElementById(`${category}Input`).style.display = 'block';
             btn.style.display = 'none';
         });
     });
-    
     document.querySelectorAll('.cancel-list-btn').forEach(btn => {
         btn.addEventListener('click', () => {
             const category = btn.dataset.category;
-            const inputContainer = document.getElementById(`${category}Input`);
-            inputContainer.style.display = 'none';
-            inputContainer.querySelector('textarea').value = '';
+            const c = document.getElementById(`${category}Input`);
+            c.style.display = 'none';
+            c.querySelector('textarea').value = '';
             document.querySelector(`.add-list-item-btn[data-category="${category}"]`).style.display = 'block';
         });
     });
-    
     document.querySelectorAll('.save-list-btn').forEach(btn => {
         btn.addEventListener('click', async () => {
             const category = btn.dataset.category;
-            const inputContainer = document.getElementById(`${category}Input`);
-            const textarea = inputContainer.querySelector('textarea');
+            const c = document.getElementById(`${category}Input`);
+            const textarea = c.querySelector('textarea');
             const content = textarea.value.trim();
-            
             if (content) {
                 await db_ops.addListItem(category, content);
                 textarea.value = '';
-                inputContainer.style.display = 'none';
+                c.style.display = 'none';
                 document.querySelector(`.add-list-item-btn[data-category="${category}"]`).style.display = 'block';
                 utils.showToast('Item added', 'success');
             }
         });
     });
-    
-    // List item interactions (event delegation)
+    // List item edit/delete (delegation)
     document.addEventListener('click', async (e) => {
-        // Edit button
         if (e.target.closest('.list-edit-btn')) {
             const btn = e.target.closest('.list-edit-btn');
             const id = btn.dataset.id;
-            const contentEl = document.getElementById(`list-content-${id}`);
-            const editForm = document.getElementById(`list-edit-${id}`);
-            
-            contentEl.style.display = 'none';
+            document.getElementById(`list-content-${id}`).style.display = 'none';
             btn.parentElement.style.display = 'none';
-            editForm.style.display = 'block';
+            document.getElementById(`list-edit-${id}`).style.display = 'block';
         }
-        
-        // Cancel edit
         if (e.target.closest('.list-cancel-edit-btn')) {
             const btn = e.target.closest('.list-cancel-edit-btn');
             const id = btn.dataset.id;
             const contentEl = document.getElementById(`list-content-${id}`);
-            const editForm = document.getElementById(`list-edit-${id}`);
-            const actionsEl = contentEl.parentElement.querySelector('.list-item-actions');
-            
             contentEl.style.display = 'block';
-            actionsEl.style.display = 'flex';
-            editForm.style.display = 'none';
+            contentEl.parentElement.querySelector('.list-item-actions').style.display = 'flex';
+            document.getElementById(`list-edit-${id}`).style.display = 'none';
         }
-        
-        // Save edit
         if (e.target.closest('.list-save-edit-btn')) {
             const btn = e.target.closest('.list-save-edit-btn');
             const id = btn.dataset.id;
-            const editForm = document.getElementById(`list-edit-${id}`);
-            const textarea = editForm.querySelector('textarea');
+            const textarea = document.getElementById(`list-edit-${id}`).querySelector('textarea');
             const newContent = textarea.value.trim();
-            
             if (newContent) {
                 await db_ops.updateListItem(id, newContent);
                 utils.showToast('Item updated', 'success');
             }
         }
-        
-        // Delete button
         if (e.target.closest('.list-delete-btn')) {
             const btn = e.target.closest('.list-delete-btn');
             const id = btn.dataset.id;
-            
             if (confirm('Delete this item?')) {
                 await db_ops.deleteListItem(id);
                 utils.showToast('Item deleted', 'success');
             }
         }
     });
-    
-    // Calendar Events functionality
+
+    // ---------- Calendar Events (.ics export) ----------
     const renderPendingEvents = () => {
         const container = document.getElementById('pendingEventsList');
         const downloadBtn = document.getElementById('downloadEventsBtn');
-        
         if (state.pendingEvents.length === 0) {
             container.innerHTML = '<div class="empty-state-text">No events queued</div>';
             downloadBtn.style.display = 'none';
             return;
         }
-        
         downloadBtn.style.display = 'flex';
-        container.innerHTML = state.pendingEvents.map((event, index) => `
-            <div class="pending-event-card" data-index="${index}">
+        container.innerHTML = state.pendingEvents.map((e, i) => `
+            <div class="pending-event-card" data-index="${i}">
                 <div class="pending-event-info">
-                    <div class="pending-event-title">${event.title}</div>
+                    <div class="pending-event-title">${utils.escapeHtml(e.title)}</div>
                     <div class="pending-event-datetime">
-                        ${utils.formatDate(event.date)}${event.allDay ? ' (All day)' : ` • ${utils.formatTime(event.startTime)}${event.endTime ? ' - ' + utils.formatTime(event.endTime) : ''}`}
+                        ${utils.formatDate(e.date)}${e.allDay ? ' (All day)' : ` • ${utils.formatTime(e.startTime)}${e.endTime ? ' - ' + utils.formatTime(e.endTime) : ''}`}
                     </div>
                 </div>
-                <button class="pending-event-remove" data-index="${index}">×</button>
-            </div>
-        `).join('');
+                <button class="pending-event-remove" data-index="${i}">×</button>
+            </div>`).join('');
     };
-    
+
     document.getElementById('showEventFormBtn').addEventListener('click', () => {
         document.getElementById('eventForm').style.display = 'block';
         document.getElementById('showEventFormBtn').style.display = 'none';
-        // Set default date to today
         document.getElementById('eventDate').value = utils.getTodayString();
     });
-    
     document.getElementById('cancelEventBtn').addEventListener('click', () => {
         document.getElementById('eventForm').style.display = 'none';
         document.getElementById('showEventFormBtn').style.display = 'block';
-        // Clear form
         document.getElementById('eventTitle').value = '';
         document.getElementById('eventDate').value = '';
         document.getElementById('eventStartTime').value = '';
         document.getElementById('eventEndTime').value = '';
         document.getElementById('eventAllDay').checked = false;
     });
-    
     document.getElementById('eventAllDay').addEventListener('change', (e) => {
-        const timeInputs = document.querySelectorAll('#eventStartTime, #eventEndTime');
-        timeInputs.forEach(input => {
+        document.querySelectorAll('#eventStartTime, #eventEndTime').forEach(input => {
             input.disabled = e.target.checked;
             if (e.target.checked) input.value = '';
         });
     });
-    
     document.getElementById('addEventBtn').addEventListener('click', () => {
         const title = document.getElementById('eventTitle').value.trim();
         const date = document.getElementById('eventDate').value;
         const startTime = document.getElementById('eventStartTime').value;
         const endTime = document.getElementById('eventEndTime').value;
         const allDay = document.getElementById('eventAllDay').checked;
-        
-        if (!title) {
-            utils.showToast('Please enter an event title', 'error');
-            return;
-        }
-        if (!date) {
-            utils.showToast('Please select a date', 'error');
-            return;
-        }
-        if (!allDay && !startTime) {
-            utils.showToast('Please enter a start time or mark as all day', 'error');
-            return;
-        }
-        
+        if (!title) return utils.showToast('Please enter an event title', 'error');
+        if (!date) return utils.showToast('Please select a date', 'error');
+        if (!allDay && !startTime) return utils.showToast('Please enter a start time or mark as all day', 'error');
         state.pendingEvents.push({ title, date, startTime, endTime, allDay });
         renderPendingEvents();
-        
-        // Clear form but keep it open for adding more
         document.getElementById('eventTitle').value = '';
         document.getElementById('eventStartTime').value = '';
         document.getElementById('eventEndTime').value = '';
         document.getElementById('eventAllDay').checked = false;
-        document.querySelectorAll('#eventStartTime, #eventEndTime').forEach(input => input.disabled = false);
-        
+        document.querySelectorAll('#eventStartTime, #eventEndTime').forEach(i => i.disabled = false);
         utils.showToast('Event added to list', 'success');
     });
-    
     document.getElementById('pendingEventsList').addEventListener('click', (e) => {
         if (e.target.classList.contains('pending-event-remove')) {
-            const index = parseInt(e.target.dataset.index);
-            state.pendingEvents.splice(index, 1);
+            const idx = parseInt(e.target.dataset.index, 10);
+            state.pendingEvents.splice(idx, 1);
             renderPendingEvents();
-            utils.showToast('Event removed', 'success');
         }
     });
-    
     document.getElementById('downloadEventsBtn').addEventListener('click', () => {
-        if (state.pendingEvents.length === 0) {
-            utils.showToast('No events to download', 'error');
-            return;
-        }
-        
-        const filename = state.pendingEvents.length === 1 
+        if (state.pendingEvents.length === 0) return;
+        const filename = state.pendingEvents.length === 1
             ? `${state.pendingEvents[0].title.replace(/[^a-z0-9]/gi, '_')}.ics`
             : `events_${utils.getTodayString()}.ics`;
-        
         utils.downloadICS(state.pendingEvents, filename);
         utils.showToast('Calendar file downloaded', 'success');
-        
-        // Clear events after download
         state.pendingEvents = [];
         renderPendingEvents();
-        
-        // Hide the form
         document.getElementById('eventForm').style.display = 'none';
         document.getElementById('showEventFormBtn').style.display = 'block';
     });
-    
-    // Initialize pending events display
     renderPendingEvents();
-    
-    // History accordion
+
+    // ---------- History expand/collapse ----------
     document.getElementById('historyList').addEventListener('click', (e) => {
-        const historyItem = e.target.closest('.history-item');
-        if (historyItem && e.target.closest('.history-header')) {
-            historyItem.classList.toggle('expanded');
+        const item = e.target.closest('.history-item');
+        if (item && e.target.closest('.history-header')) {
+            item.classList.toggle('expanded');
         }
     });
-    
-    // Settings link from History page
+
+    // ---------- Settings link from History ----------
     document.getElementById('openSettingsBtn').addEventListener('click', () => {
-        // Show settings tab
-        document.querySelectorAll('.tab-pane').forEach(pane => pane.classList.remove('active'));
+        document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
         document.getElementById('settingsTab').classList.add('active');
-        document.querySelectorAll('.nav-item').forEach(nav => nav.classList.remove('active'));
+        document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
     });
-    
-    // Task interactions (event delegation)
-    document.addEventListener('click', async (e) => {
-        if (e.target.classList.contains('task-checkbox') || e.target.classList.contains('task-checkbox-today')) {
-            const id = e.target.dataset.id;
-            const checked = e.target.checked;
-            
-            await db_ops.updateTask(id, {
-                status: checked ? 'done' : 'open',
-                completedAt: checked ? firebase.firestore.FieldValue.serverTimestamp() : null
-            });
-            
-            // Update UI
-            if (e.target.classList.contains('task-checkbox-today')) {
-                renderTodayTasks();
-            }
-        }
-        
-        if (e.target.classList.contains('task-delete')) {
-            const id = e.target.dataset.id;
-            await db_ops.deleteTask(id);
-        }
-    });
-    
-    // Google Calendar
-    document.getElementById('connectCalendarBtn').addEventListener('click', () => {
-        googleCalendar.requestAccess();
-    });
-    
-    document.getElementById('disconnectCalendarBtn').addEventListener('click', () => {
-        googleCalendar.disconnect();
-    });
-    
-    document.getElementById('exportTodayBtn').addEventListener('click', async () => {
-        const date = utils.getTodayString();
-        const log = await db_ops.getDayLog(date);
-        
-        if (!state.todayPlan) {
-            utils.showToast('No schedule to export', 'warning');
-            return;
-        }
-        
-        const blocks = scheduler.generateSchedule(
-            state.todayPlan,
-            log?.actualWake,
-            {
-                enabled: !!(log?.naps?.nap1?.start || log?.naps?.nap1?.end),
-                start: log?.naps?.nap1?.start,
-                end: log?.naps?.nap1?.end
-            },
-            {
-                enabled: !!(log?.naps?.nap2?.start || log?.naps?.nap2?.end),
-                start: log?.naps?.nap2?.start,
-                end: log?.naps?.nap2?.end
-            }
-        );
-        
-        await googleCalendar.exportDay(date, blocks);
-    });
-    
-    // Clear today's log
-    document.getElementById('clearTodayLogBtn').addEventListener('click', async () => {
-        if (confirm('Clear today\'s wake time and nap data? Your plan will stay intact.')) {
-            const today = utils.getTodayString();
-            const success = await db_ops.clearDayLog(today);
-            
-            if (success) {
-                // Clear the input fields
-                document.getElementById('actualWakeTime').value = '';
-                document.getElementById('nap1StartTime').value = '';
-                document.getElementById('nap1EndTime').value = '';
-                document.getElementById('nap2StartTime').value = '';
-                document.getElementById('nap2EndTime').value = '';
-                
-                // Re-render schedule (will show plan without adjustments)
-                await renderTodaySchedule();
-                
-                utils.showToast('Today\'s log cleared', 'success');
-            } else {
-                utils.showToast('Failed to clear log', 'error');
-            }
-        }
-    });
-    
-    // Clear data
-    document.getElementById('clearDataBtn').addEventListener('click', async () => {
-        if (confirm('Are you sure you want to clear all data? This cannot be undone.')) {
-            try {
-                const batch = db.batch();
-                
-                // Delete all tasks
-                const tasksSnapshot = await db.collection('families').doc(FAMILY_ID)
-                    .collection('tasks').get();
-                tasksSnapshot.docs.forEach(doc => batch.delete(doc.ref));
-                
-                // Delete all day plans
-                const plansSnapshot = await db.collection('families').doc(FAMILY_ID)
-                    .collection('day_plans').get();
-                plansSnapshot.docs.forEach(doc => batch.delete(doc.ref));
-                
-                // Delete all day logs
-                const logsSnapshot = await db.collection('families').doc(FAMILY_ID)
-                    .collection('day_logs').get();
-                logsSnapshot.docs.forEach(doc => batch.delete(doc.ref));
-                
-                await batch.commit();
-                
-                utils.showToast('All data cleared', 'success');
-                await loadData();
-            } catch (error) {
-                console.error('Error clearing data:', error);
-                utils.showToast('Failed to clear data', 'error');
-            }
-        }
-    });
-    
-    // Wizard input delegation
-    document.addEventListener('input', (e) => {
-        if (e.target.dataset.idx !== undefined && e.target.dataset.field) {
-            const idx = parseInt(e.target.dataset.idx);
-            const field = e.target.dataset.field;
-            
-            if (wizard.data.appointments[idx]) {
-                wizard.data.appointments[idx][field] = e.target.value;
-            }
-        }
-        
-        if (e.target.dataset.nap) {
-            const nap = e.target.dataset.nap;
-            const value = e.target.value;
-            
-            if (e.target.checked) {
-                if (!wizard.data.caregiverAvailability[nap].includes(value)) {
-                    wizard.data.caregiverAvailability[nap].push(value);
-                }
-            } else {
-                wizard.data.caregiverAvailability[nap] = 
-                    wizard.data.caregiverAvailability[nap].filter(v => v !== value);
-            }
-        }
-    });
-}
 
-// Helper Functions
-async function updateManualNapTime(napNum) {
-    const date = utils.getTodayString();
-    const startInput = document.getElementById(`nap${napNum}StartTime`);
-    const endInput = document.getElementById(`nap${napNum}EndTime`);
-    
-    const log = await db_ops.getDayLog(date) || {};
-    if (!log.naps) log.naps = {};
-    if (!log.naps[`nap${napNum}`]) log.naps[`nap${napNum}`] = {};
-    
-    if (startInput.value) {
-        log.naps[`nap${napNum}`].start = startInput.value;
-    }
-    if (endInput.value) {
-        log.naps[`nap${napNum}`].end = endInput.value;
-    }
-    
-    await db_ops.saveDayLog(date, log);
-    updateNapDisplay(napNum, log.naps[`nap${napNum}`]);
-    await renderTodaySchedule();
-    utils.showToast(`Nap ${napNum} time updated`, 'success');
-}
+    // ---------- Settings ----------
+    document.getElementById('saveWeeklyGoalsBtn').addEventListener('click', async () => {
+        const v = document.getElementById('weeklyGoalsInput').value.trim();
+        state.settings.weeklyGoals = v;
+        await db_ops.saveSettings({ weeklyGoals: v });
+        utils.showToast('Weekly goals saved', 'success');
+    });
 
-async function loadNapTimes() {
-    const date = utils.getTodayString();
-    
-    // Always clear all fields first to prevent stale data
-    document.getElementById('actualWakeTime').value = '';
-    document.getElementById('nap1StartTime').value = '';
-    document.getElementById('nap1EndTime').value = '';
-    document.getElementById('nap2StartTime').value = '';
-    document.getElementById('nap2EndTime').value = '';
-    
-    // Get today's log (document ID is the date, so this is date-specific)
-    const log = await db_ops.getDayLog(date);
-    
-    if (!log) return; // No log for today yet
-    
-    // Load actual wake time if it exists
-    if (log.actualWake) {
-        document.getElementById('actualWakeTime').value = log.actualWake;
-    }
-    
-    // Load nap 1 times if they exist
-    if (log.naps?.nap1?.start) {
-        document.getElementById('nap1StartTime').value = log.naps.nap1.start;
-    }
-    if (log.naps?.nap1?.end) {
-        document.getElementById('nap1EndTime').value = log.naps.nap1.end;
-    }
-    
-    // Load nap 2 times if they exist
-    if (log.naps?.nap2?.start) {
-        document.getElementById('nap2StartTime').value = log.naps.nap2.start;
-    }
-    if (log.naps?.nap2?.end) {
-        document.getElementById('nap2EndTime').value = log.naps.nap2.end;
-    }
-}
-
-// Data Loading
-async function loadData() {
-    try {
-        state.settings = await db_ops.getSettings();
-        state.todayPlan = await db_ops.getDayPlan(utils.getTodayString());
-        state.tomorrowPlan = await db_ops.getDayPlan(utils.getTomorrowString());
-        
-        document.getElementById('todayDate').textContent = utils.formatDate(utils.getTodayString());
-        document.getElementById('tomorrowDate').textContent = utils.formatDate(utils.getTomorrowString());
-        
-        // Show/hide edit button based on whether plan exists
-        const planActions = document.getElementById('planActions');
-        if (planActions) {
-            planActions.style.display = state.todayPlan ? 'block' : 'none';
-        }
-        
+    document.getElementById('addChecklistItemBtn').addEventListener('click', async () => {
+        const input = document.getElementById('newChecklistItem');
+        const label = input.value.trim();
+        if (!label) return;
+        if (!state.settings.checklistItems) state.settings.checklistItems = [];
+        const id = 'cl-' + Date.now();
+        state.settings.checklistItems.push({ id, label });
+        await db_ops.saveSettings({ checklistItems: state.settings.checklistItems });
+        input.value = '';
         renderSettings();
-        await renderTodaySchedule();
-        renderTomorrowPreview();
-        renderTodayTasks();
-        await loadNapTimes();
-    } catch (error) {
-        console.error('Error loading data:', error);
-        utils.showToast('Failed to load data', 'error');
-    }
-}
+    });
 
-function renderTodayTasks() {
-    const todayStr = utils.getTodayString();
-    const todayTasks = state.tasks.filter(t => t.assignedDate === todayStr);
-    const container = document.getElementById('todayTasksList');
-    
-    if (todayTasks.length === 0) {
-        container.innerHTML = '<div class="empty-state-text">No focus tasks for today yet</div>';
-        return;
-    }
-    
-    container.innerHTML = todayTasks.map(task => `
-        <div class="task-item ${task.status === 'done' ? 'completed' : ''}">
-            <input type="checkbox" 
-                   class="task-checkbox-today"
-                   data-id="${task.id}"
-                   ${task.status === 'done' ? 'checked' : ''}>
-            <label>${task.title}</label>
-            <button class="task-delete" data-id="${task.id}">×</button>
-        </div>
-    `).join('');
-}
-
-async function renderTodaySchedule() {
-    const date = utils.getTodayString();
-    const log = await db_ops.getDayLog(date);
-    
-    // Render availability summary if plan exists
-    renderAvailabilitySummary();
-    
-    // Only use nap data if it has valid start times (not just any truthy value)
-    let validNapData = null;
-    if (log?.naps) {
-        validNapData = {};
-        // Only include nap1 if it has a properly formatted start time (HH:MM)
-        if (log.naps.nap1?.start && /^\d{2}:\d{2}$/.test(log.naps.nap1.start)) {
-            validNapData.nap1 = log.naps.nap1;
+    // Checklist editor — inline edit + delete (delegation)
+    document.addEventListener('click', async (e) => {
+        const del = e.target.closest('.checklist-editor-delete');
+        if (del) {
+            const id = del.dataset.id;
+            state.settings.checklistItems = (state.settings.checklistItems || []).filter(it => it.id !== id);
+            await db_ops.saveSettings({ checklistItems: state.settings.checklistItems });
+            renderSettings();
         }
-        // Only include nap2 if it has a properly formatted start time
-        if (log.naps.nap2?.start && /^\d{2}:\d{2}$/.test(log.naps.nap2.start)) {
-            validNapData.nap2 = log.naps.nap2;
-        }
-        // If no valid naps, set to null
-        if (!validNapData.nap1 && !validNapData.nap2) {
-            validNapData = null;
-        }
-    }
-    
-    // If we have a plan with calculated schedule, use it
-    if (state.todayPlan && state.todayPlan.calculatedSchedule) {
-        let blocks = [...state.todayPlan.calculatedSchedule];
-        
-        // Apply dynamic adjustments based on actual tracking
-        if (log?.actualWake) {
-            blocks = scheduler.adjustScheduleForActualWake(
-                state.todayPlan,
-                log.actualWake,
-                validNapData
+    });
+    document.addEventListener('change', async (e) => {
+        if (e.target.classList.contains('checklist-editor-input')) {
+            const id = e.target.dataset.id;
+            const newLabel = e.target.value.trim();
+            if (!newLabel) return;
+            state.settings.checklistItems = (state.settings.checklistItems || []).map(it =>
+                it.id === id ? { ...it, label: newLabel } : it
             );
+            await db_ops.saveSettings({ checklistItems: state.settings.checklistItems });
         }
-        
-        ui.renderSchedule(blocks);
-        return;
-    }
-    
-    // If no plan exists but wake time is set, generate a basic schedule for testing
-    if (log?.actualWake) {
-        // Create a minimal plan structure for testing
-        const testPlan = {
-            wakeTarget: log.actualWake,
-            constraints: state.settings?.constraints || scheduler.getDefaultConstraints(),
-            calculatedSchedule: null, // Will be generated
-            parentUnavailable: { kristyn: [], julio: [] },
-            helpersAvailable: { nanny: [], kayden: [] },
-            appointments: [],
-            includeBath: false
-        };
-        
-        const blocks = scheduler.adjustScheduleForActualWake(
-            testPlan,
-            log.actualWake,
-            validNapData
-        );
-        
-        ui.renderSchedule(blocks);
-        return;
-    }
-    
-    // No plan and no wake time - show empty
-    ui.renderSchedule([]);
+    });
+
+    // ---------- Google Calendar ----------
+    document.getElementById('connectCalendarBtn').addEventListener('click', () => googleCalendar.requestAccess());
+    document.getElementById('disconnectCalendarBtn').addEventListener('click', () => googleCalendar.disconnect());
+    document.getElementById('exportTodayBtn').addEventListener('click', async () => {
+        if (!state.todayPlan) return utils.showToast('No plan to export', 'warning');
+        await googleCalendar.exportPlan(utils.getTodayString(), state.todayPlan);
+    });
+
+    // ---------- Clear data ----------
+    document.getElementById('clearDataBtn').addEventListener('click', async () => {
+        if (!confirm('Clear ALL data? This cannot be undone.')) return;
+        try {
+            const collections = ['tasks', 'meals', 'lists', 'day_plans', 'intentions', 'day_logs'];
+            for (const col of collections) {
+                const snap = await db.collection('families').doc(FAMILY_ID).collection(col).get();
+                const batch = db.batch();
+                snap.docs.forEach(d => batch.delete(d.ref));
+                await batch.commit();
+            }
+            utils.showToast('All data cleared', 'success');
+            await loadData();
+        } catch (e) {
+            console.error('clearData:', e);
+            utils.showToast('Failed to clear data', 'error');
+        }
+    });
+
+    // ---------- Intentions ----------
+    document.getElementById('addIntentionBtn').addEventListener('click', async () => {
+        const title = document.getElementById('newIntentionTitle').value.trim();
+        const category = document.getElementById('newIntentionCategory').value;
+        const nextStep = document.getElementById('newIntentionNextStep').value.trim();
+        if (!title) return utils.showToast('Title required', 'warning');
+        await db_ops.addIntention({ title, category, nextStep });
+        document.getElementById('newIntentionTitle').value = '';
+        document.getElementById('newIntentionNextStep').value = '';
+        utils.showToast('Intention added', 'success');
+    });
+
+    // Intention next-step save
+    document.addEventListener('click', async (e) => {
+        const saveBtn = e.target.closest('.intention-next-step-save');
+        if (saveBtn) {
+            const id = saveBtn.dataset.id;
+            const input = document.querySelector(`.intention-next-step-input[data-id="${id}"]`);
+            const newStep = (input?.value || '').trim();
+            await db_ops.updateIntention(id, { nextStep: newStep });
+            utils.showToast('Next step saved', 'success');
+        }
+        const action = e.target.closest('.intention-action-btn');
+        if (action) {
+            const id = action.dataset.id;
+            const a = action.dataset.action;
+            const intention = state.intentions.find(i => i.id === id);
+            if (!intention) return;
+            if (a === 'pause') {
+                const reason = prompt('Pause reason (optional)?', intention.pausedReason || '') || '';
+                await db_ops.updateIntention(id, { status: 'paused', pausedReason: reason.trim() });
+            } else if (a === 'resume') {
+                await db_ops.updateIntention(id, { status: 'active', pausedReason: null });
+            } else if (a === 'done') {
+                await db_ops.updateIntention(id, { status: 'done', lastProgressAtStr: utils.getTodayString() });
+                utils.showToast('Intention completed ✓', 'success');
+            } else if (a === 'drop') {
+                if (!confirm(`Drop "${intention.title}"?`)) return;
+                await db_ops.updateIntention(id, { status: 'dropped' });
+            } else if (a === 'progress') {
+                await db_ops.updateIntention(id, { lastProgressAtStr: utils.getTodayString() });
+                utils.showToast('Progress logged', 'success');
+            } else if (a === 'delete') {
+                if (!confirm(`Delete "${intention.title}" permanently?`)) return;
+                await db_ops.deleteIntention(id);
+            } else if (a === 'promote') {
+                if (!intention.nextStep) return utils.showToast('Add a next step first', 'warning');
+                const tomorrow = utils.getTomorrowString();
+                await db_ops.addTask(intention.nextStep, tomorrow, intention.id);
+                utils.showToast('Promoted to tomorrow', 'success');
+            }
+        }
+    });
 }
 
-function renderAvailabilitySummary() {
-    const container = document.getElementById('availabilitySummary');
-    
-    if (!state.todayPlan) {
-        container.style.display = 'none';
-        return;
-    }
-    
-    const plan = state.todayPlan;
-    const parentUnavailable = plan.parentUnavailable || { kristyn: [], julio: [] };
-    const helpersAvailable = plan.helpersAvailable || { nanny: [], kayden: [] };
-    
-    // Check if there's any availability info to show
-    const hasAvailability = 
-        parentUnavailable.kristyn?.length > 0 ||
-        parentUnavailable.julio?.length > 0 ||
-        helpersAvailable.nanny?.length > 0 ||
-        helpersAvailable.kayden?.length > 0;
-    
-    if (!hasAvailability) {
-        container.style.display = 'none';
-        return;
-    }
-    
-    const formatTimeRange = (block) => `${utils.formatTime(block.start)}-${utils.formatTime(block.end)}`;
-    
-    let html = '<h4>Today\'s Availability</h4><div class="availability-grid">';
-    
-    // Kristyn Unavailable
-    if (parentUnavailable.kristyn?.length > 0) {
-        html += `
-            <div class="availability-person">
-                <div class="availability-icon unavailable">👩</div>
-                <div class="availability-details">
-                    <div class="availability-name">Kristyn Unavailable</div>
-                    <div class="availability-times">
-                        ${parentUnavailable.kristyn.map(block => 
-                            `<span class="availability-badge unavailable">${formatTimeRange(block)}</span>`
-                        ).join('')}
-                    </div>
-                </div>
-            </div>
-        `;
-    }
-    
-    // Julio Unavailable
-    if (parentUnavailable.julio?.length > 0) {
-        html += `
-            <div class="availability-person">
-                <div class="availability-icon unavailable">👨</div>
-                <div class="availability-details">
-                    <div class="availability-name">Julio Unavailable</div>
-                    <div class="availability-times">
-                        ${parentUnavailable.julio.map(block => 
-                            `<span class="availability-badge unavailable">${formatTimeRange(block)}</span>`
-                        ).join('')}
-                    </div>
-                </div>
-            </div>
-        `;
-    }
-    
-    // Nanny Available
-    if (helpersAvailable.nanny?.length > 0) {
-        html += `
-            <div class="availability-person">
-                <div class="availability-icon available">👶</div>
-                <div class="availability-details">
-                    <div class="availability-name">Nanny Available</div>
-                    <div class="availability-times">
-                        ${helpersAvailable.nanny.map(block => 
-                            `<span class="availability-badge available">${formatTimeRange(block)}</span>`
-                        ).join('')}
-                    </div>
-                </div>
-            </div>
-        `;
-    }
-    
-    // Kayden Available
-    if (helpersAvailable.kayden?.length > 0) {
-        html += `
-            <div class="availability-person">
-                <div class="availability-icon available">👧</div>
-                <div class="availability-details">
-                    <div class="availability-name">Kayden Available</div>
-                    <div class="availability-times">
-                        ${helpersAvailable.kayden.map(block => 
-                            `<span class="availability-badge available">${formatTimeRange(block)}</span>`
-                        ).join('')}
-                    </div>
-                </div>
-            </div>
-        `;
-    }
-    
-    html += '</div>';
-    container.innerHTML = html;
-    container.style.display = 'block';
-}
-
-function renderTomorrowPreview() {
-    const container = document.getElementById('tomorrowPreview');
-    
-    if (!state.tomorrowPlan) {
-        container.innerHTML = '';
-        return;
-    }
-    
-    const schedule = state.tomorrowPlan.calculatedSchedule || [];
-    const naps = schedule.filter(b => b.type === 'nap');
-    const appointments = state.tomorrowPlan.appointments || [];
-    
-    container.innerHTML = `
-        <div class="control-card">
-            <h4>Tomorrow's Plan</h4>
-            <p><strong>Wake:</strong> ${utils.formatTime(state.tomorrowPlan.wakeTarget)}</p>
-            <p><strong>Naps:</strong> ${naps.length} scheduled</p>
-            <p><strong>Appointments:</strong> ${appointments.filter(a => a.title).length}</p>
-        </div>
-    `;
-}
-
-function updateNapDisplay(napNum, napData) {
-    const timeEl = document.getElementById(`nap${napNum}Time`);
-    if (napData.start && napData.end) {
-        timeEl.textContent = `${utils.formatTime(napData.start)} - ${utils.formatTime(napData.end)}`;
-    } else if (napData.start) {
-        timeEl.textContent = `Started ${utils.formatTime(napData.start)}`;
-    }
-}
-
-// Initialize App
+// ============================================================================
+// Init
+// ============================================================================
 async function init() {
     try {
-        // Check Firebase config
-        if (firebaseConfig.apiKey === 'YOUR_FIREBASE_API_KEY') {
-            utils.showToast('Please configure Firebase in app.js', 'error');
-            return;
-        }
-        
-        // Initialize Firebase
         firebase.initializeApp(firebaseConfig);
         auth = firebase.auth();
         db = firebase.firestore();
         functions = firebase.functions();
-        
-        // Auth state observer
+
         auth.onAuthStateChanged(async (user) => {
             if (user) {
                 currentUser = user;
                 state.user = user;
-                
-                // Show app, hide sign-in
                 document.getElementById('signInScreen').style.display = 'none';
                 document.getElementById('app').style.display = 'block';
-                
-                // Display user
-                const userBadge = document.getElementById('userBadge');
-                userBadge.textContent = user.displayName || user.email;
-                
-                // Load data
+                document.getElementById('userBadge').textContent = user.displayName || user.email;
+
                 await loadData();
-                
-                // Setup real-time listeners
-                const tasksUnsubscribe = db_ops.listenToTasks((tasks) => {
-                    state.tasks = tasks;
-                    ui.renderTasks(tasks);
-                    renderTodayTasks(); // Also update Today tab
-                });
-                state.unsubscribers.push(tasksUnsubscribe);
-                
-                const mealsUnsubscribe = db_ops.listenToMeals((meals) => {
-                    state.meals = meals;
-                    ui.renderMeals(meals);
-                });
-                state.unsubscribers.push(mealsUnsubscribe);
-                
-                const listsUnsubscribe = db_ops.listenToLists((items) => {
-                    state.lists = items;
-                    ui.renderLists(items);
-                });
-                state.unsubscribers.push(listsUnsubscribe);
-                
-                // Setup event handlers (only once)
+
+                // Real-time listeners
+                state.unsubscribers.push(
+                    db_ops.listenToTasks((tasks) => {
+                        state.tasks = tasks;
+                        ui.renderTasks(tasks);
+                        renderTodayPlan();
+                    })
+                );
+                state.unsubscribers.push(
+                    db_ops.listenToMeals((meals) => {
+                        state.meals = meals;
+                        ui.renderMeals(meals);
+                    })
+                );
+                state.unsubscribers.push(
+                    db_ops.listenToLists((items) => {
+                        state.lists = items;
+                        ui.renderLists(items);
+                    })
+                );
+                state.unsubscribers.push(
+                    db_ops.listenToIntentions((intentions) => {
+                        state.intentions = intentions;
+                        ui.renderIntentions(intentions);
+                        renderTodayPlan(); // re-render in case intention tags need update
+                    })
+                );
+
                 if (!window.handlersSetup) {
                     setupEventHandlers();
                     window.handlersSetup = true;
                 }
             } else {
-                // Show sign-in, hide app
                 document.getElementById('signInScreen').style.display = 'flex';
                 document.getElementById('app').style.display = 'none';
-                
-                // Cleanup listeners
-                state.unsubscribers.forEach(unsub => unsub());
+                state.unsubscribers.forEach(u => u());
                 state.unsubscribers = [];
             }
         });
-        
-        // Sign in button
+
         document.getElementById('signInBtn').addEventListener('click', async () => {
             try {
                 const provider = new firebase.auth.GoogleAuthProvider();
                 await auth.signInWithPopup(provider);
-            } catch (error) {
-                console.error('Sign in error:', error);
+            } catch (e) {
+                console.error('signIn:', e);
                 utils.showToast('Failed to sign in', 'error');
             }
         });
-        
-        // Register service worker
+
         if ('serviceWorker' in navigator) {
             navigator.serviceWorker.register('./service-worker.js')
-                .then(() => console.log('Service Worker registered'))
-                .catch(err => console.error('Service Worker registration failed:', err));
+                .then(() => console.log('SW registered'))
+                .catch(err => console.error('SW failed:', err));
         }
-        
-    } catch (error) {
-        console.error('Initialization error:', error);
-        utils.showToast('Failed to initialize app', 'error');
+    } catch (e) {
+        console.error('init:', e);
+        utils.showToast('Failed to initialize', 'error');
     }
 }
 
-// Start app
 init();
-
