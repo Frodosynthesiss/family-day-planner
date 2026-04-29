@@ -3016,3 +3016,149 @@ input:checked + .slider:before {
 .plan-actions {
     margin-bottom: 1rem;
 }
+
+/* ============================================================================
+   v3 — additions for new plan layout, bath, brain dump aging
+   ============================================================================ */
+
+/* Bath toggle in wizard / edit */
+.bath-toggle-label {
+    display: flex;
+    gap: 0.6rem;
+    align-items: center;
+    padding: 0.75rem 1rem;
+    background: #f0f4ed;
+    border-radius: 10px;
+    cursor: pointer;
+    font-size: 0.95rem;
+}
+
+.bath-badge {
+    display: inline-block;
+    padding: 0.5rem 1rem;
+    background: #e6efe2;
+    color: #3a4a3a;
+    border-radius: 99px;
+    font-size: 0.9rem;
+    font-weight: 600;
+}
+
+.preview-bath {
+    margin-top: 0.75rem;
+    padding: 0.4rem 0.75rem;
+    background: #e6efe2;
+    border-radius: 6px;
+    font-size: 0.85rem;
+    color: #3a4a3a;
+    text-align: center;
+}
+
+/* Plan rows — list-style instead of timeline */
+.plan-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+.plan-row {
+    display: flex;
+    gap: 0.75rem;
+    padding: 0.75rem;
+    background: #f9faf8;
+    border-radius: 10px;
+    align-items: flex-start;
+}
+.plan-row-time {
+    font-weight: 600;
+    color: #3a4a3a;
+    font-size: 0.9rem;
+    flex-shrink: 0;
+    min-width: 9rem;
+}
+.plan-row-content {
+    flex: 1;
+}
+.plan-row-title {
+    font-weight: 500;
+    color: #3a4a3a;
+    font-size: 0.95rem;
+}
+.plan-row-notes {
+    font-size: 0.82rem;
+    color: #777;
+    margin-top: 0.25rem;
+}
+.plan-row.appointment-block { border-left: 3px solid #4a6a8e; }
+.plan-row.appointment-block .plan-row-time { color: #4a6a8e; }
+.plan-row.unavail-block { border-left: 3px solid #c47b00; }
+.plan-row.unavail-block .plan-row-time { color: #c47b00; }
+.plan-row.avail-block { border-left: 3px solid #6B8E6B; }
+.plan-row.avail-block .plan-row-time { color: #6B8E6B; }
+
+/* Wizard brain dump */
+.brain-dump-add-row {
+    display: flex;
+    gap: 0.5rem;
+    margin-bottom: 1rem;
+}
+.brain-dump-add-row .task-input {
+    flex: 1;
+}
+.brain-dump-item {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.6rem 0.8rem;
+    background: #f9faf8;
+    border-radius: 8px;
+    margin-bottom: 0.4rem;
+}
+.brain-dump-item-text {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+}
+.brain-dump-item-title {
+    font-size: 0.92rem;
+    color: #3a4a3a;
+}
+.brain-dump-age {
+    font-size: 0.74rem;
+    color: #888;
+}
+.brain-dump-item-actions {
+    display: flex;
+    gap: 0.25rem;
+}
+.brain-dump-edit,
+.brain-dump-delete {
+    background: none;
+    border: 1px solid #d4dccd;
+    color: #666;
+    border-radius: 5px;
+    padding: 0.25rem 0.55rem;
+    cursor: pointer;
+    font-size: 0.85rem;
+    line-height: 1;
+}
+.brain-dump-edit:hover { background: #f0f4ed; color: #3a4a3a; }
+.brain-dump-delete:hover { background: #fee; color: #c33; }
+
+/* Task age + planned-tomorrow badges */
+.task-age {
+    font-size: 0.7rem;
+    color: #999;
+    margin-left: 0.4rem;
+}
+.planned-tomorrow-badge {
+    display: inline-block;
+    margin-left: 0.4rem;
+    padding: 0.1rem 0.5rem;
+    background: #e6efe2;
+    color: #3a4a3a;
+    font-size: 0.7rem;
+    border-radius: 99px;
+    text-transform: uppercase;
+    font-weight: 600;
+    letter-spacing: 0.03em;
+}

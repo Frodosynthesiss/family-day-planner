@@ -18,14 +18,24 @@ let auth, db, functions;
 let currentUser = null;
 
 const FAMILY_ID = 'default_family';
-const COVERAGE_PEOPLE = ['kristyn', 'julio', 'nanny', 'kayden'];
-const WORK_PEOPLE = ['kristyn', 'julio'];
+const PARENTS = ['kristyn', 'julio'];
+const HELPERS = ['nanny', 'kayden'];
+const ALL_PEOPLE = [...PARENTS, ...HELPERS];
 const PERSON_LABEL = {
     kristyn: 'Kristyn',
     julio: 'Julio',
     nanny: 'Nanny',
     kayden: 'Kayden'
 };
+
+// Core readiness checks — always asked, independent of user-added extras
+const CORE_READINESS_ITEMS = [
+    { id: 'core-laundry', label: 'Laundry ready?' },
+    { id: 'core-food', label: 'Food ready?' },
+    { id: 'core-diapers', label: 'Diaper supplies ready?' },
+    { id: 'core-dishes', label: 'Dishes done?' },
+    { id: 'core-calendar', label: 'Calendar up to date?' }
+];
 
 // ============================================================================
 // Application State
@@ -204,11 +214,9 @@ const db_ops = {
     getDefaultSettings() {
         return {
             weeklyGoals: '',
-            checklistItems: [
-                { id: 'skylight', label: 'Skylight calendar up to date?' },
-                { id: 'nanny', label: 'Nanny briefed on tomorrow?' },
-                { id: 'kitchen', label: 'Kitchen reset for morning?' }
-            ],
+            // checklistItems are user-added EXTRAS — the four core readiness questions
+            // (laundry, food, diapers, dishes, calendar) are baked in via CORE_READINESS_ITEMS.
+            checklistItems: [],
             googleCalendar: null
         };
     },
@@ -272,6 +280,7 @@ const db_ops = {
                 intentionId,
                 createdBy: currentUser.uid,
                 createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+                createdAtStr: utils.getTodayString(),
                 completedAt: null
             };
             const docRef = await db.collection('families').doc(FAMILY_ID).collection('tasks').add(payload);
@@ -457,129 +466,144 @@ const db_ops = {
 // Coach — rules-based flagging (dry, factual, brisk)
 // ============================================================================
 const coach = {
-    // Each function returns an array of {level: 'warn'|'info', text: string}
+    // Each function returns array of {level: 'warn'|'info', text: string}
 
-    workConflicts(workBlocks) {
+    // Coverage gap: any window where BOTH parents are unavailable AND no helper is available
+    coverageGaps(parentUnavailable, helperAvailable, appointments) {
         const flags = [];
-        const k = workBlocks.kristyn || [];
-        const j = workBlocks.julio || [];
-        for (const kb of k) {
-            for (const jb of j) {
-                if (kb.start && kb.end && jb.start && jb.end &&
-                    utils.rangesOverlap(kb.start, kb.end, jb.start, jb.end)) {
-                    flags.push({
-                        level: 'warn',
-                        text: `Both in work mode ${utils.formatTime(kb.start)}–${utils.formatTime(kb.end)} overlaps ${utils.formatTime(jb.start)}–${utils.formatTime(jb.end)}. Who's got Kayden?`
-                    });
-                }
-            }
-        }
-        return flags;
-    },
 
-    coverageGaps(coverage, appointments) {
-        const flags = [];
-        // Build union of covered ranges (any person)
-        const blocks = [];
-        for (const p of COVERAGE_PEOPLE) {
-            for (const b of (coverage[p] || [])) {
-                if (b.start && b.end) {
-                    blocks.push({ start: utils.toMinutes(b.start), end: utils.toMinutes(b.end) });
-                }
+        // Build per-minute coverage map for the day. We only look at the time
+        // span actually mentioned (across all blocks) so we don't flag the
+        // whole 24-hour day as uncovered.
+        const allBlocks = [];
+        PARENTS.forEach(p => (parentUnavailable[p] || []).forEach(b => {
+            if (b.start && b.end) allBlocks.push(b);
+        }));
+        HELPERS.forEach(p => (helperAvailable[p] || []).forEach(b => {
+            if (b.start && b.end) allBlocks.push(b);
+        }));
+        (appointments || []).forEach(a => {
+            if (a.title && a.startTime) allBlocks.push({ start: a.startTime, end: a.endTime || a.startTime });
+        });
+
+        if (allBlocks.length === 0) return flags;
+
+        const dayStart = Math.min(...allBlocks.map(b => utils.toMinutes(b.start)));
+        const dayEnd = Math.max(...allBlocks.map(b => utils.toMinutes(b.end)));
+
+        // For each minute in [dayStart, dayEnd), determine: is at least one parent available
+        // (i.e., not in an unavailable block) OR is a helper available?
+        const gaps = []; // list of {start, end} uncovered ranges
+        let currentGapStart = null;
+
+        for (let m = dayStart; m < dayEnd; m++) {
+            const kristynUnavail = this._isInBlocks(m, parentUnavailable.kristyn);
+            const julioUnavail = this._isInBlocks(m, parentUnavailable.julio);
+            const helperOn = HELPERS.some(h => this._isInBlocks(m, helperAvailable[h]));
+
+            const uncovered = kristynUnavail && julioUnavail && !helperOn;
+
+            if (uncovered && currentGapStart === null) {
+                currentGapStart = m;
+            } else if (!uncovered && currentGapStart !== null) {
+                gaps.push({ start: currentGapStart, end: m });
+                currentGapStart = null;
             }
         }
-        if (blocks.length === 0) {
-            flags.push({ level: 'warn', text: 'No coverage blocks set yet.' });
-            return flags;
+        if (currentGapStart !== null) {
+            gaps.push({ start: currentGapStart, end: dayEnd });
         }
-        // Sort + merge
-        blocks.sort((a, b) => a.start - b.start);
-        const merged = [blocks[0]];
-        for (let i = 1; i < blocks.length; i++) {
-            const last = merged[merged.length - 1];
-            if (blocks[i].start <= last.end) {
-                last.end = Math.max(last.end, blocks[i].end);
-            } else {
-                merged.push(blocks[i]);
-            }
-        }
-        // Find gaps within the overall covered window
-        const dayStart = merged[0].start;
-        const dayEnd = merged[merged.length - 1].end;
-        for (let i = 1; i < merged.length; i++) {
-            const gapStart = merged[i - 1].end;
-            const gapEnd = merged[i].start;
-            if (gapEnd - gapStart >= 15) {
+
+        // Only flag gaps of 15+ minutes
+        for (const g of gaps) {
+            if (g.end - g.start >= 15) {
                 flags.push({
                     level: 'warn',
-                    text: `Uncovered: ${coach._fmtMins(gapStart)}–${coach._fmtMins(gapEnd)}. Who's got it?`
+                    text: `${this._fmtMins(g.start)}–${this._fmtMins(g.end)}: both parents unavailable, no helper. Who's got Kayden?`
                 });
             }
         }
-        // Appointments with no coverage
+
+        return flags;
+    },
+
+    appointmentGaps(appointments, parentUnavailable, helperAvailable) {
+        const flags = [];
         for (const apt of (appointments || [])) {
             if (!apt.title || !apt.startTime) continue;
             const aStart = utils.toMinutes(apt.startTime);
             const aEnd = apt.endTime ? utils.toMinutes(apt.endTime) : aStart + 30;
-            const covered = merged.some(b => b.start <= aStart && b.end >= aEnd);
-            if (!covered) {
+
+            // Sample a few points across the appointment to check coverage
+            // (reuse the same logic as coverageGaps)
+            let uncoveredAtStart = false;
+            const ks = this._isInBlocks(aStart, parentUnavailable.kristyn);
+            const js = this._isInBlocks(aStart, parentUnavailable.julio);
+            const hs = HELPERS.some(h => this._isInBlocks(aStart, helperAvailable[h]));
+            if (ks && js && !hs) uncoveredAtStart = true;
+
+            if (uncoveredAtStart) {
                 flags.push({
                     level: 'warn',
-                    text: `Appointment "${apt.title}" at ${utils.formatTime(apt.startTime)} isn't inside a coverage block.`
+                    text: `Appointment "${apt.title}" at ${utils.formatTime(apt.startTime)} — both parents unavailable, no helper. Who's there?`
                 });
             }
         }
         return flags;
     },
 
-    appointmentConflicts(appointments, workBlocks) {
-        const flags = [];
-        for (const apt of (appointments || [])) {
-            if (!apt.title || !apt.startTime) continue;
-            const aEnd = apt.endTime || apt.startTime;
-            for (const person of WORK_PEOPLE) {
-                for (const wb of (workBlocks[person] || [])) {
-                    if (wb.start && wb.end && utils.rangesOverlap(apt.startTime, aEnd, wb.start, wb.end)) {
-                        flags.push({
-                            level: 'warn',
-                            text: `"${apt.title}" at ${utils.formatTime(apt.startTime)} hits ${PERSON_LABEL[person]}'s work block.`
-                        });
-                    }
-                }
-            }
-        }
-        return flags;
-    },
-
-    // Task review: stale rollovers
     staleTaskFlags(taskAges) {
-        // taskAges: array of {title, daysOld}
-        const stale = taskAges.filter(t => t.daysOld >= 3);
-        if (stale.length === 0) return [];
+        const stale = (taskAges || []).filter(t => t.daysOld >= 3);
         return stale.map(t => ({
             level: 'info',
             text: `"${t.title}" has been on the list ${t.daysOld} days. Still worth doing?`
         }));
     },
 
-    tooManyFocusTasks(selected) {
-        if (selected.length > 3) {
+    tooManyFocusTasks(count) {
+        if (count > 3) {
             return [{
                 level: 'warn',
-                text: `You picked ${selected.length}. 3 is the ceiling — typically 1-2 of them slip when you pick more.`
+                text: `You picked ${count}. 3 is the ceiling — typically 1-2 slip when you pick more.`
             }];
         }
         return [];
     },
 
-    // Stale intentions: no progress in 14+ days
     staleIntentions(intentions) {
         const active = (intentions || []).filter(i => i.status === 'active');
-        const stale = active.filter(i => {
+        return active.filter(i => {
             const days = utils.daysSince(i.lastProgressAtStr);
             return days !== null && days >= 14;
         });
-        return stale;
+    },
+
+    // Brain dump items 30+ days old
+    staleBrainDumpFlags(tasks) {
+        const todayStr = utils.getTodayString();
+        const stale = (tasks || []).filter(t => {
+            if (t.status !== 'open') return false;
+            if (t.assignedDate) return false; // it's been promoted
+            if (!t.createdAtStr) return false;
+            const days = utils.daysSince(t.createdAtStr);
+            return days !== null && days >= 30;
+        });
+        if (stale.length === 0) return [];
+        return [{
+            level: 'info',
+            text: `${stale.length} brain-dump item${stale.length === 1 ? '' : 's'} ${stale.length === 1 ? 'has' : 'have'} sat for 30+ days. Worth a review?`
+        }];
+    },
+
+    // Helpers
+    _isInBlocks(minute, blocks) {
+        if (!blocks) return false;
+        return blocks.some(b => {
+            if (!b.start || !b.end) return false;
+            const s = utils.toMinutes(b.start);
+            const e = utils.toMinutes(b.end);
+            return minute >= s && minute < e;
+        });
     },
 
     _fmtMins(mins) {
@@ -626,12 +650,12 @@ const googleCalendar = {
                 return;
             }
             const events = [];
-            // Work blocks
-            for (const person of WORK_PEOPLE) {
-                for (const b of (plan.workBlocks?.[person] || [])) {
+            // Parents unavailable
+            for (const person of PARENTS) {
+                for (const b of (plan.parentUnavailable?.[person] || [])) {
                     if (b.start && b.end) {
                         events.push({
-                            summary: `${PERSON_LABEL[person]} — work${b.label ? ': ' + b.label : ''}`,
+                            summary: `${PERSON_LABEL[person]} unavailable${b.label ? ': ' + b.label : ''}`,
                             description: b.label || '',
                             start: { dateTime: `${date}T${b.start}:00` },
                             end: { dateTime: `${date}T${b.end}:00` }
@@ -639,12 +663,12 @@ const googleCalendar = {
                     }
                 }
             }
-            // Coverage
-            for (const person of COVERAGE_PEOPLE) {
-                for (const b of (plan.coverage?.[person] || [])) {
+            // Helpers available
+            for (const person of HELPERS) {
+                for (const b of (plan.helperAvailable?.[person] || [])) {
                     if (b.start && b.end) {
                         events.push({
-                            summary: `${PERSON_LABEL[person]} covers Kayden${b.label ? ' — ' + b.label : ''}`,
+                            summary: `${PERSON_LABEL[person]} available${b.label ? ' — ' + b.label : ''}`,
                             description: b.label || '',
                             start: { dateTime: `${date}T${b.start}:00` },
                             end: { dateTime: `${date}T${b.end}:00` }
@@ -680,11 +704,12 @@ const googleCalendar = {
 const ui = {
     renderTasks(tasks) {
         const todayStr = utils.getTodayString();
+        const tomorrowStr = utils.getTomorrowString();
         const todayTasks = tasks.filter(t => t.status === 'open' && t.assignedDate === todayStr);
         const brainDump = tasks.filter(t => t.status === 'open' && !t.assignedDate);
         const done = tasks.filter(t => t.status === 'done');
 
-        const renderList = (list, containerId) => {
+        const renderList = (list, containerId, opts = {}) => {
             const el = document.getElementById(containerId);
             if (!el) return;
             if (list.length === 0) {
@@ -693,13 +718,19 @@ const ui = {
             }
             el.innerHTML = list.map(task => {
                 const intention = task.intentionId ? state.intentions.find(i => i.id === task.intentionId) : null;
+                const ageLabel = opts.showAge && task.createdAtStr
+                    ? `<span class="task-age">added ${utils.relativeAge(task.createdAtStr)}</span>` : '';
+                const plannedBadge = (opts.showPlannedBadge && task.assignedDate === tomorrowStr)
+                    ? `<span class="planned-tomorrow-badge">planned tomorrow</span>` : '';
                 return `
                 <div class="task-item ${task.status === 'done' ? 'completed' : ''}">
                     <input type="checkbox" class="task-checkbox"
                            data-id="${task.id}" ${task.status === 'done' ? 'checked' : ''}>
                     <div class="task-text-wrap">
                         <span class="task-text">${utils.escapeHtml(task.title)}</span>
+                        ${plannedBadge}
                         ${intention ? `<span class="intention-tag" title="Long-game: ${utils.escapeHtml(intention.title)}">long-game</span>` : ''}
+                        ${ageLabel}
                     </div>
                     <button class="task-delete" data-id="${task.id}">×</button>
                 </div>`;
@@ -707,7 +738,11 @@ const ui = {
         };
 
         renderList(todayTasks, 'todayTasks');
-        renderList(brainDump, 'brainDumpTasks');
+        // Brain dump shows age + may have a "planned tomorrow" twin (those are filtered out
+        // because they have an assignedDate = tomorrowStr, so they're not in brainDump).
+        // We DO want to surface tomorrow-assigned tasks here as a courtesy:
+        const tomorrowTasks = tasks.filter(t => t.status === 'open' && t.assignedDate === tomorrowStr);
+        renderList([...tomorrowTasks, ...brainDump], 'brainDumpTasks', { showAge: true, showPlannedBadge: true });
         renderList(done, 'completedTasks');
     },
 
@@ -859,12 +894,9 @@ const ui = {
             const appts = (plan.appointments || []).filter(a => a.title);
             const focusCount = (plan.focusTaskIds || []).length;
             const summaryBits = [];
-            if (plan.checkIn) {
-                const label = { better: 'Better', expected: 'As expected', worse: 'Worse' }[plan.checkIn] || '';
-                if (label) summaryBits.push(label);
-            }
             if (focusCount) summaryBits.push(`${focusCount} focus task${focusCount === 1 ? '' : 's'}`);
             if (appts.length) summaryBits.push(`${appts.length} appt${appts.length === 1 ? '' : 's'}`);
+            if (plan.bathPlanned) summaryBits.push('🛁');
 
             return `
                 <div class="history-item" data-date="${plan.date}">
@@ -884,29 +916,29 @@ const ui = {
 
     _historyDetailsHTML(plan) {
         const parts = [];
-        if (plan.checkInNote) {
-            parts.push(`<div class="history-detail-row"><strong>Check-in note:</strong> ${utils.escapeHtml(plan.checkInNote)}</div>`);
-        }
         if (plan.weeklyGoals) {
             parts.push(`<div class="history-detail-row"><strong>Weekly goals:</strong><br>${utils.escapeHtml(plan.weeklyGoals).replace(/\n/g, '<br>')}</div>`);
         }
-        // Work blocks
-        const workBits = [];
-        for (const p of WORK_PEOPLE) {
-            for (const b of (plan.workBlocks?.[p] || [])) {
-                if (b.start && b.end) workBits.push(`${PERSON_LABEL[p]} work ${utils.formatTime(b.start)}–${utils.formatTime(b.end)}${b.label ? ' (' + utils.escapeHtml(b.label) + ')' : ''}`);
+        if (plan.bathPlanned) {
+            parts.push(`<div class="history-detail-row"><strong>Bath:</strong> planned</div>`);
+        }
+        // Parents unavailable
+        const unavailBits = [];
+        for (const p of PARENTS) {
+            for (const b of (plan.parentUnavailable?.[p] || [])) {
+                if (b.start && b.end) unavailBits.push(`${PERSON_LABEL[p]} ${utils.formatTime(b.start)}–${utils.formatTime(b.end)}${b.label ? ' (' + utils.escapeHtml(b.label) + ')' : ''}`);
             }
         }
-        if (workBits.length) parts.push(`<div class="history-detail-row"><strong>Work:</strong><br>${workBits.join('<br>')}</div>`);
+        if (unavailBits.length) parts.push(`<div class="history-detail-row"><strong>Parents unavailable:</strong><br>${unavailBits.join('<br>')}</div>`);
 
-        // Coverage
-        const coverBits = [];
-        for (const p of COVERAGE_PEOPLE) {
-            for (const b of (plan.coverage?.[p] || [])) {
-                if (b.start && b.end) coverBits.push(`${PERSON_LABEL[p]} ${utils.formatTime(b.start)}–${utils.formatTime(b.end)}`);
+        // Helpers available
+        const availBits = [];
+        for (const p of HELPERS) {
+            for (const b of (plan.helperAvailable?.[p] || [])) {
+                if (b.start && b.end) availBits.push(`${PERSON_LABEL[p]} ${utils.formatTime(b.start)}–${utils.formatTime(b.end)}`);
             }
         }
-        if (coverBits.length) parts.push(`<div class="history-detail-row"><strong>Coverage:</strong><br>${coverBits.join('<br>')}</div>`);
+        if (availBits.length) parts.push(`<div class="history-detail-row"><strong>Helpers available:</strong><br>${availBits.join('<br>')}</div>`);
 
         // Appointments
         const apts = (plan.appointments || []).filter(a => a.title);
@@ -963,24 +995,28 @@ function renderSettings() {
 }
 
 // ============================================================================
-// Wizard — 9 steps
+// Wizard — 8 steps
 // ============================================================================
 const wizard = {
-    totalSteps: 9,
+    totalSteps: 8,
 
     emptyData() {
         return {
-            checkIn: null,
-            checkInNote: '',
-            checklistResponses: {}, // id -> true/false
-            workBlocks: { kristyn: [], julio: [] },
-            coverage: { kristyn: [], julio: [], nanny: [], kayden: [] },
+            // Step 1: readiness
+            checklistResponses: {}, // id -> true/false (covers core + extras)
+            bathPlanned: false,
+            // Step 2: availability
+            parentUnavailable: { kristyn: [], julio: [] },
+            helperAvailable: { nanny: [], kayden: [] },
+            // Step 3: appointments
             appointments: [],
+            // Step 4: today's task review
             taskReview: {}, // taskId -> 'done'|'rolled'|'drop'
-            brainDumpText: '',
-            selectedTaskIds: [], // open tasks chosen for tomorrow
-            newTasksFromBrainDump: [],
-            promotedIntentions: [], // {intentionId, title} — promoted next-steps
+            // Step 5: brain dump (persistent — no temp text any more)
+            // Step 6: focus
+            selectedTaskIds: [], // open task IDs picked for tomorrow
+            promotedIntentions: [], // {intentionId, title, intentionTitle}
+            // Step 7: alignment
             weeklyGoals: '',
             asks: { kristyn: '', julio: '' }
         };
@@ -990,19 +1026,18 @@ const wizard = {
         state.wizardStep = 1;
         state.wizardData = this.emptyData();
 
-        // Prefill from settings
+        // Prefill weekly goals from settings
         state.wizardData.weeklyGoals = state.settings?.weeklyGoals || '';
 
-        // If we're re-opening a plan that exists, load its data (editing mode)
+        // If a plan for tomorrow already exists, load it (editing mode)
         const tomorrow = utils.getTomorrowString();
         const existing = await db_ops.getDayPlan(tomorrow);
         if (existing) {
             Object.assign(state.wizardData, {
-                checkIn: existing.checkIn || null,
-                checkInNote: existing.checkInNote || '',
                 checklistResponses: existing.checklistResponses || {},
-                workBlocks: existing.workBlocks || { kristyn: [], julio: [] },
-                coverage: existing.coverage || { kristyn: [], julio: [], nanny: [], kayden: [] },
+                bathPlanned: !!existing.bathPlanned,
+                parentUnavailable: existing.parentUnavailable || { kristyn: [], julio: [] },
+                helperAvailable: existing.helperAvailable || { nanny: [], kayden: [] },
                 appointments: existing.appointments || [],
                 weeklyGoals: existing.weeklyGoals || state.wizardData.weeklyGoals,
                 asks: existing.asks || { kristyn: '', julio: '' }
@@ -1011,7 +1046,7 @@ const wizard = {
 
         document.getElementById('wizardModal').classList.add('active');
         this.showStep(1);
-        this.renderStep1();
+        this.renderStep(1);
     },
 
     close() {
@@ -1027,24 +1062,13 @@ const wizard = {
         const pct = (n / this.totalSteps) * 100;
         document.getElementById('wizardProgress').style.width = `${pct}%`;
         document.getElementById('wizardProgressText').textContent = `Step ${n} of ${this.totalSteps}`;
-        // Scroll modal body to top
         const body = document.querySelector('#wizardModal .modal-body');
         if (body) body.scrollTop = 0;
     },
 
-    // Step navigation
     next() {
         const step = state.wizardStep;
-        // Collect data from current step before moving on
-        if (step === 1) this.collectStep1();
-        else if (step === 2) this.collectStep2();
-        else if (step === 3) this.collectStep3();
-        else if (step === 4) this.collectStep4();
-        else if (step === 5) this.collectStep5();
-        else if (step === 6) this.collectStep6();
-        else if (step === 7) this.collectStep7();
-        else if (step === 8) this.collectStep8();
-
+        this._collectStep(step);
         if (step < this.totalSteps) {
             this.showStep(step + 1);
             this.renderStep(step + 1);
@@ -1054,15 +1078,7 @@ const wizard = {
     back() {
         const step = state.wizardStep;
         if (step > 1) {
-            // Collect current step data so user can return
-            if (step === 2) this.collectStep2();
-            else if (step === 3) this.collectStep3();
-            else if (step === 4) this.collectStep4();
-            else if (step === 5) this.collectStep5();
-            else if (step === 6) this.collectStep6();
-            else if (step === 7) this.collectStep7();
-            else if (step === 8) this.collectStep8();
-
+            this._collectStep(step);
             this.showStep(step - 1);
             this.renderStep(step - 1);
         }
@@ -1073,67 +1089,69 @@ const wizard = {
         if (fn) fn.call(this);
     },
 
-    // --------------- Step 1: Check-in + checklist ---------------
-    renderStep1() {
-        // Check-in selection
-        document.querySelectorAll('.check-in-btn').forEach(btn => {
-            btn.classList.toggle('selected', state.wizardData.checkIn === btn.dataset.value);
-        });
-        document.getElementById('checkInNote').value = state.wizardData.checkInNote || '';
+    _collectStep(step) {
+        const fn = this[`collectStep${step}`];
+        if (fn) fn.call(this);
+    },
 
-        // Checklist
-        const container = document.getElementById('eveningChecklistItems');
-        const items = state.settings?.checklistItems || [];
-        if (items.length === 0) {
-            container.innerHTML = `<div class="empty-state-text">No checklist items. Add some in Settings.</div>`;
-        } else {
-            container.innerHTML = items.map(it => {
-                const checked = state.wizardData.checklistResponses[it.id] ? 'checked' : '';
-                return `
-                    <label class="checklist-row">
-                        <input type="checkbox" class="checklist-checkbox" data-id="${it.id}" ${checked}>
-                        <span>${utils.escapeHtml(it.label)}</span>
-                    </label>`;
-            }).join('');
-        }
+    // ---------- Step 1: Readiness ----------
+    renderStep1() {
+        const container = document.getElementById('readinessChecklist');
+        const extras = state.settings?.checklistItems || [];
+        const items = [...CORE_READINESS_ITEMS, ...extras];
+        container.innerHTML = items.map(it => {
+            const checked = state.wizardData.checklistResponses[it.id] ? 'checked' : '';
+            return `
+                <label class="checklist-row">
+                    <input type="checkbox" class="checklist-checkbox" data-id="${it.id}" ${checked}>
+                    <span>${utils.escapeHtml(it.label)}</span>
+                </label>`;
+        }).join('');
+
+        const bathEl = document.getElementById('bathPlanned');
+        if (bathEl) bathEl.checked = !!state.wizardData.bathPlanned;
     },
 
     collectStep1() {
-        state.wizardData.checkInNote = document.getElementById('checkInNote').value.trim();
         const responses = {};
-        document.querySelectorAll('#eveningChecklistItems .checklist-checkbox').forEach(cb => {
+        document.querySelectorAll('#readinessChecklist .checklist-checkbox').forEach(cb => {
             responses[cb.dataset.id] = cb.checked;
         });
         state.wizardData.checklistResponses = responses;
+        const bathEl = document.getElementById('bathPlanned');
+        if (bathEl) state.wizardData.bathPlanned = bathEl.checked;
     },
 
-    // --------------- Step 2: Work blocks ---------------
+    // ---------- Step 2: Availability ----------
     renderStep2() {
-        WORK_PEOPLE.forEach(p => this._renderBlockList('work', p, state.wizardData.workBlocks[p]));
-        this._renderFlags('workFlags', coach.workConflicts(state.wizardData.workBlocks));
+        PARENTS.forEach(p => this._renderBlockList('unavail', p, state.wizardData.parentUnavailable[p]));
+        HELPERS.forEach(p => this._renderBlockList('avail', p, state.wizardData.helperAvailable[p]));
+        this._renderFlags('availabilityFlags',
+            coach.coverageGaps(state.wizardData.parentUnavailable, state.wizardData.helperAvailable, state.wizardData.appointments));
     },
 
     collectStep2() {
-        WORK_PEOPLE.forEach(p => this._collectBlockList('work', p));
+        PARENTS.forEach(p => this._collectBlockList('unavail', p));
+        HELPERS.forEach(p => this._collectBlockList('avail', p));
     },
 
-    // --------------- Step 3: Coverage ---------------
-    renderStep3() {
-        COVERAGE_PEOPLE.forEach(p => this._renderBlockList('cover', p, state.wizardData.coverage[p]));
-        this._renderFlags('coverageFlags', coach.coverageGaps(state.wizardData.coverage, state.wizardData.appointments));
-    },
-
-    collectStep3() {
-        COVERAGE_PEOPLE.forEach(p => this._collectBlockList('cover', p));
-    },
-
-    // Shared time-block renderer
-    _renderBlockList(kind, person, blocks) {
-        const idMap = {
-            work: { kristyn: 'kristynWorkList', julio: 'julioWorkList' },
-            cover: { kristyn: 'kristynCoverList', julio: 'julioCoverList', nanny: 'nannyCoverList', kayden: 'kaydenCoverList' }
+    _blockListId(kind, person) {
+        const map = {
+            unavail: { kristyn: 'kristynUnavailList', julio: 'julioUnavailList' },
+            avail: { nanny: 'nannyAvailList', kayden: 'kaydenAvailList' }
         };
-        const container = document.getElementById(idMap[kind][person]);
+        return map[kind]?.[person];
+    },
+
+    _blockTarget(kind, person) {
+        if (kind === 'unavail') return state.wizardData.parentUnavailable[person];
+        if (kind === 'avail') return state.wizardData.helperAvailable[person];
+        return null;
+    },
+
+    _renderBlockList(kind, person, blocks) {
+        const id = this._blockListId(kind, person);
+        const container = document.getElementById(id);
         if (!container) return;
         if (!blocks || blocks.length === 0) {
             container.innerHTML = `<div class="empty-state-text small">No blocks yet.</div>`;
@@ -1141,21 +1159,19 @@ const wizard = {
         }
         container.innerHTML = blocks.map((b, i) => `
             <div class="time-block-row" data-kind="${kind}" data-person="${person}" data-idx="${i}">
-                <input type="time" class="time-input block-start" value="${b.start || ''}" data-field="start">
+                <input type="time" class="time-input" value="${b.start || ''}" data-field="start">
                 <span class="time-dash">–</span>
-                <input type="time" class="time-input block-end" value="${b.end || ''}" data-field="end">
+                <input type="time" class="time-input" value="${b.end || ''}" data-field="end">
                 <input type="text" class="time-label-input" placeholder="Label (optional)" value="${utils.escapeHtml(b.label || '')}" data-field="label">
                 <button class="block-remove" data-kind="${kind}" data-person="${person}" data-idx="${i}">×</button>
             </div>`).join('');
     },
 
     _collectBlockList(kind, person) {
-        const target = kind === 'work' ? state.wizardData.workBlocks[person] : state.wizardData.coverage[person];
-        const idMap = {
-            work: { kristyn: 'kristynWorkList', julio: 'julioWorkList' },
-            cover: { kristyn: 'kristynCoverList', julio: 'julioCoverList', nanny: 'nannyCoverList', kayden: 'kaydenCoverList' }
-        };
-        const container = document.getElementById(idMap[kind][person]);
+        const target = this._blockTarget(kind, person);
+        if (!target) return;
+        const id = this._blockListId(kind, person);
+        const container = document.getElementById(id);
         if (!container) return;
         const rows = container.querySelectorAll('.time-block-row');
         const newBlocks = [];
@@ -1166,31 +1182,26 @@ const wizard = {
             target[idx].label = row.querySelector('[data-field="label"]').value.trim();
             newBlocks.push(target[idx]);
         });
-        if (kind === 'work') state.wizardData.workBlocks[person] = newBlocks;
-        else state.wizardData.coverage[person] = newBlocks;
+        if (kind === 'unavail') state.wizardData.parentUnavailable[person] = newBlocks;
+        else state.wizardData.helperAvailable[person] = newBlocks;
     },
 
     addBlock(kind, person) {
-        // Sync any in-progress edits before re-render
         this._collectBlockList(kind, person);
-        if (kind === 'work') {
-            state.wizardData.workBlocks[person].push({ start: '', end: '', label: '' });
-        } else {
-            state.wizardData.coverage[person].push({ start: '', end: '', label: '' });
-        }
+        const target = this._blockTarget(kind, person);
+        if (target) target.push({ start: '', end: '', label: '' });
         this.renderStep(state.wizardStep);
     },
 
     removeBlock(kind, person, idx) {
-        // Sync current DOM values before mutation
         this._collectBlockList(kind, person);
-        if (kind === 'work') state.wizardData.workBlocks[person].splice(idx, 1);
-        else state.wizardData.coverage[person].splice(idx, 1);
+        const target = this._blockTarget(kind, person);
+        if (target) target.splice(idx, 1);
         this.renderStep(state.wizardStep);
     },
 
-    // --------------- Step 4: Appointments ---------------
-    renderStep4() {
+    // ---------- Step 3: Appointments ----------
+    renderStep3() {
         const container = document.getElementById('appointmentsList');
         if (!container) return;
         const apts = state.wizardData.appointments;
@@ -1209,13 +1220,11 @@ const wizard = {
                     <button class="block-remove" data-remove-apt="${i}">×</button>
                 </div>`).join('');
         }
-        this._renderFlags('appointmentFlags', [
-            ...coach.appointmentConflicts(apts, state.wizardData.workBlocks),
-            ...coach.coverageGaps(state.wizardData.coverage, apts).filter(f => f.text.includes('Appointment'))
-        ]);
+        this._renderFlags('appointmentFlags',
+            coach.appointmentGaps(apts, state.wizardData.parentUnavailable, state.wizardData.helperAvailable));
     },
 
-    collectStep4() {
+    collectStep3() {
         const container = document.getElementById('appointmentsList');
         if (!container) return;
         const rows = container.querySelectorAll('.appointment-row');
@@ -1232,26 +1241,23 @@ const wizard = {
     },
 
     addAppointment() {
-        this.collectStep4();
+        this.collectStep3();
         state.wizardData.appointments.push({ title: '', startTime: '', endTime: '', notes: '' });
-        this.renderStep4();
+        this.renderStep3();
     },
 
     removeAppointment(idx) {
-        this.collectStep4();
+        this.collectStep3();
         state.wizardData.appointments.splice(idx, 1);
-        this.renderStep4();
+        this.renderStep3();
     },
 
-    // --------------- Step 5: Today's task review ---------------
-    renderStep5() {
+    // ---------- Step 4: Today's task review ----------
+    renderStep4() {
         const container = document.getElementById('todayTaskReview');
         if (!container) return;
         const todayStr = utils.getTodayString();
-        const candidates = state.tasks.filter(t =>
-            (t.status === 'open' && t.assignedDate === todayStr) ||
-            (t.status === 'done' && t.assignedDate === todayStr)
-        );
+        const candidates = state.tasks.filter(t => t.assignedDate === todayStr);
         if (candidates.length === 0) {
             container.innerHTML = `<div class="empty-state-text small">No tasks were scheduled for today.</div>`;
             this._renderFlags('taskReviewFlags', []);
@@ -1261,7 +1267,6 @@ const wizard = {
         container.innerHTML = candidates.map(t => {
             const existing = state.wizardData.taskReview[t.id] ||
                 (t.status === 'done' ? 'done' : 'rolled');
-            const daysOld = t.createdAtStr ? utils.daysSince(t.createdAtStr) : 0;
             return `
                 <div class="task-review-row" data-id="${t.id}">
                     <div class="task-review-title">${utils.escapeHtml(t.title)}</div>
@@ -1273,30 +1278,80 @@ const wizard = {
                 </div>`;
         }).join('');
 
-        // Compute rollover ages for flags
-        const ages = candidates.map(t => {
-            const daysOld = t.createdAtStr ? utils.daysSince(t.createdAtStr) : 0;
-            return { title: t.title, daysOld: daysOld || 0 };
-        });
+        const ages = candidates.map(t => ({
+            title: t.title,
+            daysOld: t.createdAtStr ? utils.daysSince(t.createdAtStr) || 0 : 0
+        }));
         this._renderFlags('taskReviewFlags', coach.staleTaskFlags(ages));
     },
 
+    collectStep4() {
+        // Click handlers update state.wizardData.taskReview live; nothing to collect here.
+    },
+
+    // ---------- Step 5: Brain dump (persistent) ----------
+    renderStep5() {
+        const dumpItems = state.tasks.filter(t => t.status === 'open' && !t.assignedDate);
+        const tomorrow = utils.getTomorrowString();
+        const container = document.getElementById('wizardBrainDumpList');
+        if (!container) return;
+
+        if (dumpItems.length === 0) {
+            container.innerHTML = `<div class="empty-state-text small">Brain dump is empty. Add anything you want to capture.</div>`;
+        } else {
+            container.innerHTML = dumpItems.map(t => {
+                const ageDays = t.createdAtStr ? utils.daysSince(t.createdAtStr) : null;
+                const ageStr = ageDays !== null ? utils.relativeAge(t.createdAtStr) : '';
+                return `
+                    <div class="brain-dump-item" data-id="${t.id}">
+                        <div class="brain-dump-item-text">
+                            <span class="brain-dump-item-title">${utils.escapeHtml(t.title)}</span>
+                            ${ageStr ? `<span class="brain-dump-age">added ${ageStr}</span>` : ''}
+                        </div>
+                        <div class="brain-dump-item-actions">
+                            <button class="brain-dump-edit" data-id="${t.id}" aria-label="Edit">✎</button>
+                            <button class="brain-dump-delete" data-id="${t.id}" aria-label="Delete">×</button>
+                        </div>
+                    </div>`;
+            }).join('');
+        }
+
+        this._renderFlags('brainDumpStaleFlags', coach.staleBrainDumpFlags(state.tasks));
+    },
+
     collectStep5() {
-        // Collected inline by click handler
+        // Brain dump items are stored as tasks in Firestore — no local state to flush.
     },
 
-    // --------------- Step 6: Brain dump ---------------
+    async addBrainDumpItem() {
+        const input = document.getElementById('wizardBrainDumpInput');
+        const title = input.value.trim();
+        if (!title) return;
+        await db_ops.addTask(title, null);
+        input.value = '';
+        // The real-time listener will refresh state.tasks; re-render shortly after.
+        setTimeout(() => this.renderStep5(), 200);
+    },
+
+    async deleteBrainDumpItem(id) {
+        await db_ops.deleteTask(id);
+        setTimeout(() => this.renderStep5(), 200);
+    },
+
+    async editBrainDumpItem(id) {
+        const t = state.tasks.find(x => x.id === id);
+        if (!t) return;
+        const newTitle = prompt('Edit:', t.title);
+        if (newTitle === null) return;
+        const trimmed = newTitle.trim();
+        if (!trimmed) return;
+        await db_ops.updateTask(id, { title: trimmed });
+        setTimeout(() => this.renderStep5(), 200);
+    },
+
+    // ---------- Step 6: Focus + stale intentions ----------
     renderStep6() {
-        document.getElementById('brainDumpText').value = state.wizardData.brainDumpText || '';
-    },
-
-    collectStep6() {
-        state.wizardData.brainDumpText = document.getElementById('brainDumpText').value;
-    },
-
-    // --------------- Step 7: Focus + stale intentions ---------------
-    renderStep7() {
-        // Stale intentions surfacing
+        // Stale intentions
         const stale = coach.staleIntentions(state.intentions);
         const block = document.getElementById('staleIntentionsBlock');
         const staleList = document.getElementById('staleIntentionsList');
@@ -1321,21 +1376,19 @@ const wizard = {
             block.style.display = 'none';
         }
 
-        // Candidate pool: open tasks (today + brain dump) + brain dump text lines + already-selected
+        // Candidate pool: promoted intentions + open tasks (incl. brain dump)
         const container = document.getElementById('taskSelectionList');
         if (!container) return;
 
-        const brainDumpLines = (state.wizardData.brainDumpText || '')
-            .split('\n').map(s => s.trim()).filter(Boolean);
-        // Promoted intentions appear at the top
         const promoted = state.wizardData.promotedIntentions;
-
         const openTasks = state.tasks.filter(t => t.status === 'open');
-        // Only surface uncompleted tasks + the brain-dump-derived lines
+
         const candidates = [
-            ...promoted.map(p => ({ kind: 'intention', id: p.intentionId, title: p.title })),
-            ...openTasks.map(t => ({ kind: 'task', id: t.id, title: t.title })),
-            ...brainDumpLines.map((line, idx) => ({ kind: 'dump', id: `dump-${idx}`, title: line }))
+            ...promoted.map(p => ({ kind: 'intention', id: p.intentionId, title: p.title, parentTitle: p.intentionTitle })),
+            ...openTasks.map(t => {
+                const isBrainDump = !t.assignedDate;
+                return { kind: 'task', id: t.id, title: t.title, isBrainDump };
+            })
         ];
 
         if (candidates.length === 0) {
@@ -1343,27 +1396,22 @@ const wizard = {
         } else {
             container.innerHTML = candidates.map(c => {
                 const selected = this._isFocusSelected(c);
+                const tags = [];
+                if (c.kind === 'intention') tags.push('<span class="intention-tag-inline">long-game</span>');
+                if (c.kind === 'task' && c.isBrainDump) tags.push('<span class="dump-tag-inline">brain dump</span>');
                 return `
                     <div class="task-selection-item ${selected ? 'selected' : ''} ${c.kind === 'intention' ? 'intention-item' : ''}" data-kind="${c.kind}" data-id="${c.id}">
                         <span class="task-selection-text">
                             ${utils.escapeHtml(c.title)}
-                            ${c.kind === 'intention' ? '<span class="intention-tag-inline">long-game</span>' : ''}
-                            ${c.kind === 'dump' ? '<span class="dump-tag-inline">brain dump</span>' : ''}
+                            ${tags.join('')}
                         </span>
                         <span class="task-selection-check">${selected ? '✓' : ''}</span>
                     </div>`;
             }).join('');
         }
 
-        const selectedCount = state.wizardData.selectedTaskIds.length + state.wizardData.promotedIntentions.length + state.wizardData.newTasksFromBrainDump.length;
-        const flags = [];
-        if (selectedCount > 3) {
-            flags.push({
-                level: 'warn',
-                text: `You picked ${selectedCount}. 3 is the ceiling — typically 1-2 of them slip when you pick more.`
-            });
-        }
-        this._renderFlags('focusFlags', flags);
+        const selectedCount = state.wizardData.selectedTaskIds.length + state.wizardData.promotedIntentions.length;
+        this._renderFlags('focusFlags', coach.tooManyFocusTasks(selectedCount));
     },
 
     _isFocusSelected(c) {
@@ -1373,45 +1421,20 @@ const wizard = {
         if (c.kind === 'task') {
             return state.wizardData.selectedTaskIds.includes(c.id);
         }
-        if (c.kind === 'dump') {
-            return state.wizardData.newTasksFromBrainDump.some(t => t.tempId === c.id);
-        }
         return false;
     },
 
     toggleFocusSelection(kind, id) {
         if (kind === 'intention') {
-            const idx = state.wizardData.promotedIntentions.findIndex(p => p.intentionId === id);
-            if (idx >= 0) {
-                state.wizardData.promotedIntentions.splice(idx, 1);
-            } else {
-                const i = state.intentions.find(x => x.id === id);
-                if (i && i.nextStep) {
-                    state.wizardData.promotedIntentions.push({
-                        intentionId: id,
-                        title: i.nextStep,
-                        intentionTitle: i.title
-                    });
-                }
-            }
-        } else if (kind === 'task') {
+            this.togglePromoteIntention(id);
+            return;
+        }
+        if (kind === 'task') {
             const idx = state.wizardData.selectedTaskIds.indexOf(id);
             if (idx >= 0) state.wizardData.selectedTaskIds.splice(idx, 1);
             else state.wizardData.selectedTaskIds.push(id);
-        } else if (kind === 'dump') {
-            const idx = state.wizardData.newTasksFromBrainDump.findIndex(t => t.tempId === id);
-            if (idx >= 0) {
-                state.wizardData.newTasksFromBrainDump.splice(idx, 1);
-            } else {
-                // Find the line text from brain dump
-                const lines = (state.wizardData.brainDumpText || '').split('\n').map(s => s.trim()).filter(Boolean);
-                const dumpIdx = parseInt(id.replace('dump-', ''), 10);
-                if (!isNaN(dumpIdx) && lines[dumpIdx]) {
-                    state.wizardData.newTasksFromBrainDump.push({ tempId: id, title: lines[dumpIdx] });
-                }
-            }
         }
-        this.renderStep7();
+        this.renderStep6();
     },
 
     togglePromoteIntention(id) {
@@ -1431,31 +1454,26 @@ const wizard = {
                 return;
             }
         }
-        this.renderStep7();
+        this.renderStep6();
     },
 
-    collectStep7() {
-        // Selection is live, no-op
+    collectStep6() {
+        // Selection is live; no-op.
     },
 
-    // --------------- Step 8: Alignment ---------------
-    renderStep8() {
+    // ---------- Step 7: Alignment ----------
+    renderStep7() {
         document.getElementById('wizardWeeklyGoals').value = state.wizardData.weeklyGoals || '';
         document.getElementById('kristynAsk').value = state.wizardData.asks.kristyn || '';
         document.getElementById('julioAsk').value = state.wizardData.asks.julio || '';
-
-        // Show flag about asks being skipped often — by looking at recent plans
         this._loadRecentAskSkipFlag();
     },
 
     async _loadRecentAskSkipFlag() {
         try {
             const recent = await db_ops.getRecentPlans(3);
-            // Only consider plans older than today (to avoid flagging our own draft)
+            const skipped = recent.filter(p => !p.asks || (!p.asks.kristyn && !p.asks.julio));
             const flags = [];
-            const skipped = recent.filter(p =>
-                !p.asks || (!p.asks.kristyn && !p.asks.julio)
-            );
             if (recent.length >= 3 && skipped.length >= 3) {
                 flags.push({
                     level: 'info',
@@ -1468,56 +1486,55 @@ const wizard = {
         }
     },
 
-    collectStep8() {
+    collectStep7() {
         state.wizardData.weeklyGoals = document.getElementById('wizardWeeklyGoals').value.trim();
         state.wizardData.asks.kristyn = document.getElementById('kristynAsk').value.trim();
         state.wizardData.asks.julio = document.getElementById('julioAsk').value.trim();
     },
 
-    // --------------- Step 9: Review ---------------
-    renderStep9() {
-        // Gather all flags one more time
+    // ---------- Step 8: Review ----------
+    renderStep8() {
         const allFlags = [
-            ...coach.workConflicts(state.wizardData.workBlocks),
-            ...coach.coverageGaps(state.wizardData.coverage, state.wizardData.appointments),
-            ...coach.appointmentConflicts(state.wizardData.appointments, state.wizardData.workBlocks)
+            ...coach.coverageGaps(state.wizardData.parentUnavailable, state.wizardData.helperAvailable, state.wizardData.appointments),
+            ...coach.appointmentGaps(state.wizardData.appointments, state.wizardData.parentUnavailable, state.wizardData.helperAvailable)
         ];
-        // Dedupe by text
         const seen = new Set();
-        const unique = allFlags.filter(f => {
-            if (seen.has(f.text)) return false;
-            seen.add(f.text); return true;
-        });
+        const unique = allFlags.filter(f => seen.has(f.text) ? false : (seen.add(f.text), true));
         this._renderFlags('reviewFlags', unique);
 
-        // Build summary
         const d = state.wizardData;
         const summary = document.getElementById('reviewSummary');
         const parts = [];
 
-        // Check-in
-        if (d.checkIn) {
-            const label = { better: 'Better than expected', expected: 'About what we expected', worse: 'Worse than expected' }[d.checkIn];
-            parts.push(`<div class="review-line"><strong>Today:</strong> ${label}${d.checkInNote ? ' — ' + utils.escapeHtml(d.checkInNote) : ''}</div>`);
+        // Readiness — only flag the FALSE / unchecked ones
+        const extras = state.settings?.checklistItems || [];
+        const items = [...CORE_READINESS_ITEMS, ...extras];
+        const unchecked = items.filter(it => !d.checklistResponses[it.id]);
+        if (unchecked.length > 0) {
+            parts.push(`<div class="review-line"><strong>Readiness — not yet:</strong><br>${unchecked.map(i => '• ' + utils.escapeHtml(i.label)).join('<br>')}</div>`);
+        } else if (items.length > 0) {
+            parts.push(`<div class="review-line"><strong>Readiness:</strong> all checked ✓</div>`);
         }
 
-        // Work
-        const workBits = [];
-        for (const p of WORK_PEOPLE) {
-            for (const b of d.workBlocks[p]) {
-                if (b.start && b.end) workBits.push(`${PERSON_LABEL[p]}: ${utils.formatTime(b.start)}–${utils.formatTime(b.end)}${b.label ? ' (' + utils.escapeHtml(b.label) + ')' : ''}`);
-            }
-        }
-        if (workBits.length) parts.push(`<div class="review-line"><strong>Work:</strong><br>${workBits.join('<br>')}</div>`);
+        if (d.bathPlanned) parts.push(`<div class="review-line"><strong>Bath:</strong> planned for tomorrow</div>`);
 
-        // Coverage
-        const coverBits = [];
-        for (const p of COVERAGE_PEOPLE) {
-            for (const b of d.coverage[p]) {
-                if (b.start && b.end) coverBits.push(`${PERSON_LABEL[p]}: ${utils.formatTime(b.start)}–${utils.formatTime(b.end)}`);
+        // Parent unavailable
+        const unavailBits = [];
+        for (const p of PARENTS) {
+            for (const b of d.parentUnavailable[p]) {
+                if (b.start && b.end) unavailBits.push(`${PERSON_LABEL[p]}: ${utils.formatTime(b.start)}–${utils.formatTime(b.end)}${b.label ? ' (' + utils.escapeHtml(b.label) + ')' : ''}`);
             }
         }
-        if (coverBits.length) parts.push(`<div class="review-line"><strong>Coverage:</strong><br>${coverBits.join('<br>')}</div>`);
+        if (unavailBits.length) parts.push(`<div class="review-line"><strong>Parents unavailable:</strong><br>${unavailBits.join('<br>')}</div>`);
+
+        // Helper available
+        const availBits = [];
+        for (const p of HELPERS) {
+            for (const b of d.helperAvailable[p]) {
+                if (b.start && b.end) availBits.push(`${PERSON_LABEL[p]}: ${utils.formatTime(b.start)}–${utils.formatTime(b.end)}`);
+            }
+        }
+        if (availBits.length) parts.push(`<div class="review-line"><strong>Helpers available:</strong><br>${availBits.join('<br>')}</div>`);
 
         // Appointments
         const apts = d.appointments.filter(a => a.title);
@@ -1525,20 +1542,18 @@ const wizard = {
             parts.push(`<div class="review-line"><strong>Appointments:</strong><br>${apts.map(a => `${utils.formatTime(a.startTime)} — ${utils.escapeHtml(a.title)}${a.notes ? ' (' + utils.escapeHtml(a.notes) + ')' : ''}`).join('<br>')}</div>`);
         }
 
-        // Focus tasks (promoted + selected + brain-dump)
+        // Focus
         const focusList = [
             ...d.promotedIntentions.map(p => `${utils.escapeHtml(p.title)} (long-game: ${utils.escapeHtml(p.intentionTitle || '')})`),
             ...d.selectedTaskIds.map(id => {
                 const t = state.tasks.find(x => x.id === id);
                 return t ? utils.escapeHtml(t.title) : null;
-            }).filter(Boolean),
-            ...d.newTasksFromBrainDump.map(t => utils.escapeHtml(t.title))
+            }).filter(Boolean)
         ];
         if (focusList.length) {
             parts.push(`<div class="review-line"><strong>Tomorrow's focus:</strong><br>${focusList.map(t => '• ' + t).join('<br>')}</div>`);
         }
 
-        // Weekly goals + asks
         if (d.weeklyGoals) parts.push(`<div class="review-line"><strong>Weekly goals:</strong><br>${utils.escapeHtml(d.weeklyGoals).replace(/\n/g, '<br>')}</div>`);
         if (d.asks.kristyn) parts.push(`<div class="review-line"><strong>Kristyn's ask:</strong> ${utils.escapeHtml(d.asks.kristyn)}</div>`);
         if (d.asks.julio) parts.push(`<div class="review-line"><strong>Julio's ask:</strong> ${utils.escapeHtml(d.asks.julio)}</div>`);
@@ -1547,7 +1562,7 @@ const wizard = {
             `<div class="empty-state-text">Nothing captured yet.</div>`;
     },
 
-    // ---------- Flag renderer ----------
+    // ---------- Helpers ----------
     _renderFlags(containerId, flags) {
         const el = document.getElementById(containerId);
         if (!el) return;
@@ -1566,56 +1581,46 @@ const wizard = {
     async save() {
         const d = state.wizardData;
         const tomorrow = utils.getTomorrowString();
-        const today = utils.getTodayString();
 
         // 1. Process today's task review
         for (const [taskId, action] of Object.entries(d.taskReview)) {
             if (action === 'done') {
+                const task = state.tasks.find(t => t.id === taskId);
+                if (task && task.intentionId) {
+                    await db_ops.updateIntention(task.intentionId, { lastProgressAtStr: utils.getTodayString() });
+                }
                 await db_ops.updateTask(taskId, {
                     status: 'done',
                     completedAt: firebase.firestore.FieldValue.serverTimestamp()
                 });
             } else if (action === 'rolled') {
-                // Leave assigned to today? Actually, remove the assignment so it goes to brain dump;
-                // the user will re-assign via focus if they want it for tomorrow.
+                // Demote back to brain dump (no assigned date)
                 await db_ops.updateTask(taskId, { assignedDate: null });
             } else if (action === 'drop') {
                 await db_ops.deleteTask(taskId);
             }
         }
 
-        // 2. Create new tasks from brain dump items that were selected
-        const newTaskIds = [];
-        for (const nt of d.newTasksFromBrainDump) {
-            const id = await db_ops.addTask(nt.title, tomorrow);
-            if (id) newTaskIds.push(id);
-        }
-
-        // 3. Create tasks for promoted intentions
-        const intentionTaskIds = [];
-        for (const pi of d.promotedIntentions) {
-            const id = await db_ops.addTask(pi.title, tomorrow, pi.intentionId);
-            if (id) intentionTaskIds.push({ taskId: id, intentionId: pi.intentionId });
-        }
-
-        // 4. Assign selected open tasks to tomorrow
+        // 2. Promote selected open tasks to tomorrow
         for (const taskId of d.selectedTaskIds) {
             await db_ops.updateTask(taskId, { assignedDate: tomorrow });
         }
 
-        // 5. Save the day plan
-        const allFocusTaskIds = [
-            ...d.selectedTaskIds,
-            ...newTaskIds,
-            ...intentionTaskIds.map(x => x.taskId)
-        ];
+        // 3. Create tomorrow tasks for promoted intentions
+        const intentionTaskIds = [];
+        for (const pi of d.promotedIntentions) {
+            const id = await db_ops.addTask(pi.title, tomorrow, pi.intentionId);
+            if (id) intentionTaskIds.push(id);
+        }
+
+        // 4. Save the day plan
+        const allFocusTaskIds = [...d.selectedTaskIds, ...intentionTaskIds];
         const planData = {
             date: tomorrow,
-            checkIn: d.checkIn,
-            checkInNote: d.checkInNote,
             checklistResponses: d.checklistResponses,
-            workBlocks: d.workBlocks,
-            coverage: d.coverage,
+            bathPlanned: d.bathPlanned,
+            parentUnavailable: d.parentUnavailable,
+            helperAvailable: d.helperAvailable,
             appointments: d.appointments,
             focusTaskIds: allFocusTaskIds,
             promotedIntentionIds: d.promotedIntentions.map(p => p.intentionId),
@@ -1624,19 +1629,10 @@ const wizard = {
         };
         await db_ops.saveDayPlan(tomorrow, planData);
 
-        // 6. Persist weekly goals to settings
+        // 5. Persist weekly goals to settings
         if (state.settings) {
             state.settings.weeklyGoals = d.weeklyGoals;
             await db_ops.saveSettings({ weeklyGoals: d.weeklyGoals });
-        }
-
-        // 7. Any remaining brain-dump lines that weren't promoted become unassigned tasks
-        const dumpLines = (d.brainDumpText || '').split('\n').map(s => s.trim()).filter(Boolean);
-        const selectedDumpTitles = new Set(d.newTasksFromBrainDump.map(t => t.title));
-        for (const line of dumpLines) {
-            if (!selectedDumpTitles.has(line)) {
-                await db_ops.addTask(line, null);
-            }
         }
 
         this.close();
@@ -1656,11 +1652,11 @@ const editToday = {
             utils.showToast('No plan for today to edit', 'warning');
             return;
         }
-        // Deep clone
         this.data = JSON.parse(JSON.stringify({
-            workBlocks: state.todayPlan.workBlocks || { kristyn: [], julio: [] },
-            coverage: state.todayPlan.coverage || { kristyn: [], julio: [], nanny: [], kayden: [] },
-            appointments: state.todayPlan.appointments || []
+            parentUnavailable: state.todayPlan.parentUnavailable || { kristyn: [], julio: [] },
+            helperAvailable: state.todayPlan.helperAvailable || { nanny: [], kayden: [] },
+            appointments: state.todayPlan.appointments || [],
+            bathPlanned: !!state.todayPlan.bathPlanned
         }));
         document.getElementById('editTodayModal').classList.add('active');
         this.render();
@@ -1668,6 +1664,14 @@ const editToday = {
 
     close() {
         document.getElementById('editTodayModal').classList.remove('active');
+    },
+
+    _editIdForKindPerson(kind, person) {
+        const map = {
+            unavail: { kristyn: 'editKristynUnavailList', julio: 'editJulioUnavailList' },
+            avail: { nanny: 'editNannyAvailList', kayden: 'editKaydenAvailList' }
+        };
+        return map[kind]?.[person];
     },
 
     render() {
@@ -1687,10 +1691,13 @@ const editToday = {
                     <button class="block-remove" data-edit-remove-kind="${kind}" data-edit-remove-person="${person}" data-edit-remove-idx="${i}">×</button>
                 </div>`).join('');
         };
-        WORK_PEOPLE.forEach(p => renderList('work', p, this.data.workBlocks[p],
-            p === 'kristyn' ? 'editKristynWorkList' : 'editJulioWorkList'));
-        const coverIds = { kristyn: 'editKristynCoverList', julio: 'editJulioCoverList', nanny: 'editNannyCoverList', kayden: 'editKaydenCoverList' };
-        COVERAGE_PEOPLE.forEach(p => renderList('cover', p, this.data.coverage[p], coverIds[p]));
+
+        PARENTS.forEach(p => renderList('unavail', p, this.data.parentUnavailable[p], this._editIdForKindPerson('unavail', p)));
+        HELPERS.forEach(p => renderList('avail', p, this.data.helperAvailable[p], this._editIdForKindPerson('avail', p)));
+
+        // Bath toggle
+        const bathEl = document.getElementById('editBathPlanned');
+        if (bathEl) bathEl.checked = !!this.data.bathPlanned;
 
         // Appointments
         const aptContainer = document.getElementById('editAppointmentsList');
@@ -1714,9 +1721,8 @@ const editToday = {
     },
 
     collect() {
-        // Sync from DOM
-        WORK_PEOPLE.forEach(p => {
-            const id = p === 'kristyn' ? 'editKristynWorkList' : 'editJulioWorkList';
+        PARENTS.forEach(p => {
+            const id = this._editIdForKindPerson('unavail', p);
             const rows = document.getElementById(id).querySelectorAll('.time-block-row');
             const newBlocks = [];
             rows.forEach(row => {
@@ -1726,11 +1732,11 @@ const editToday = {
                     label: row.querySelector('[data-field="label"]').value.trim()
                 });
             });
-            this.data.workBlocks[p] = newBlocks;
+            this.data.parentUnavailable[p] = newBlocks;
         });
-        const coverIds = { kristyn: 'editKristynCoverList', julio: 'editJulioCoverList', nanny: 'editNannyCoverList', kayden: 'editKaydenCoverList' };
-        COVERAGE_PEOPLE.forEach(p => {
-            const rows = document.getElementById(coverIds[p]).querySelectorAll('.time-block-row');
+        HELPERS.forEach(p => {
+            const id = this._editIdForKindPerson('avail', p);
+            const rows = document.getElementById(id).querySelectorAll('.time-block-row');
             const newBlocks = [];
             rows.forEach(row => {
                 newBlocks.push({
@@ -1739,7 +1745,7 @@ const editToday = {
                     label: row.querySelector('[data-field="label"]').value.trim()
                 });
             });
-            this.data.coverage[p] = newBlocks;
+            this.data.helperAvailable[p] = newBlocks;
         });
         const aptRows = document.getElementById('editAppointmentsList').querySelectorAll('.appointment-row');
         const apts = [];
@@ -1752,19 +1758,22 @@ const editToday = {
             });
         });
         this.data.appointments = apts;
+
+        const bathEl = document.getElementById('editBathPlanned');
+        if (bathEl) this.data.bathPlanned = bathEl.checked;
     },
 
     addBlock(kind, person) {
         this.collect();
-        if (kind === 'work') this.data.workBlocks[person].push({ start: '', end: '', label: '' });
-        else this.data.coverage[person].push({ start: '', end: '', label: '' });
+        if (kind === 'unavail') this.data.parentUnavailable[person].push({ start: '', end: '', label: '' });
+        else this.data.helperAvailable[person].push({ start: '', end: '', label: '' });
         this.render();
     },
 
     removeBlock(kind, person, idx) {
         this.collect();
-        if (kind === 'work') this.data.workBlocks[person].splice(idx, 1);
-        else this.data.coverage[person].splice(idx, 1);
+        if (kind === 'unavail') this.data.parentUnavailable[person].splice(idx, 1);
+        else this.data.helperAvailable[person].splice(idx, 1);
         this.render();
     },
 
@@ -1785,9 +1794,10 @@ const editToday = {
         const today = utils.getTodayString();
         const updated = {
             ...state.todayPlan,
-            workBlocks: this.data.workBlocks,
-            coverage: this.data.coverage,
-            appointments: this.data.appointments
+            parentUnavailable: this.data.parentUnavailable,
+            helperAvailable: this.data.helperAvailable,
+            appointments: this.data.appointments,
+            bathPlanned: this.data.bathPlanned
         };
         await db_ops.saveDayPlan(today, updated);
         this.close();
@@ -1834,6 +1844,14 @@ function renderTodayPlan() {
             </div>`);
     }
 
+    // Bath badge
+    if (p.bathPlanned) {
+        sections.push(`
+            <div class="plan-section">
+                <div class="bath-badge">🛁 Bath planned today</div>
+            </div>`);
+    }
+
     // Weekly goals
     if (p.weeklyGoals) {
         sections.push(`
@@ -1866,70 +1884,75 @@ function renderTodayPlan() {
             </div>`);
     }
 
-    // Build chronological timeline
-    const timelineItems = [];
-    for (const person of WORK_PEOPLE) {
-        for (const b of (p.workBlocks?.[person] || [])) {
-            if (b.start && b.end) {
-                timelineItems.push({
-                    type: 'work',
-                    start: b.start, end: b.end,
-                    title: `${PERSON_LABEL[person]} — work${b.label ? ': ' + b.label : ''}`,
-                    person
-                });
-            }
-        }
-    }
-    for (const person of COVERAGE_PEOPLE) {
-        for (const b of (p.coverage?.[person] || [])) {
-            if (b.start && b.end) {
-                timelineItems.push({
-                    type: 'cover',
-                    start: b.start, end: b.end,
-                    title: `${PERSON_LABEL[person]} covers Kayden${b.label ? ' — ' + b.label : ''}`,
-                    person
-                });
-            }
-        }
-    }
-    for (const a of (p.appointments || [])) {
-        if (a.title && a.startTime) {
-            timelineItems.push({
-                type: 'appointment',
-                start: a.startTime, end: a.endTime || a.startTime,
-                title: a.title,
-                notes: a.notes
-            });
-        }
-    }
-    timelineItems.sort((x, y) => (x.start || '').localeCompare(y.start || ''));
-
-    if (timelineItems.length > 0) {
+    // Appointments
+    const apts = (p.appointments || []).filter(a => a.title);
+    if (apts.length > 0) {
+        const sortedApts = apts.slice().sort((a, b) => (a.startTime || '').localeCompare(b.startTime || ''));
         sections.push(`
             <div class="plan-section">
-                <h3 class="section-title">Timeline</h3>
-                <div class="schedule-timeline">
-                    ${timelineItems.map(item => `
-                        <div class="schedule-block block-type-${item.type}">
-                            <div class="block-time">
-                                ${utils.formatTime(item.start)}<br>
-                                ${item.end !== item.start ? utils.formatTime(item.end) : ''}
-                            </div>
-                            <div class="block-content">
-                                <div class="block-title">${utils.escapeHtml(item.title)}</div>
-                                ${item.notes ? `<div class="block-notes">${utils.escapeHtml(item.notes)}</div>` : ''}
+                <h3 class="section-title">Appointments</h3>
+                <div class="plan-list">
+                    ${sortedApts.map(a => `
+                        <div class="plan-row appointment-block">
+                            <div class="plan-row-time">${utils.formatTime(a.startTime)}${a.endTime && a.endTime !== a.startTime ? ' – ' + utils.formatTime(a.endTime) : ''}</div>
+                            <div class="plan-row-content">
+                                <div class="plan-row-title">${utils.escapeHtml(a.title)}</div>
+                                ${a.notes ? `<div class="plan-row-notes">${utils.escapeHtml(a.notes)}</div>` : ''}
                             </div>
                         </div>`).join('')}
                 </div>
             </div>`);
     }
 
-    // Check-in note (yesterday's reflection)
-    if (p.checkInNote) {
+    // Parents unavailable
+    const unavailRows = [];
+    for (const person of PARENTS) {
+        for (const b of (p.parentUnavailable?.[person] || [])) {
+            if (b.start && b.end) {
+                unavailRows.push({ person, start: b.start, end: b.end, label: b.label });
+            }
+        }
+    }
+    if (unavailRows.length > 0) {
+        unavailRows.sort((a, b) => (a.start || '').localeCompare(b.start || ''));
         sections.push(`
             <div class="plan-section">
-                <h3 class="section-title">Note from last night</h3>
-                <div class="checkin-note-display">${utils.escapeHtml(p.checkInNote)}</div>
+                <h3 class="section-title">Parents unavailable</h3>
+                <div class="plan-list">
+                    ${unavailRows.map(r => `
+                        <div class="plan-row unavail-block">
+                            <div class="plan-row-time">${utils.formatTime(r.start)} – ${utils.formatTime(r.end)}</div>
+                            <div class="plan-row-content">
+                                <div class="plan-row-title">${PERSON_LABEL[r.person]}${r.label ? ' — ' + utils.escapeHtml(r.label) : ''}</div>
+                            </div>
+                        </div>`).join('')}
+                </div>
+            </div>`);
+    }
+
+    // Helpers available
+    const availRows = [];
+    for (const person of HELPERS) {
+        for (const b of (p.helperAvailable?.[person] || [])) {
+            if (b.start && b.end) {
+                availRows.push({ person, start: b.start, end: b.end, label: b.label });
+            }
+        }
+    }
+    if (availRows.length > 0) {
+        availRows.sort((a, b) => (a.start || '').localeCompare(b.start || ''));
+        sections.push(`
+            <div class="plan-section">
+                <h3 class="section-title">Helpers available</h3>
+                <div class="plan-list">
+                    ${availRows.map(r => `
+                        <div class="plan-row avail-block">
+                            <div class="plan-row-time">${utils.formatTime(r.start)} – ${utils.formatTime(r.end)}</div>
+                            <div class="plan-row-content">
+                                <div class="plan-row-title">${PERSON_LABEL[r.person]}${r.label ? ' — ' + utils.escapeHtml(r.label) : ''}</div>
+                            </div>
+                        </div>`).join('')}
+                </div>
             </div>`);
     }
 
@@ -1953,18 +1976,19 @@ function renderTomorrowPreview() {
     const p = state.tomorrowPlan;
     const focusCount = (p.focusTaskIds || []).length;
     const aptCount = (p.appointments || []).filter(a => a.title).length;
-    const workCount = (p.workBlocks?.kristyn?.length || 0) + (p.workBlocks?.julio?.length || 0);
-    const coverCount = COVERAGE_PEOPLE.reduce((sum, person) => sum + (p.coverage?.[person]?.length || 0), 0);
+    const unavailCount = PARENTS.reduce((s, p2) => s + (p.parentUnavailable?.[p2]?.length || 0), 0);
+    const availCount = HELPERS.reduce((s, p2) => s + (p.helperAvailable?.[p2]?.length || 0), 0);
 
     container.innerHTML = `
         <div class="control-card">
             <h4>Tomorrow's plan is set ✓</h4>
             <div class="preview-stats">
                 <div class="preview-stat"><strong>${focusCount}</strong> focus task${focusCount === 1 ? '' : 's'}</div>
-                <div class="preview-stat"><strong>${workCount}</strong> work block${workCount === 1 ? '' : 's'}</div>
-                <div class="preview-stat"><strong>${coverCount}</strong> coverage block${coverCount === 1 ? '' : 's'}</div>
                 <div class="preview-stat"><strong>${aptCount}</strong> appointment${aptCount === 1 ? '' : 's'}</div>
+                <div class="preview-stat"><strong>${unavailCount}</strong> parent unavail block${unavailCount === 1 ? '' : 's'}</div>
+                <div class="preview-stat"><strong>${availCount}</strong> helper block${availCount === 1 ? '' : 's'}</div>
             </div>
+            ${p.bathPlanned ? `<div class="preview-bath">🛁 Bath planned</div>` : ''}
             ${p.asks?.kristyn || p.asks?.julio ? `
                 <div class="preview-asks">
                     ${p.asks.kristyn ? `<div><strong>Kristyn asked:</strong> ${utils.escapeHtml(p.asks.kristyn)}</div>` : ''}
@@ -2029,21 +2053,12 @@ function setupEventHandlers() {
     document.querySelectorAll('.wizard-back').forEach(btn => btn.addEventListener('click', () => wizard.back()));
     document.getElementById('saveWizard').addEventListener('click', () => wizard.save());
 
-    // Step 1 — check-in buttons + dynamic checklist
-    document.querySelectorAll('.check-in-btn').forEach(btn => {
-        btn.addEventListener('click', () => {
-            state.wizardData.checkIn = btn.dataset.value;
-            document.querySelectorAll('.check-in-btn').forEach(b => b.classList.remove('selected'));
-            btn.classList.add('selected');
-        });
-    });
-
-    // Step 2 + 3 — add/remove blocks (event delegation)
+    // Step 2 — add/remove blocks (event delegation)
     document.addEventListener('click', (e) => {
-        const addWork = e.target.closest('[data-add-work]');
-        if (addWork) { wizard.addBlock('work', addWork.dataset.addWork); return; }
-        const addCover = e.target.closest('[data-add-cover]');
-        if (addCover) { wizard.addBlock('cover', addCover.dataset.addCover); return; }
+        const addUnavail = e.target.closest('[data-add-unavail]');
+        if (addUnavail) { wizard.addBlock('unavail', addUnavail.dataset.addUnavail); return; }
+        const addAvail = e.target.closest('[data-add-avail]');
+        if (addAvail) { wizard.addBlock('avail', addAvail.dataset.addAvail); return; }
         const blockRemove = e.target.closest('.block-remove[data-kind]');
         if (blockRemove) {
             wizard.removeBlock(blockRemove.dataset.kind, blockRemove.dataset.person, parseInt(blockRemove.dataset.idx, 10));
@@ -2051,28 +2066,28 @@ function setupEventHandlers() {
         }
     });
 
-    // Step 2 + 3 — recompute coach flags as user types
+    // Live update + flag recompute as user types
     document.addEventListener('input', (e) => {
-        // Live update inside wizard time-block rows
+        // Wizard time-block rows (Step 2)
         if (e.target.closest('.wizard-step .time-block-row')) {
             const row = e.target.closest('.time-block-row');
             const kind = row.dataset.kind;
             const person = row.dataset.person;
             const idx = parseInt(row.dataset.idx, 10);
             const field = e.target.dataset.field;
-            const target = kind === 'work' ? state.wizardData.workBlocks[person] : state.wizardData.coverage[person];
-            if (target[idx]) {
+            const target = kind === 'unavail'
+                ? state.wizardData.parentUnavailable[person]
+                : state.wizardData.helperAvailable[person];
+            if (target && target[idx]) {
                 target[idx][field] = field === 'label' ? e.target.value.trim() : e.target.value;
             }
-            // Refresh flags only (not whole list, to preserve focus)
             if (state.wizardStep === 2) {
-                wizard._renderFlags('workFlags', coach.workConflicts(state.wizardData.workBlocks));
-            } else if (state.wizardStep === 3) {
-                wizard._renderFlags('coverageFlags', coach.coverageGaps(state.wizardData.coverage, state.wizardData.appointments));
+                wizard._renderFlags('availabilityFlags',
+                    coach.coverageGaps(state.wizardData.parentUnavailable, state.wizardData.helperAvailable, state.wizardData.appointments));
             }
         }
 
-        // Appointments live editing
+        // Wizard appointments (Step 3)
         if (e.target.closest('.wizard-step .appointment-row')) {
             const row = e.target.closest('.appointment-row');
             const idx = parseInt(row.dataset.idx, 10);
@@ -2081,14 +2096,13 @@ function setupEventHandlers() {
                 state.wizardData.appointments[idx][field] = ['title', 'notes'].includes(field)
                     ? e.target.value.trim() : e.target.value;
             }
-            if (state.wizardStep === 4) {
-                wizard._renderFlags('appointmentFlags', [
-                    ...coach.appointmentConflicts(state.wizardData.appointments, state.wizardData.workBlocks)
-                ]);
+            if (state.wizardStep === 3) {
+                wizard._renderFlags('appointmentFlags',
+                    coach.appointmentGaps(state.wizardData.appointments, state.wizardData.parentUnavailable, state.wizardData.helperAvailable));
             }
         }
 
-        // Edit Today live editing
+        // Edit Today modal time-block rows
         if (e.target.closest('#editTodayModal .time-block-row')) {
             const row = e.target.closest('.time-block-row');
             const kind = row.dataset.editKind;
@@ -2096,10 +2110,15 @@ function setupEventHandlers() {
             const idx = parseInt(row.dataset.editIdx, 10);
             const field = e.target.dataset.field;
             if (editToday.data) {
-                const target = kind === 'work' ? editToday.data.workBlocks[person] : editToday.data.coverage[person];
-                if (target[idx]) target[idx][field] = field === 'label' ? e.target.value.trim() : e.target.value;
+                const target = kind === 'unavail'
+                    ? editToday.data.parentUnavailable[person]
+                    : editToday.data.helperAvailable[person];
+                if (target && target[idx]) {
+                    target[idx][field] = field === 'label' ? e.target.value.trim() : e.target.value;
+                }
             }
         }
+        // Edit Today modal appointments
         if (e.target.closest('#editTodayModal .appointment-row')) {
             const row = e.target.closest('.appointment-row');
             const idx = parseInt(row.dataset.editAptIdx, 10);
@@ -2120,37 +2139,58 @@ function setupEventHandlers() {
         }
     });
 
-    // Step 5 — task review
+    // Step 4 — task review
     document.addEventListener('click', (e) => {
         const reviewBtn = e.target.closest('.task-review-btn');
         if (reviewBtn) {
             const id = reviewBtn.dataset.id;
             const review = reviewBtn.dataset.review;
             state.wizardData.taskReview[id] = review;
-            // Update visual state
             document.querySelectorAll(`.task-review-btn[data-id="${id}"]`).forEach(b => b.classList.remove('selected'));
             reviewBtn.classList.add('selected');
         }
     });
 
-    // Step 7 — focus selection + intention promote
+    // Step 5 — wizard brain dump (persistent)
+    document.getElementById('wizardBrainDumpAdd').addEventListener('click', () => wizard.addBrainDumpItem());
+    document.getElementById('wizardBrainDumpInput').addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') wizard.addBrainDumpItem();
+    });
+    document.addEventListener('click', (e) => {
+        const dumpDel = e.target.closest('.brain-dump-delete');
+        if (dumpDel && state.wizardStep === 5) {
+            wizard.deleteBrainDumpItem(dumpDel.dataset.id);
+            return;
+        }
+        const dumpEdit = e.target.closest('.brain-dump-edit');
+        if (dumpEdit && state.wizardStep === 5) {
+            wizard.editBrainDumpItem(dumpEdit.dataset.id);
+            return;
+        }
+    });
+
+    // Step 6 — focus selection + intention promote
     document.addEventListener('click', (e) => {
         const selItem = e.target.closest('.task-selection-item');
-        if (selItem && state.wizardStep === 7) {
+        if (selItem && state.wizardStep === 6) {
             wizard.toggleFocusSelection(selItem.dataset.kind, selItem.dataset.id);
             return;
         }
         const promoteBtn = e.target.closest('.promote-intention-btn');
-        if (promoteBtn && state.wizardStep === 7) {
+        if (promoteBtn && state.wizardStep === 6) {
             wizard.togglePromoteIntention(promoteBtn.dataset.id);
             return;
         }
     });
 
-    // Step 1 — checklist toggle
+    // Step 1 — readiness checklist toggle (delegation)
     document.addEventListener('change', (e) => {
-        if (e.target.classList.contains('checklist-checkbox')) {
-            state.wizardData.checklistResponses[e.target.dataset.id] = e.target.checked;
+        if (e.target.classList.contains('checklist-checkbox') && e.target.closest('#step1')) {
+            if (e.target.id === 'bathPlanned') {
+                state.wizardData.bathPlanned = e.target.checked;
+            } else {
+                state.wizardData.checklistResponses[e.target.dataset.id] = e.target.checked;
+            }
         }
     });
 
@@ -2161,14 +2201,19 @@ function setupEventHandlers() {
     document.getElementById('saveEditToday').addEventListener('click', () => editToday.save());
     document.getElementById('editAddAppointment').addEventListener('click', () => editToday.addAppointment());
 
+    // Edit Today bath toggle
+    document.getElementById('editBathPlanned')?.addEventListener('change', (e) => {
+        if (editToday.data) editToday.data.bathPlanned = e.target.checked;
+    });
+
     document.addEventListener('click', (e) => {
-        const addEditWork = e.target.closest('[data-edit-work]');
-        if (addEditWork && addEditWork.closest('#editTodayModal')) {
-            editToday.addBlock('work', addEditWork.dataset.editWork); return;
+        const addEditUnavail = e.target.closest('[data-edit-unavail]');
+        if (addEditUnavail && addEditUnavail.closest('#editTodayModal')) {
+            editToday.addBlock('unavail', addEditUnavail.dataset.editUnavail); return;
         }
-        const addEditCover = e.target.closest('[data-edit-cover]');
-        if (addEditCover && addEditCover.closest('#editTodayModal')) {
-            editToday.addBlock('cover', addEditCover.dataset.editCover); return;
+        const addEditAvail = e.target.closest('[data-edit-avail]');
+        if (addEditAvail && addEditAvail.closest('#editTodayModal')) {
+            editToday.addBlock('avail', addEditAvail.dataset.editAvail); return;
         }
         const editRemove = e.target.closest('.block-remove[data-edit-remove-kind]');
         if (editRemove) {

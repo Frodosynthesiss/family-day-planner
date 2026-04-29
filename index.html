@@ -366,11 +366,11 @@
                 </div>
 
                 <div class="settings-card">
-                    <h3>Evening Check-In Items</h3>
-                    <p class="settings-description">Quick yes/no items the wizard asks at the start.</p>
+                    <h3>Extra Readiness Checks</h3>
+                    <p class="settings-description">Laundry, food, diapers, dishes, and calendar are always asked. Add anything else you want the wizard to ask each night.</p>
                     <div id="checklistEditor"></div>
                     <div class="checklist-add-row" style="margin-top: 0.75rem;">
-                        <input type="text" id="newChecklistItem" class="task-input" placeholder="e.g., Skylight calendar up to date?">
+                        <input type="text" id="newChecklistItem" class="task-input" placeholder="e.g., Trash out for pickup?">
                         <button id="addChecklistItemBtn" class="primary-btn">+ Add</button>
                     </div>
                 </div>
@@ -470,50 +470,60 @@
                     <div class="progress-bar">
                         <div class="progress-fill" id="wizardProgress"></div>
                     </div>
-                    <span class="progress-text" id="wizardProgressText">Step 1 of 9</span>
+                    <span class="progress-text" id="wizardProgressText">Step 1 of 8</span>
                 </div>
 
-                <!-- Step 1: Check-in -->
+                <!-- Step 1: Readiness checks -->
                 <div class="wizard-step" id="step1">
-                    <h3>Check-in</h3>
-                    <p class="step-desc">How did today go?</p>
-                    <div class="check-in-buttons">
-                        <button type="button" class="check-in-btn" data-value="better">Better than expected</button>
-                        <button type="button" class="check-in-btn" data-value="expected">About what we expected</button>
-                        <button type="button" class="check-in-btn" data-value="worse">Worse than expected</button>
-                    </div>
-                    <div class="form-field" style="margin-top: 1rem;">
-                        <label>One line on why (optional)</label>
-                        <textarea id="checkInNote" class="textarea" rows="2" placeholder="Optional."></textarea>
+                    <h3>Ready for tomorrow?</h3>
+                    <p class="step-desc">Quick yes/no on the things that bite if forgotten.</p>
+
+                    <div class="form-field">
+                        <div id="readinessChecklist" class="checklist-container"></div>
                     </div>
 
                     <div class="form-field" style="margin-top: 1.25rem;">
-                        <label>Evening checklist</label>
-                        <p class="field-hint">Edit items in Settings.</p>
-                        <div id="eveningChecklistItems" class="checklist-container"></div>
+                        <label class="bath-toggle-label">
+                            <input type="checkbox" id="bathPlanned" class="checklist-checkbox">
+                            <span><strong>Bath planned for tomorrow</strong></span>
+                        </label>
                     </div>
 
                     <button class="primary-btn full-width wizard-next">Continue</button>
                 </div>
 
-                <!-- Step 2: Work Schedules -->
+                <!-- Step 2: Availability (combined) -->
                 <div class="wizard-step" id="step2" style="display: none;">
-                    <h3>Work Schedules</h3>
-                    <p class="step-desc">When is each of you in work mode? Meetings, heads-down, hard stops.</p>
+                    <h3>Availability</h3>
+                    <p class="step-desc">Parents: when you can't be on kid duty. Helpers: when they can.</p>
 
                     <div class="availability-section">
-                        <h4>Kristyn — work blocks</h4>
-                        <div id="kristynWorkList" class="time-block-list"></div>
-                        <button class="secondary-btn full-width" data-add-work="kristyn">+ Add Block</button>
+                        <h4>Kristyn — unavailable</h4>
+                        <p class="field-hint">Work meetings, calls, anything that means hands-off.</p>
+                        <div id="kristynUnavailList" class="time-block-list"></div>
+                        <button class="secondary-btn full-width" data-add-unavail="kristyn">+ Add Block</button>
                     </div>
 
                     <div class="availability-section">
-                        <h4>Julio — work blocks</h4>
-                        <div id="julioWorkList" class="time-block-list"></div>
-                        <button class="secondary-btn full-width" data-add-work="julio">+ Add Block</button>
+                        <h4>Julio — unavailable</h4>
+                        <div id="julioUnavailList" class="time-block-list"></div>
+                        <button class="secondary-btn full-width" data-add-unavail="julio">+ Add Block</button>
                     </div>
 
-                    <div id="workFlags" class="coach-flags"></div>
+                    <div class="availability-section">
+                        <h4>Nanny — available</h4>
+                        <p class="field-hint">When the nanny is on.</p>
+                        <div id="nannyAvailList" class="time-block-list"></div>
+                        <button class="secondary-btn full-width" data-add-avail="nanny">+ Add Block</button>
+                    </div>
+
+                    <div class="availability-section">
+                        <h4>Kayden — available to help</h4>
+                        <div id="kaydenAvailList" class="time-block-list"></div>
+                        <button class="secondary-btn full-width" data-add-avail="kayden">+ Add Block</button>
+                    </div>
+
+                    <div id="availabilityFlags" class="coach-flags"></div>
 
                     <div class="wizard-nav">
                         <button class="secondary-btn wizard-back">Back</button>
@@ -521,45 +531,8 @@
                     </div>
                 </div>
 
-                <!-- Step 3: Childcare Coverage -->
+                <!-- Step 3: Appointments -->
                 <div class="wizard-step" id="step3" style="display: none;">
-                    <h3>Childcare Coverage</h3>
-                    <p class="step-desc">Who's on kid duty, and when? Add a block for each chunk.</p>
-
-                    <div class="availability-section">
-                        <h4>Kristyn covers</h4>
-                        <div id="kristynCoverList" class="time-block-list"></div>
-                        <button class="secondary-btn full-width" data-add-cover="kristyn">+ Add Block</button>
-                    </div>
-
-                    <div class="availability-section">
-                        <h4>Julio covers</h4>
-                        <div id="julioCoverList" class="time-block-list"></div>
-                        <button class="secondary-btn full-width" data-add-cover="julio">+ Add Block</button>
-                    </div>
-
-                    <div class="availability-section">
-                        <h4>Nanny covers</h4>
-                        <div id="nannyCoverList" class="time-block-list"></div>
-                        <button class="secondary-btn full-width" data-add-cover="nanny">+ Add Block</button>
-                    </div>
-
-                    <div class="availability-section">
-                        <h4>Kayden covers</h4>
-                        <div id="kaydenCoverList" class="time-block-list"></div>
-                        <button class="secondary-btn full-width" data-add-cover="kayden">+ Add Block</button>
-                    </div>
-
-                    <div id="coverageFlags" class="coach-flags"></div>
-
-                    <div class="wizard-nav">
-                        <button class="secondary-btn wizard-back">Back</button>
-                        <button class="primary-btn wizard-next">Continue</button>
-                    </div>
-                </div>
-
-                <!-- Step 4: Appointments -->
-                <div class="wizard-step" id="step4" style="display: none;">
                     <h3>Appointments</h3>
                     <p class="step-desc">Fixed commitments tomorrow.</p>
                     <div id="appointmentsList" class="appointments-list"></div>
@@ -573,8 +546,8 @@
                     </div>
                 </div>
 
-                <!-- Step 5: Task Review -->
-                <div class="wizard-step" id="step5" style="display: none;">
+                <!-- Step 4: Today's Task Review -->
+                <div class="wizard-step" id="step4" style="display: none;">
                     <h3>Today's Tasks</h3>
                     <p class="step-desc">What got done?</p>
                     <div id="todayTaskReview" class="task-review-list"></div>
@@ -585,19 +558,27 @@
                     </div>
                 </div>
 
-                <!-- Step 6: Brain Dump -->
-                <div class="wizard-step" id="step6" style="display: none;">
+                <!-- Step 5: Brain Dump (persistent) -->
+                <div class="wizard-step" id="step5" style="display: none;">
                     <h3>Brain Dump</h3>
-                    <p class="step-desc">Everything on your mind. One per line. Sort next.</p>
-                    <textarea id="brainDumpText" class="textarea" rows="6" placeholder="e.g.&#10;Call insurance&#10;Book dentist&#10;Reschedule lunch"></textarea>
+                    <p class="step-desc">Your standing list. Add to it, edit, or clear out — pick what's tomorrow's focus next.</p>
+
+                    <div class="brain-dump-add-row">
+                        <input type="text" id="wizardBrainDumpInput" class="task-input" placeholder="Add anything on your mind…">
+                        <button class="primary-btn" id="wizardBrainDumpAdd">+ Add</button>
+                    </div>
+
+                    <div id="brainDumpStaleFlags" class="coach-flags"></div>
+                    <div id="wizardBrainDumpList" class="task-list"></div>
+
                     <div class="wizard-nav">
                         <button class="secondary-btn wizard-back">Back</button>
                         <button class="primary-btn wizard-next">Continue</button>
                     </div>
                 </div>
 
-                <!-- Step 7: Focus (+ stale intentions) -->
-                <div class="wizard-step" id="step7" style="display: none;">
+                <!-- Step 6: Focus (+ stale intentions) -->
+                <div class="wizard-step" id="step6" style="display: none;">
                     <h3>Tomorrow's Focus</h3>
                     <p class="step-desc">Pick up to 3.</p>
 
@@ -617,8 +598,8 @@
                     </div>
                 </div>
 
-                <!-- Step 8: Alignment -->
-                <div class="wizard-step" id="step8" style="display: none;">
+                <!-- Step 7: Alignment -->
+                <div class="wizard-step" id="step7" style="display: none;">
                     <h3>Alignment</h3>
                     <p class="step-desc">The hard-to-ask-for things.</p>
 
@@ -646,8 +627,8 @@
                     </div>
                 </div>
 
-                <!-- Step 9: Review -->
-                <div class="wizard-step" id="step9" style="display: none;">
+                <!-- Step 8: Review -->
+                <div class="wizard-step" id="step8" style="display: none;">
                     <h3>Review</h3>
                     <p class="step-desc">Last read before we save.</p>
 
@@ -680,36 +661,34 @@
                 </button>
             </div>
             <div class="modal-body">
+                <div class="form-field">
+                    <label class="bath-toggle-label">
+                        <input type="checkbox" id="editBathPlanned" class="checklist-checkbox">
+                        <span><strong>Bath planned for today</strong></span>
+                    </label>
+                </div>
+
                 <div class="availability-section">
-                    <h4>Kristyn — work blocks</h4>
-                    <div id="editKristynWorkList" class="time-block-list"></div>
-                    <button class="secondary-btn full-width" data-edit-work="kristyn">+ Add Block</button>
+                    <h4>Kristyn — unavailable</h4>
+                    <div id="editKristynUnavailList" class="time-block-list"></div>
+                    <button class="secondary-btn full-width" data-edit-unavail="kristyn">+ Add Block</button>
                 </div>
                 <div class="availability-section">
-                    <h4>Julio — work blocks</h4>
-                    <div id="editJulioWorkList" class="time-block-list"></div>
-                    <button class="secondary-btn full-width" data-edit-work="julio">+ Add Block</button>
+                    <h4>Julio — unavailable</h4>
+                    <div id="editJulioUnavailList" class="time-block-list"></div>
+                    <button class="secondary-btn full-width" data-edit-unavail="julio">+ Add Block</button>
                 </div>
                 <div class="availability-section">
-                    <h4>Kristyn covers</h4>
-                    <div id="editKristynCoverList" class="time-block-list"></div>
-                    <button class="secondary-btn full-width" data-edit-cover="kristyn">+ Add Block</button>
+                    <h4>Nanny — available</h4>
+                    <div id="editNannyAvailList" class="time-block-list"></div>
+                    <button class="secondary-btn full-width" data-edit-avail="nanny">+ Add Block</button>
                 </div>
                 <div class="availability-section">
-                    <h4>Julio covers</h4>
-                    <div id="editJulioCoverList" class="time-block-list"></div>
-                    <button class="secondary-btn full-width" data-edit-cover="julio">+ Add Block</button>
+                    <h4>Kayden — available to help</h4>
+                    <div id="editKaydenAvailList" class="time-block-list"></div>
+                    <button class="secondary-btn full-width" data-edit-avail="kayden">+ Add Block</button>
                 </div>
-                <div class="availability-section">
-                    <h4>Nanny covers</h4>
-                    <div id="editNannyCoverList" class="time-block-list"></div>
-                    <button class="secondary-btn full-width" data-edit-cover="nanny">+ Add Block</button>
-                </div>
-                <div class="availability-section">
-                    <h4>Kayden covers</h4>
-                    <div id="editKaydenCoverList" class="time-block-list"></div>
-                    <button class="secondary-btn full-width" data-edit-cover="kayden">+ Add Block</button>
-                </div>
+
                 <div class="availability-section">
                     <h4>Appointments</h4>
                     <div id="editAppointmentsList" class="appointments-list"></div>
